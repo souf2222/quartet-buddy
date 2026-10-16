@@ -1,0 +1,140 @@
+<root version="70964">
+  <dev>
+    <quartet1528B15CEE547FA ignoreSideEffects="0" treeVersion="5" identify="0" name="Quartet" model="4" samplerate="44100.0" keyboardVolumeControls="0" peakHold="1" overHold="2" lockHomeScreen="0" safeMode="0" supportedBufferSizesBitSet="0" preferredBufferSize="128">
+      <appState selectedChannel="2" selectedMixer="0" sleepms="50">
+        <actionButtons>
+          <Encoder_Push actionButton="327691"/>
+          <Touchpad_A actionButton="131074"/>
+          <Touchpad_B actionButton="196612"/>
+          <Touchpad_C actionButton="393217"/>
+        </actionButtons>
+      </appState>
+      <versionTree version="50331657" boardVersion="50331648" fpgaVersion="167772160" xmosVersion="50331657" xmosSourceVersion="50331657"/>
+      <hwin>
+        <hwin0 name="Analog IN 1" index="0" mixerChannel="0" channelType="0" analogRefLevel="1" softLimit="0" polarityInvert="0" group="0">
+          <micSettings phantom="0">
+            <PreModelQuartet gain="49.0"/>
+          </micSettings>
+          <instSettings>
+            <PreModelQuartet gain="54.0"/>
+          </instSettings>
+        </hwin0>
+        <hwin1 name="Analog IN 2" index="1" mixerChannel="1" channelType="0" analogRefLevel="1" softLimit="0" polarityInvert="0" group="0">
+          <micSettings phantom="0">
+            <PreModelQuartet gain="0.0"/>
+          </micSettings>
+          <instSettings>
+            <PreModelQuartet gain="51.0"/>
+          </instSettings>
+        </hwin1>
+        <hwin2 name="Analog IN 3" index="2" mixerChannel="2" channelType="0" analogRefLevel="1" softLimit="0" polarityInvert="0" group="0">
+          <micSettings phantom="0">
+            <PreModelQuartet gain="0.0"/>
+          </micSettings>
+          <instSettings>
+            <PreModelQuartet gain="27.0"/>
+          </instSettings>
+        </hwin2>
+        <hwin3 name="Analog IN 4" index="3" mixerChannel="3" channelType="0" analogRefLevel="2" softLimit="0" polarityInvert="0" group="0">
+          <micSettings phantom="0">
+            <PreModelQuartet gain="0.0"/>
+          </micSettings>
+          <instSettings>
+            <PreModelQuartet gain="42.0"/>
+          </instSettings>
+        </hwin3>
+        <hwin4 name="Optical IN 1" index="4" mixerChannel="4" channelType="1"/>
+        <hwin5 name="Optical IN 2" index="5" mixerChannel="5" channelType="1"/>
+        <hwin6 name="Optical IN 3" index="6" mixerChannel="6" channelType="1"/>
+        <hwin7 name="Optical IN 4" index="7" mixerChannel="7" channelType="1"/>
+        <hwin8 name="Optical IN 5" index="8" mixerChannel="8" channelType="1"/>
+        <hwin9 name="Optical IN 6" index="9" mixerChannel="9" channelType="1"/>
+        <hwin10 name="Optical IN 7" index="10" mixerChannel="10" channelType="1"/>
+        <hwin11 name="Optical IN 8" index="11" mixerChannel="11" channelType="1"/>
+      </hwin>
+      <hwout>
+        <hwout0 name="Main Out" index="0" channelType="0" monitorType="0" gain="-57.0" dim="0" mute="0" sum="0" mainOutputFormat="2" activeSpeakerSet="1"/>
+        <hwout1 name="HP" index="1" channelType="0" monitorType="1" gain="-41.0" dim="0" mute="0" sum="0" routeSource="402653184"/>
+        <hwout2 name="Analog Out 1" index="2" mixerChannel="13" channelType="0" analogRefLevel="2" trim="-0.0" routeSource="268435456"/>
+        <hwout3 name="Analog Out 2" index="3" mixerChannel="14" channelType="0" analogRefLevel="2" trim="-0.0" routeSource="268435457"/>
+        <hwout4 name="Analog Out 3" index="4" mixerChannel="15" channelType="0" analogRefLevel="3" trim="-0.0" routeSource="268435456"/>
+        <hwout5 name="Analog Out 4" index="5" mixerChannel="16" channelType="0" analogRefLevel="3" trim="-0.0" routeSource="268435457"/>
+        <hwout6 name="Analog Out 5" index="6" mixerChannel="17" channelType="0" analogRefLevel="3" trim="-0.0" routeSource="536870914"/>
+        <hwout7 name="Analog Out 6" index="7" mixerChannel="18" channelType="0" analogRefLevel="3" trim="-0.0" routeSource="536870915"/>
+      </hwout>
+      <swout>
+        <playback0 name="Playback 1-2" index="0" mixerChannel="12"/>
+        <playback1 name="Playback 3-4" index="1" mixerChannel="12"/>
+        <playback2 name="Playback 5-6" index="2" mixerChannel="12"/>
+        <playback3 name="Playback 7-8" index="3" mixerChannel="12"/>
+      </swout>
+      <mixers>
+        <mixer0 name="Mixer 1" index="0">
+          <channels>
+            <channel0 index="0" hidden="0" name="Analog IN 1" isStereo="0" volume="0.0" pan="0.4765625" mute="0" solo="0" soloSafe="0"/>
+            <channel1 index="1" hidden="0" name="Analog IN 2" isStereo="0" volume="0.0" pan="0.4921875" mute="0" solo="0" soloSafe="0"/>
+            <channel2 index="2" hidden="0" name="Analog IN 3" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel3 index="3" hidden="0" name="Analog IN 4" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel4 index="4" hidden="0" name="Optical IN 1" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel5 index="5" hidden="0" name="Optical IN 2" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel6 index="6" hidden="0" name="Optical IN 3" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel7 index="7" hidden="0" name="Optical IN 4" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel8 index="8" hidden="0" name="Optical IN 5" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel9 index="9" hidden="0" name="Optical IN 6" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel10 index="10" hidden="0" name="Optical IN 7" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel11 index="11" hidden="0" name="Optical IN 8" isStereo="0" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0"/>
+            <channel12 index="12" hidden="0" name="Playback" volume="0.0" pan="0.5" mute="0" solo="0" soloSafe="0" routeSource="402653184"/>
+            <master index="3" hidden="0" name="Mixer Master" volume="0.0" mute="0.0"/>
+          </channels>
+        </mixer0>
+        <mixer1 name="Mixer 2" index="1">
+          <channels>
+            <channel0 index="0" hidden="0" name="Analog IN 1" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel1 index="1" hidden="0" name="Analog IN 2" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel2 index="2" hidden="0" name="Analog IN 3" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel3 index="3" hidden="0" name="Analog IN 4" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel4 index="4" hidden="0" name="Optical IN 1" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel5 index="5" hidden="0" name="Optical IN 2" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel6 index="6" hidden="0" name="Optical IN 3" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel7 index="7" hidden="0" name="Optical IN 4" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel8 index="8" hidden="0" name="Optical IN 5" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel9 index="9" hidden="0" name="Optical IN 6" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel10 index="10" hidden="0" name="Optical IN 7" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel11 index="11" hidden="0" name="Optical IN 8" isStereo="0" volume="0.0" pan="0.5" mute="1" solo="0" soloSafe="0"/>
+            <channel12 index="12" hidden="0" name="Playback" volume="-20.0" pan="0.5" mute="0" solo="0" soloSafe="0" routeSource="402653184"/>
+            <master index="3" hidden="0" name="Mixer Master" volume="0.0" mute="0.0"/>
+          </channels>
+        </mixer1>
+      </mixers>
+    </quartet1528B15CEE547FA>
+  </dev>
+  <Apps>
+    <ApogeeGlue pid="523" version="70964" consentAcknowledged="0" consentGiven="-1" forceCrash="0" shouldQuit="0">
+      <Logging>
+        <logGeneric logLevel="1" logMethod="1"/>
+        <logMessageTX logLevel="1" logMethod="0"/>
+        <logMessageRX logLevel="1" logMethod="0"/>
+        <logCommand logLevel="1" logMethod="0"/>
+      </Logging>
+      <ApogeeDevices/>
+    </ApogeeGlue>
+    <ApogeeMessenger pid="1150" version="70967" treeVersion="3" shouldQuit="0" forceCrash="0" showInfoMessage="0" showErrorMessage="0" showProgressWindow="0" progressValue="0.0" infoMessageText="" errorMessageText="" infoMessageTitle="" errorMessageTitle="" errorTitleSize="20" errorBodySize="14" errorMessageTextColor="" errorMessageBackgroundColor="" errorMessageWidth="" errorMessageHeight="" infoMessageTitleColor="" showDontAsk="0">
+      <Logging>
+        <logGeneric logLevel="2" logMethod="1"/>
+        <logMessageTX logLevel="0" logMethod="0"/>
+        <logMessageRX logLevel="0" logMethod="0"/>
+        <logCommand logLevel="2" logMethod="4"/>
+      </Logging>
+      <messageButtons/>
+    </ApogeeMessenger>
+    <Apogee Talkback helper version="70964">
+      <Talkback talkbackOn="0" selectedTalkbackSourceDevice="" selectedTalkbackSourceChannel="-1" selectedTalkbackDestinationDevice="quartet1528B15CEE547FA" selectedTalkbackDestinationChannel="-1">
+        <talkbackSources>
+          <Quartet active="0" samplerate="44100.0" numberOfInputChannels="12"/>
+          <MacBook Air Microphone active="0" samplerate="48000.0" numberOfInputChannels="1"/>
+          <iPhone Soufiane Microphone active="0" samplerate="48000.0" numberOfInputChannels="1"/>
+        </talkbackSources>
+      </Talkback>
+    </Apogee Talkback helper>
+  </Apps>
+</root>
