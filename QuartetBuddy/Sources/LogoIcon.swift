@@ -2,20 +2,41 @@ import AppKit
 
 /// Menubar icon: the Apogee logo PNG bundled in Resources
 /// (assets/apogee-icon-small.png) with optional state overlays:
-///  - muted: a red slash
-///  - talkback: a small red dot in the top-right corner
-/// Falls back to a drawn "A" if the asset is missing.
+///  - muted: red slash
+///  - talkback: red dot (top-right)
+///  - volume keys target Headphones: small headphone badge (bottom-right)
+/// Composed variants are cached — the menu icon is regenerated only when
+/// state actually changes.
 enum LogoIcon {
 
     static let menuBarHeight: CGFloat = 18
 
-    static func image(muted: Bool, talkback: Bool) -> NSImage {
+    private static var baseCache: NSImage?
+    private static var cache: [String: NSImage] = [:]
+    private static let lock = NSLock()
+
+    static func image(muted: Bool, talkback: Bool, headphonesSelected: Bool) -> NSImage {
+        let key = "\(muted)-\(talkback)-\(headphonesSelected)"
+        lock.lock()
+        if let cached = cache[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let img = compose(muted: muted, talkback: talkback, headphonesSelected: headphonesSelected)
+        lock.lock()
+        cache[key] = img
+        lock.unlock()
+        return img
+    }
+
+    private static func compose(muted: Bool, talkback: Bool, headphonesSelected: Bool) -> NSImage {
         guard let base = loadAsset() ?? drawFallbackA(size: menuBarHeight) else {
             return NSImage()
         }
 
-        // fast path: plain logo
-        if !muted && !talkback {
+        if !muted && !talkback && !headphonesSelected {
             return scaledToFit(base)
         }
 
@@ -35,14 +56,24 @@ enum LogoIcon {
             NSColor.systemRed.setStroke()
             slash.stroke()
         }
+        if headphonesSelected {
+            if let hp = headphoneSymbol() {
+                let r = NSRect(x: size - 8, y: -0.5, width: 8, height: 8)
+                hp.draw(in: r)
+            } else {
+                NSColor.systemBlue.setFill()
+                NSBezierPath(ovalIn: NSRect(x: size - 6, y: 1, width: 5, height: 5)).fill()
+            }
+        }
         out.unlockFocus()
         out.isTemplate = false
         return out
     }
 
-    /// Full-color logo for the HUD.
-    static func hudIcon() -> NSImage? {
-        loadAsset()
+    private static func headphoneSymbol() -> NSImage? {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        return NSImage(systemSymbolName: "headphones", accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg)
     }
 
     private static func scaledToFit(_ image: NSImage) -> NSImage {
@@ -58,8 +89,13 @@ enum LogoIcon {
     }
 
     private static func loadAsset() -> NSImage? {
-        Bundle.main.image(forResource: "apogee-icon-small")
-            ?? Bundle.main.image(forResource: "apogee-icon")
+        if let base = baseCache { return base }
+        if let img = Bundle.main.image(forResource: "apogee-icon-small")
+                    ?? Bundle.main.image(forResource: "apogee-icon") {
+            baseCache = img
+            return img
+        }
+        return nil
     }
 
     private static func aspectFit(_ image: NSImage, in rect: NSRect) -> NSRect {

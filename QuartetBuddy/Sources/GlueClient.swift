@@ -149,17 +149,20 @@ final class GlueClient: NSObject, StreamDelegate {
     }
 
     private func processBuffer() {
-        while true {
-            let frames = GlueProtocol.unwrapJuce(inBuffer)
-            guard let first = frames.first else { break }
-            let consumed = 8 + first.count
-            if inBuffer.count >= consumed {
-                inBuffer.removeFirst(consumed)
-            } else {
-                inBuffer.removeAll(keepingCapacity: true)
-                break
+        // parse + consume incrementally (no rescans)
+        while inBuffer.count >= 8 {
+            let magic: UInt32 = inBuffer.readLE(at: inBuffer.startIndex)
+            guard magic == GlueProtocol.juceMagic else {
+                inBuffer.removeFirst()   // resync byte-by-byte
+                continue
             }
-            handleFrame(first)
+            let lenRaw: UInt32 = inBuffer.readLE(at: inBuffer.index(inBuffer.startIndex, offsetBy: 4))
+            let len = Int(lenRaw)
+            guard len <= 64 * 1024 * 1024, inBuffer.count >= 8 + len else { break }
+            let payload = inBuffer.subdata(
+                in: inBuffer.startIndex..<inBuffer.index(inBuffer.startIndex, offsetBy: 8 + len))
+            inBuffer.removeFirst(8 + len)
+            handleFrame(payload)
         }
     }
 

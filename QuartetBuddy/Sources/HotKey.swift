@@ -3,6 +3,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// A system-wide hotkey registered via RegisterEventHotKey (no TCC needed).
+/// Create one instance per hotkey; each distinguishes itself by signature+id.
 final class HotKeyManager {
 
     struct Combo: Codable, Equatable {
@@ -36,20 +37,30 @@ final class HotKeyManager {
     }
 
     var onHotKey: (() -> Void)?
+
+    private let signature: OSType
+    private let hotKeyId: UInt32
     private var ref: EventHotKeyRef?
     private var combo: Combo?
+    private static var handlerInstalled = false
+    private static var eventHandler: EventHandlerRef?
+
+    init(signature: OSType, id: UInt32) {
+        self.signature = signature
+        self.hotKeyId = id
+        Self.installHandlerIfNeeded()
+        HotKeyRegistry.register(self, signature: signature, id: id)
+    }
 
     func register(_ combo: Combo) {
         unregister()
-        guard let keyCode = UInt32(exactly: combo.keyCode) else { return }
-        var hotKeyID = EventHotKeyID(signature: OSType(0x5142544B /* 'QBTK' */), id: 1)
+        var hotKeyID = EventHotKeyID(signature: signature, id: hotKeyId)
         var outRef: EventHotKeyRef?
-        let status = RegisterEventHotKey(keyCode, combo.modifiers, hotKeyID,
+        let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &outRef)
         if status == noErr, let outRef {
             ref = outRef
             self.combo = combo
-            installHandlerIfNeeded()
         }
     }
 
@@ -63,27 +74,45 @@ final class HotKeyManager {
 
     var current: Combo? { combo }
 
-    private var handlerInstalled = false
-    private var eventHandler: EventHandlerRef?
-
-    private func installHandlerIfNeeded() {
+    /// Shared low-level handler; dispatches by signature+id via refcon.
+    private static func installHandlerIfNeeded() {
         guard !handlerInstalled else { return }
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        let proc: EventHandlerUPP = { _, event, userData in
+        let proc: EventHandlerUPP = { _, event, _ in
             var hkID = EventHotKeyID()
             GetEventParameter(event, UInt32(kEventParamDirectObject),
                               UInt32(typeEventHotKeyID), nil,
                               MemoryLayout<EventHotKeyID>.size, nil, &hkID)
-            if hkID.signature == 0x5142544B {
-                let myself = Unmanaged<HotKeyManager>.fromOpaque(userData!).takeUnretainedValue()
-                myself.onHotKey?()
-            }
+            NotificationCenter.default.post(
+                name: Notification.Name("QBHotKey"),
+                object: nil,
+                userInfo: ["sig": hkID.signature, "id": hkID.id])
             return noErr
         }
         InstallEventHandler(GetApplicationEventTarget(), proc, 1, &eventType,
-                           Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
+                           nil, &eventHandler)
         handlerInstalled = true
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("QBHotKey"), object: nil, queue: .main) { note in
+            guard let sig = note.userInfo?["sig"] as? OSType,
+                  let id = note.userInfo?["id"] as? UInt32 else { return }
+            HotKeyRegistry.dispatch(sig: sig, id: id)
+        }
+    }
+}
+
+/// Maps (signature, id) → the owning HotKeyManager. Kept simple for a handful of hotkeys.
+enum HotKeyRegistry {
+    private static var map: [String: WeakBox] = [:]
+    private struct WeakBox { weak var mgr: HotKeyManager? }
+
+    static func register(_ mgr: HotKeyManager, signature: OSType, id: UInt32) {
+        map["\(signature):\(id)"] = WeakBox(mgr: mgr)
+    }
+
+    static func dispatch(sig: OSType, id: UInt32) {
+        map["\(sig):\(id)"]?.mgr?.onHotKey?()
     }
 }
 

@@ -31,11 +31,11 @@ enum HotKeyRecorder {
         }
     }
 
-    static func record(onCombo: @escaping (HotKeyManager.Combo?) -> Void) {
+    static func record(title: String, onCombo: @escaping (HotKeyManager.Combo?) -> Void) {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 140),
                             styleMask: [.titled, .closable],
                             backing: .buffered, defer: false)
-        panel.title = "Talkback Hotkey"
+        panel.title = title
         panel.isFloatingPanel = true
 
         let view = CaptureView(frame: NSRect(x: 0, y: 0, width: 320, height: 140))

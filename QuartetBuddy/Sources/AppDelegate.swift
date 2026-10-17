@@ -24,7 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let glue = GlueClient()
     let keyTap = MediaKeyTap()
-    let hotKeys = HotKeyManager()
+    let talkbackHotKeys = HotKeyManager(signature: 0x51425442 /* 'QBTB' */, id: 1)
+    let switchHotKeys = HotKeyManager(signature: 0x51515357 /* 'QBSW' */, id: 2)
     let midi = MidiWatcher()
     let deviceMonitor = DefaultDeviceMonitor()
 
@@ -243,11 +244,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotKey() {
-        hotKeys.onHotKey = { [weak self] in self?.toggleTalkback() }
+        talkbackHotKeys.onHotKey = { [weak self] in self?.toggleTalkback() }
         if let comboData = UserDefaults.standard.data(forKey: "hotkeyCombo"),
            let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: comboData) {
-            hotKeys.register(combo)
+            talkbackHotKeys.register(combo)
         }
+        switchHotKeys.onHotKey = { [weak self] in self?.switchVolumeTarget() }
+        if let comboData = UserDefaults.standard.data(forKey: "hotkeySwitchCombo"),
+           let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: comboData) {
+            switchHotKeys.register(combo)
+        }
+    }
+
+    /// Hotkey action: toggle the volume-key target Main Out ↔ Headphones.
+    func switchVolumeTarget() {
+        selectedOutput = selectedOutput == .mainOut ? .headphones : .mainOut
+        QBLog.log("hotkey: volume keys now control \(selectedOutput.rawValue)")
+        refreshMenu()
     }
 
     // MARK: - MIDI
@@ -294,7 +307,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let conn = glue.state == .connected ? "🟢 ApogeeGlue" : "🔴 ApogeeGlue (offline)"
         statusItem?.button?.title = ""
         let mutedSel = muted[selectedOutput] ?? false
-        statusItem?.button?.image = LogoIcon.image(muted: mutedSel, talkback: talkbackOn)
+        statusItem?.button?.image = LogoIcon.image(muted: mutedSel,
+                                                    talkback: talkbackOn,
+                                                    headphonesSelected: selectedOutput == .headphones)
         let mainGain = gain[.mainOut] ?? 0
         let hpGain = gain[.headphones] ?? 0
         statusItem?.button?.toolTip =
@@ -335,9 +350,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let hk = hotKeys.current
+        let hk = talkbackHotKeys.current
         menu.addItem(withTitle: "Talkback hotkey: \(hk?.displayString ?? "none — click to set")",
                      action: #selector(recordHotKey(_:)), keyEquivalent: "")
+        let sw = switchHotKeys.current
+        menu.addItem(withTitle: "Switch output hotkey: \(sw?.displayString ?? "none — click to set")  (Main Out ⇄ HP)",
+                     action: #selector(recordSwitchHotKey(_:)), keyEquivalent: "")
         let midiLabel: String
         if learningMidi {
             midiLabel = "learning… press a button on your keyboard"
@@ -410,11 +428,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func recordHotKey(_ sender: NSMenuItem) {
-        HotKeyRecorder.record { [weak self] combo in
+        HotKeyRecorder.record(title: "Talkback Hotkey") { [weak self] combo in
             guard let self, let combo else { return }
-            self.hotKeys.register(combo)
+            self.talkbackHotKeys.register(combo)
             if let data = try? JSONEncoder().encode(combo) {
                 UserDefaults.standard.set(data, forKey: "hotkeyCombo")
+            }
+            self.refreshMenu()
+        }
+    }
+
+    @objc private func recordSwitchHotKey(_ sender: NSMenuItem) {
+        HotKeyRecorder.record(title: "Switch Output Hotkey") { [weak self] combo in
+            guard let self, let combo else { return }
+            self.switchHotKeys.register(combo)
+            if let data = try? JSONEncoder().encode(combo) {
+                UserDefaults.standard.set(data, forKey: "hotkeySwitchCombo")
             }
             self.refreshMenu()
         }
