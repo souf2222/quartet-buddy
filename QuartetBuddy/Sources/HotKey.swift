@@ -138,7 +138,12 @@ func UCKeyTranslateForDisplay(_ keyCode: UInt32) -> String? {
 
 private func TISGetInputSourcePropertySafe() -> UnsafePointer<UCKeyboardLayout>? {
     let source = TISCopyCurrentKeyboardLayoutInputSource().takeRetainedValue()
-    let ptr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
-    guard let cfData = ptr as? Data else { return nil }
-    return cfData.withUnsafeBytes { $0.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) }
+    guard let ptr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+        return nil
+    }
+    // TISGetInputSourceProperty returns a CFDataRef as an opaque pointer —
+    // it must be rewrapped, not bridged.
+    let cfData = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue()
+    guard let bytes = CFDataGetBytePtr(cfData) else { return nil }
+    return bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { $0 }
 }

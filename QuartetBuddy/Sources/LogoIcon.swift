@@ -1,22 +1,23 @@
 import AppKit
 
-/// Menubar icon: the Apogee logo PNG bundled in Resources
-/// (assets/apogee-icon-small.png) with optional state overlays:
-///  - muted: red slash
-///  - talkback: red dot (top-right)
-///  - volume keys target Headphones: small headphone badge (bottom-right)
-/// Composed variants are cached — the menu icon is regenerated only when
-/// state actually changes.
+/// Menubar icon, drawn on a FIXED-SIZE canvas so the menubar item never
+/// changes width when state changes:
+///  - Main Out selected  → Apogee logo PNG (color)
+///  - Headphones selected → native macOS headphones glyph (template)
+///  - talkback on         → small red dot (top-right); black on the template variant
+/// The mute state no longer alters the icon — macOS shows its own mute feedback.
 enum LogoIcon {
 
-    static let menuBarHeight: CGFloat = 15
+    /// Fixed canvas: matches the logo's aspect ratio at iconHeight.
+    static let iconHeight: CGFloat = 17
+    static let canvasSize = NSSize(width: 21, height: 17)
 
     private static var baseCache: NSImage?
     private static var cache: [String: NSImage] = [:]
     private static let lock = NSLock()
 
-    static func image(muted: Bool, talkback: Bool, headphonesSelected: Bool) -> NSImage {
-        let key = "\(muted)-\(talkback)-\(headphonesSelected)"
+    static func image(talkback: Bool, headphonesSelected: Bool) -> NSImage {
+        let key = "hp-\(headphonesSelected)-tb-\(talkback)"
         lock.lock()
         if let cached = cache[key] {
             lock.unlock()
@@ -24,46 +25,39 @@ enum LogoIcon {
         }
         lock.unlock()
 
-        let img = compose(muted: muted, talkback: talkback, headphonesSelected: headphonesSelected)
+        let img = compose(talkback: talkback, headphonesSelected: headphonesSelected)
         lock.lock()
         cache[key] = img
         lock.unlock()
         return img
     }
 
-    private static func compose(muted: Bool, talkback: Bool, headphonesSelected: Bool) -> NSImage {
-        guard let base = loadAsset() ?? drawFallbackA(size: menuBarHeight) else {
-            return NSImage()
-        }
-
-        if !muted && !talkback && !headphonesSelected {
-            return scaledToFit(base)
-        }
-
-        let size = menuBarHeight
-        let out = NSImage(size: NSSize(width: size, height: size))
+    private static func compose(talkback: Bool, headphonesSelected: Bool) -> NSImage {
+        let out = NSImage(size: canvasSize)
         out.lockFocus()
-        base.draw(in: aspectFit(base, in: NSRect(x: 0, y: 0, width: size, height: size)))
+        let rect = NSRect(origin: .zero, size: canvasSize)
+
+        if headphonesSelected, let hp = headphoneSymbol() {
+            // native look: template glyph, macOS inverts it for the menubar
+            let r = aspectFit(hp, in: rect)
+            hp.draw(in: r)
+            if talkback {
+                NSColor.black.setFill()
+                NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
+                                            width: 4.5, height: 4.5)).fill()
+            }
+            out.unlockFocus()
+            out.isTemplate = true
+            return out
+        }
+
+        if let logo = loadAsset() ?? drawFallbackA(size: iconHeight) {
+            logo.draw(in: aspectFit(logo, in: rect))
+        }
         if talkback {
             NSColor.systemRed.setFill()
-            NSBezierPath(ovalIn: NSRect(x: size - 6, y: size - 6, width: 5, height: 5)).fill()
-        }
-        if muted {
-            let slash = NSBezierPath()
-            slash.lineWidth = 1.6
-            slash.move(to: NSPoint(x: 1.5, y: 1.5))
-            slash.line(to: NSPoint(x: size - 1.5, y: size - 1.5))
-            NSColor.systemRed.setStroke()
-            slash.stroke()
-        }
-        if headphonesSelected {
-            if let hp = headphoneSymbol() {
-                let r = NSRect(x: size - 8, y: -0.5, width: 8, height: 8)
-                hp.draw(in: r)
-            } else {
-                NSColor.systemBlue.setFill()
-                NSBezierPath(ovalIn: NSRect(x: size - 6, y: 1, width: 5, height: 5)).fill()
-            }
+            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
+                                        width: 4.5, height: 4.5)).fill()
         }
         out.unlockFocus()
         out.isTemplate = false
@@ -71,21 +65,9 @@ enum LogoIcon {
     }
 
     private static func headphoneSymbol() -> NSImage? {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
-        return NSImage(systemSymbolName: "headphones", accessibilityDescription: nil)?
+        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        return NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones")?
             .withSymbolConfiguration(cfg)
-    }
-
-    private static func scaledToFit(_ image: NSImage) -> NSImage {
-        let h = menuBarHeight
-        let scale = h / max(image.size.height, 1)
-        let w = image.size.width * scale
-        let out = NSImage(size: NSSize(width: w, height: h))
-        out.lockFocus()
-        image.draw(in: NSRect(x: 0, y: 0, width: w, height: h))
-        out.unlockFocus()
-        out.isTemplate = false
-        return out
     }
 
     private static func loadAsset() -> NSImage? {

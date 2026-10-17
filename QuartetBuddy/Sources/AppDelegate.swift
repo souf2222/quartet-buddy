@@ -307,9 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // menubar icon + tooltip
         statusItem?.button?.title = ""
-        let mutedSel = muted[selectedOutput] ?? false
-        statusItem?.button?.image = LogoIcon.image(muted: mutedSel,
-                                                    talkback: talkbackOn,
+        statusItem?.button?.image = LogoIcon.image(talkback: talkbackOn,
                                                     headphonesSelected: selectedOutput == .headphones)
         let mainGain = gain[.mainOut] ?? 0
         let hpGain = gain[.headphones] ?? 0
