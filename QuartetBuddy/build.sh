@@ -10,6 +10,10 @@ SRC="Sources"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
+# bundle the Apogee logo for the menubar icon / HUD
+cp assets/apogee-icon-small.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
+cp assets/apogee-icon.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
+
 cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -48,11 +52,21 @@ swiftc -O \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
     "$SRC/MidiWatcher.swift" \
+    "$SRC/InputMonitoring.swift" \
+    "$SRC/LogoIcon.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
-    -framework Carbon -framework Foundation \
+    -framework Carbon -framework Foundation -framework IOKit \
     -o "$BUNDLE/Contents/MacOS/$APPNAME"
 
-codesign --force --deep --sign - "$BUNDLE" >/dev/null 2>&1 || true
+# Sign with the stable identity when available so the Input Monitoring
+# grant survives rebuilds; otherwise fall back to ad-hoc.
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(QuartetBuddy Developer\)".*/\1/p' | head -1)
+if [ -n "$IDENTITY" ] && codesign --force --sign "$IDENTITY" "$BUNDLE" 2>/dev/null; then
+    echo "signed with identity: $IDENTITY"
+else
+    codesign --force --sign - "$BUNDLE" >/dev/null 2>&1 || true
+    echo "signed ad-hoc (rebuilds will require re-granting Input Monitoring)"
+fi
 
 echo "built: $BUNDLE"
 echo "first run: $BUNDLE/Contents/MacOS/$APPNAME  (grant Input Monitoring when prompted)"

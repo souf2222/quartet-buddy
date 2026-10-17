@@ -34,11 +34,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var selectedOutput: OutputTarget {
         didSet { UserDefaults.standard.set(selectedOutput.rawValue, forKey: "output"); refreshMenu() }
     }
-    var stepDB: Double {
-        didSet { UserDefaults.standard.set(stepDB, forKey: "step"); refreshMenu() }
-    }
+    /// macOS-style volume: 0…1, each key press steps by 1/16
+    /// (⌥ + key = fine step, ¼ block — like macOS).
+    /// 100% ⇔ 0 dB, 0% ⇔ −64 dB, linear in dB (4 dB per block).
+    var volumePercent: [OutputTarget: Double] = [.mainOut: 0.5, .headphones: 0.5]
     var gain: [OutputTarget: Double] = [.mainOut: 0, .headphones: 0]
     var muted: [OutputTarget: Bool] = [.mainOut: false, .headphones: false]
+
+    static let volumeSteps = 16
+    static let fineDivisor = 4     // ⌥ = quarter block
+    static let minDB: Double = -64
+    static let maxDB: Double = 0
+
+    static func db(forPercent p: Double) -> Double {
+        let c = min(1, max(0, p))
+        return maxDB + (minDB - maxDB) * (1 - c)
+    }
+
+    static func percent(forDB db: Double) -> Double {
+        let d = min(maxDB, max(minDB, db))
+        return (d - minDB) / (maxDB - minDB)
+    }
+
+    private func syncPercent(for target: OutputTarget) {
+        volumePercent[target] = Self.percent(forDB: gain[target] ?? 0)
+    }
     var talkbackOn = false
     var talkbackMomentary = false
     var midiTrigger: MidiWatcher.Trigger? {
@@ -50,10 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     var learningMidi = false
+    private var tccRetryTimer: Timer?
 
     override init() {
         self.selectedOutput = OutputTarget(rawValue: UserDefaults.standard.string(forKey: "output") ?? "") ?? .mainOut
-        self.stepDB = UserDefaults.standard.object(forKey: "step") as? Double ?? 1.0
         self.talkbackMomentary = UserDefaults.standard.bool(forKey: "momentary")
         if let data = UserDefaults.standard.data(forKey: "midiTrigger") {
             self.midiTrigger = try? JSONDecoder().decode(MidiWatcher.Trigger.self, from: data)
@@ -62,11 +82,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        QBLog.log("=== Quartet Buddy launched ===")
         setupMenu()
         setupGlue()
         setupKeys()
         setupMIDI()
         deviceMonitor.start()
+        // keep retrying the event tap until Input Monitoring gets granted
+        tccRetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.keyTap.isActive {
+                self.tccRetryTimer?.invalidate()
+                self.tccRetryTimer = nil
+                return
+            }
+            self.ensureMediaKeyTap()
+        }
+    }
+
+    /// Create the event tap if (and only if) Input Monitoring is granted.
+    /// Pass request=true to trigger the system permission dialog if needed.
+    @discardableResult
+    private func ensureMediaKeyTap(request: Bool = false) -> Bool {
+        if request && InputMonitoring.check() != .granted {
+            QBLog.log("input monitoring: requesting…")
+            InputMonitoring.request()
+        }
+        let granted = InputMonitoring.check() == .granted
+        if !granted {
+            QBLog.log("media keys: input monitoring not granted (tap not created)")
+            return false
+        }
+        let ok = keyTap.start()
+        QBLog.log("media keys: tap start -> \(ok ? "OK" : "FAILED")")
+        refreshMenu()
+        return ok
     }
 
     // MARK: - Glue
@@ -84,6 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
                 self.gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
+                self.syncPercent(for: .mainOut)
+                self.syncPercent(for: .headphones)
                 self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
             }
@@ -99,8 +151,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch event.id {
             case PathIds.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
+                self.syncPercent(for: .mainOut)
             case PathIds.hwout1Gain where event.tag == 4:
                 self.gain[.headphones] = event.value.readDouble()
+                self.syncPercent(for: .headphones)
             case PathIds.hwout0Mute where event.tag == 3:
                 self.muted[.mainOut] = event.value.first == 1
             case PathIds.hwout1Mute where event.tag == 3:
@@ -129,37 +183,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Media keys
 
     private func setupKeys() {
-        keyTap.onKey = { [weak self] key, keyIsDown in
+        keyTap.onKey = { [weak self] key, keyIsDown, optionHeld in
             guard let self, keyIsDown else { return false }
-            guard DefaultDeviceMonitor.quartetIsDefaultOutput() else { return false }
+            let quartetActive = DefaultDeviceMonitor.quartetIsDefaultOutput()
+            QBLog.log("media keys: handling key=\(key) opt=\(optionHeld) quartetIsDefault=\(quartetActive) glue=\(self.glue.state)")
+            guard quartetActive else { return false }
             guard case .connected = self.glue.state else { return false }
+            let delta = 1.0 / Double(Self.volumeSteps * (optionHeld ? Self.fineDivisor : 1))
             switch key {
             case .soundUp:
-                self.adjustGain(by: self.stepDB)
+                self.adjustPercent(by: delta)
                 return true
             case .soundDown:
-                self.adjustGain(by: -self.stepDB)
+                self.adjustPercent(by: -delta)
                 return true
             case .mute:
                 self.toggleMute()
                 return true
             }
         }
-        if !keyTap.start() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.showStatus("⚠️ Enable Input Monitoring for Quartet Buddy",
-                                 "System Settings → Privacy & Security → Input Monitoring",
-                                 action: self?.openPrivacyPane)
-            }
-        }
+        ensureMediaKeyTap()
     }
 
+    /// Step the macOS-style volume percent and apply the mapped dB to hardware.
+    private func adjustPercent(by delta: Double) {
+        let target = selectedOutput
+        let p = min(1, max(0, (volumePercent[target] ?? 0) + delta))
+        volumePercent[target] = p
+        let db = Self.db(forPercent: p)
+        glue.setDouble(id: target.gainId, db)
+        gain[target] = db
+        refreshMenu()
+    }
+
+    /// ± dB adjustments (Test menu items) — keeps percent in sync afterwards.
     private func adjustGain(by delta: Double) {
         let target = selectedOutput
-        let current = gain[target] ?? 0
-        let new = min(0, max(-90, current + delta))
+        let new = min(0, max(Self.minDB, (gain[target] ?? 0) + delta))
         glue.setDouble(id: target.gainId, new)
         gain[target] = new
+        syncPercent(for: target)
         refreshMenu()
     }
 
@@ -193,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotKey()
         midi.onAnyEvent = { [weak self] event in
             guard let self else { return }
+            QBLog.log("midi: ch=\(event.channel + 1) \(event.kind == .note ? "note" : "cc") \(event.number) value=\(event.value)")
             if self.learningMidi {
                 self.learningMidi = false
                 self.midiTrigger = MidiWatcher.Trigger(channel: event.channel,
@@ -228,8 +292,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.removeAllItems()
 
         let conn = glue.state == .connected ? "🟢 ApogeeGlue" : "🔴 ApogeeGlue (offline)"
-        let title = statusTitle()
-        statusItem?.button?.title = title
+        statusItem?.button?.title = ""
+        let mutedSel = muted[selectedOutput] ?? false
+        statusItem?.button?.image = LogoIcon.image(muted: mutedSel, talkback: talkbackOn)
+        let mainGain = gain[.mainOut] ?? 0
+        let hpGain = gain[.headphones] ?? 0
+        statusItem?.button?.toolTip =
+            "Main Out \(String(format: "%.1f", mainGain)) dB · HP \(String(format: "%.1f", hpGain)) dB · Talkback \(talkbackOn ? "on" : "off")"
 
         menu.addItem(withTitle: "Quartet Buddy", action: nil, keyEquivalent: "")
             .isEnabled = false
@@ -244,21 +313,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.state = target == selectedOutput ? .on : .off
         }
 
-        let stepItem = menu.addItem(withTitle: "Volume step", action: nil, keyEquivalent: "")
-        stepItem.submenu = NSMenu()
-        for s in [0.5, 1.0, 2.0] {
-            let label = s == 0.5 ? "½ dB" : (s.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(s)) dB" : "\(s) dB")
-            let item = stepItem.submenu!.addItem(withTitle: label,
-                                                 action: #selector(pickStep(_:)),
-                                                 keyEquivalent: "")
-            item.representedObject = s
-            item.state = s == stepDB ? .on : .off
-        }
+        // volume percent readout of the selected output
+        let p = volumePercent[selectedOutput] ?? 0
+        let blocks = Int((p * Double(Self.volumeSteps)).rounded())
+        menu.addItem(withTitle: String(format: "Volume: %d/%d blocks  (%.0f%% · %.1f dB)",
+                                       blocks, Self.volumeSteps, p * 100, Self.db(forPercent: p)),
+                     action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "⌥ + volume keys = fine steps (¼ block)",
+                     action: nil, keyEquivalent: "").isEnabled = false
 
         menu.addItem(.separator())
 
-        let mainGain = gain[.mainOut] ?? 0
-        let hpGain = gain[.headphones] ?? 0
         menu.addItem(withTitle: String(format: "Main Out: %.1f dB%@", mainGain,
                                         (muted[.mainOut] ?? false) ? " 🔇" : ""),
                      action: nil, keyEquivalent: "").isEnabled = false
@@ -288,21 +353,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if midiTrigger == nil { modeItem.isEnabled = false }
 
         menu.addItem(.separator())
+
+        // keyboard-access status + test items
+        if keyTap.isActive {
+            menu.addItem(withTitle: "⌨️ Media keys: active", action: nil, keyEquivalent: "").isEnabled = false
+        } else {
+            let access = InputMonitoring.check()
+            let title: String
+            if access == .granted {
+                title = "⚠️ Media keys: event tap failed — check the debug log"
+            } else {
+                title = "⚠️ Volume keys need Input Monitoring — click to allow"
+            }
+            let item = menu.addItem(withTitle: title,
+                                    action: #selector(grantInputMonitoring(_:)),
+                                    keyEquivalent: "")
+            item.image = nil
+        }
+        menu.addItem(withTitle: "Test: volume +1 dB", action: #selector(testUp(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Test: volume −1 dB", action: #selector(testDown(_:)), keyEquivalent: "")
+
+        menu.addItem(.separator())
         menu.addItem(withTitle: conn, action: nil, keyEquivalent: "").isEnabled = false
         menu.addItem(withTitle: "Open Input Monitoring settings…", action: #selector(openPrivacy(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Open debug log…", action: #selector(openLog(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-    }
-
-    private func statusTitle() -> String {
-        guard case .connected = glue.state else { return "🎛︎" }
-        let g = gain[selectedOutput] ?? 0
-        let v = Int(round((g + 90) / 90 * 16))
-        let bars = String(repeating: "▮", count: max(0, min(16, v)))
-            + String(repeating: "▯", count: max(0, 16 - v))
-        let mark = selectedOutput == .mainOut ? "" : "🎧"
-        let mute = (muted[selectedOutput] ?? false) ? "🔇" : ""
-        return "\(mark)\(mute)\(bars)"
     }
 
     // MARK: - Actions
@@ -315,9 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func pickStep(_ sender: NSMenuItem) {
-        if let s = sender.representedObject as? Double {
-            stepDB = s
-        }
+        // removed: volume is now macOS-proportional (16 steps)
     }
 
     @objc private func talkbackNow(_ sender: NSMenuItem) {
@@ -350,6 +424,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openPrivacyPane()
     }
 
+    @objc private func grantInputMonitoring(_ sender: NSMenuItem) {
+        ensureMediaKeyTap()
+        if InputMonitoring.check() != .granted {
+            showStatus("Enable Input Monitoring",
+                       "In System Settings → Privacy & Security → Input Monitoring, turn on Quartet Buddy.",
+                       action: openPrivacyPane)
+        }
+        refreshMenu()
+    }
+
+    @objc private func testUp(_ sender: NSMenuItem) {
+        QBLog.log("test: volume +1 dB")
+        adjustGain(by: 1.0)
+    }
+
+    @objc private func testDown(_ sender: NSMenuItem) {
+        QBLog.log("test: volume -1 dB")
+        adjustGain(by: -1.0)
+    }
+
+    @objc private func openLog(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(QBLog.url)
+    }
+
     private func openPrivacyPane() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
@@ -369,6 +467,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        // re-check permission every time the menu opens (grant may have just happened)
+        if !keyTap.isActive {
+            ensureMediaKeyTap()
+        }
+    }
+
     func menuDidClose(_ menu: NSMenu) {
         // state may change while the menu is open; refresh after close
         DispatchQueue.main.async { self.refreshMenu() }

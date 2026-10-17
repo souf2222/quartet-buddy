@@ -3,9 +3,33 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>Resources/apogee-icon-small.png</key>
+		<data>
+		7sYPKd8tgU4axx/rEfPzEQ+ojuo=
+		</data>
+		<key>Resources/apogee-icon.png</key>
+		<data>
+		IOzpgwkJjvazGJoxqNwOSxoqfPA=
+		</data>
+	</dict>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>Resources/apogee-icon-small.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			TmIJP2k2QbYQ0/9KEL4JS5znV8G8rhUrkn72zxqXuZ8=
+			</data>
+		</dict>
+		<key>Resources/apogee-icon.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			AmYQgZIjTUGmGsdiC2ust+RC5Ynm7y66a+m1HU1l9E8=
+			</data>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
 		<key>^Resources/</key>
