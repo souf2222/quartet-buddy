@@ -1,6 +1,7 @@
 import AppKit
 import CoreMIDI
 import Carbon.HIToolbox
+import ServiceManagement
 
 // Path-ids captured from live traffic (see docs/protocol-notes.md).
 // They are deterministic per device — same values Apogee's own apps use.
@@ -407,6 +408,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                              action: #selector(openLog(_:)), keyEquivalent: "")
 
         menu.addItem(.separator())
+
+        // launch at login
+        let loginStatus = SMAppService.mainApp.status
+        let loginTitle: String
+        switch loginStatus {
+        case .enabled:
+            loginTitle = "Launch at Login"
+        case .requiresApproval:
+            loginTitle = "Launch at Login (approve in System Settings)"
+        default:
+            loginTitle = "Launch at Login"
+        }
+        let loginItem = menu.addItem(withTitle: loginTitle,
+                                     action: #selector(toggleLaunchAtLogin(_:)),
+                                     keyEquivalent: "")
+        loginItem.state = loginStatus == .enabled ? .on : .off
+
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
@@ -446,6 +464,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func clearMidiTrigger(_ sender: NSMenuItem) {
         midiTrigger = nil
         UserDefaults.standard.removeObject(forKey: "midiTrigger")
+        refreshMenu()
+    }
+
+    // MARK: Launch at login
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+                QBLog.log("login item: unregistered")
+            } else {
+                try service.register()
+                QBLog.log("login item: registered")
+            }
+        } catch {
+            QBLog.log("login item error: \(error.localizedDescription)")
+        }
         refreshMenu()
     }
 
