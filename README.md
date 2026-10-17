@@ -1,28 +1,38 @@
-# Quartet Buddy
+# Quartet Buddy 🎛
 
-A tiny menubar companion for the **Apogee Quartet** audio interface that
-restores the system **volume keys** and adds **MIDI/hotkey Talkback triggers** —
-working *with* Apogee Control 2 (which you keep for routing), not against it.
+A menubar companion for the **Apogee Quartet** audio interface, built by
+reverse-engineering Apogee Control 2's IPC protocol
+([`docs/protocol-notes.md`](docs/protocol-notes.md)).
 
-Built by reverse-engineering Apogee Control 2's IPC protocol
-(see [`docs/protocol-notes.md`](docs/protocol-notes.md)).
+It fixes what Apogee Control 2 breaks on modern macOS: because the Quartet
+exposes no CoreAudio volume control, the **system volume keys go dead**.
+Quartet Buddy makes them work again — and adds a few things Apogee never
+offered. It talks to the ApogeeGlue daemon directly, so you keep Apogee
+Control 2 installed (for routing) and everything stays in sync.
 
-## What it does
+## Features
 
-| Feature | How |
+| Feature | Details |
 |---|---|
-| **Volume keys work again** | macOS gives the Quartet no volume control (that's why the keys were dead). Quartet Buddy intercepts the media keys and drives the Quartet's real analog fader through ApogeeGlue — exactly what the fader in Apogee Control 2 does. |
-| **Choose the output** | Menu → *Output for volume keys*: **Main Out** or **Headphones**. |
-| **Mute key** | Toggles mute on the selected output. |
-| **Talkback hotkey** | Menu → *Talkback hotkey* → press any ⌘/⌥/⌃ + key combo. System-wide. |
-| **Talkback MIDI button** | Menu → *Talkback MIDI* → **Learn**, then press a button/note/CC on the keyboard plugged into the Quartet's MIDI port. Toggle or momentary mode. |
-| **Live status** | The menubar icon shows the selected output's fader (16 segments) + mute + talkback state, synced in real time — turn the knob on the Quartet's touchscreen and the bar follows. |
+| **Volume keys work again** | F11/F12 (volume up/down) drive the Quartet's real analog fader, exactly like the fader in Apogee Control 2. macOS-proportional: **100% ⇔ 0 dB, 0% ⇔ −64 dB**, 16 blocks, one block per key press (4 dB). |
+| **⌥-fine steps** | Hold **⌥** while pressing volume for quarter-block steps (1 dB), just like macOS. |
+| **Mute key** | F10 toggles mute on the selected output. |
+| **Output selector** | Choose **Main Out** or **Headphones** for the volume keys — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). |
+| **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
+| **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
+| **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 
-The keys only intercept while the **Quartet is the selected output device**;
-otherwise events pass through untouched (your MacBook speakers keep working
+The keys only take over while the **Quartet is the selected output device**;
+otherwise events pass through untouched (your MacBook speakers keep behaving
 normally).
 
-## Install & run
+## Requirements
+
+- macOS 13+ (developed on macOS 27)
+- Apogee Control 2 installed (its ApogeeGlue daemon is what we talk to)
+- Quartet connected over USB
+
+## Install & first run
 
 ```bash
 cd quartet-buddy/QuartetBuddy
@@ -30,42 +40,78 @@ cd quartet-buddy/QuartetBuddy
 open build/QuartetBuddy.app
 ```
 
-On first volume-key press, macOS will ask to enable **Input Monitoring** for
-Quartet Buddy — allow it (the menu also has a shortcut to the setting).
-Because the app is ad-hoc signed, rebuilding it may re-trigger the prompt
-once.
+**First launch only — grant Input Monitoring (required for the volume keys):**
 
-Requirements:
-- Apogee Control 2 installed and running (ApogeeGlue daemon is what we talk to)
-- Quartet connected (USB)
+1. The menu shows a warning: **"⚠️ Volume Keys Need Input Monitoring…"** — click it
+2. In **System Settings → Privacy & Security → Input Monitoring**, enable **Quartet Buddy**
+3. Within ~5 seconds the warning disappears — the keys are live. No relaunch needed.
+
+> The build script signs the app with the **QuartetBuddy Developer**
+> certificate (created in your keychain during setup). The grant is bound to
+> that certificate, so it **survives every rebuild**. If the identity is
+> missing, it falls back to ad-hoc signing and you'd need to re-grant after
+> each rebuild.
+
+### Setup
+
+- **Output target:** *Volume Keys Target →* Main Out / Headphones (or record a switch hotkey)
+- **Talkback:** *Turn Talkback On* to test, then record the *Talkback Hotkey*
+  and/or *MIDI Button → Learn…* (press a button on your keyboard)
+- **MIDI mode:** *Toggle* (press = on/off) or *Momentary* (hold to talk)
 
 ## How it works
 
 ```
-volume keys ──► CGEventTap ──┐
-hotkey ──────► RegisterEventHotKey ─┤
-MIDI keyboard ─► CoreMIDI ("Quartet" source) ─┴─► Glue IPC ──► ApogeeGlue ──► Quartet
+volume keys ──► CGEventTap (NX_SYSDEFINED, listen-only) ─┐
+switch/talkback hotkey ──► RegisterEventHotKey ───────────┤
+MIDI keyboard ──► CoreMIDI ("Quartet" source) ───────────┤
+                                                          ▼
+                              ApogeeGlue IPC  ──►  ApogeeGlue daemon ──► Quartet
+                              (TCP localhost)
 ```
 
-Glue IPC = TCP `localhost` + JUCE framing + Apogee ValueTreeSyncProtocol
-(magic `F2B49E2C`, checksum-fold codec, `setProperty` records with 4-byte
-path-ids — all documented in `docs/protocol-notes.md` and reimplemented in
-`Sources/GlueProtocol.swift`). Verified read/write against the live daemon.
+Quartet Buddy connects to ApogeeGlue like the official apps do and speaks its
+protocol: JUCE framing (magic `F2B49E2C`), the custom ValueTreeSyncProtocol
+records (checksum-fold codec, `setProperty` messages with 4-byte path-ids),
+and the gzip'd JUCE ValueTree binary stream used for full-tree sync. All of
+it is documented in [`docs/protocol-notes.md`](docs/protocol-notes.md) and
+reimplemented in `QuartetBuddy/Sources/GlueProtocol.swift`. Both read and
+write paths were verified against the live daemon.
 
 ## Repo layout
 
 ```
-docs/protocol-notes.md     complete wire protocol spec
-docs/captures/             sample tree dump from the live device
-tools/                     RE toolchain (capture analyzer, probes, id watchers)
-QuartetBuddy/Sources/      the Swift app
+docs/protocol-notes.md       complete wire protocol spec
+docs/captures/               sample tree dump from the live device
+tools/                       RE toolchain (capture analyzer, probes, id watcher,
+                             write tests — the scripts that cracked the protocol)
+QuartetBuddy/Sources/        the Swift app
+QuartetBuddy/assets/         Apogee logo
+QuartetBuddy/build.sh        build + sign + bundle
 ```
+
+## Troubleshooting
+
+- **Volume keys do nothing** — check the menu icon: if the ⌨️ warning is back,
+  Input Monitoring got switched off, or the app was rebuilt ad-hoc.
+  Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
+  Open Debug Log…*) — every key event and write is recorded there.
+- **Menu header shows "Glue Offline"** — ApogeeGlue isn't running (Apogee
+  Control 2 not installed/running). The app auto-reconnects every 3 s; there's
+  also a *Reconnect* menu item.
+- **MIDI learn finds nothing** — the keyboard must be plugged into the
+  Quartet's MIDI port (CoreMIDI source named "Quartet"); it won't see USB
+  keyboards connected directly to the Mac.
+- **Talkback does nothing audible** — the TalkbackHelper needs a valid
+  source/destination configured in Apogee Control 2's Talkback settings.
 
 ## Notes & limitations
 
 - The path-ids in `PathIds` were captured from live traffic for this device
-  (`quartet1528B15CEE547FA`). They are deterministic (a path hash) — if you use
-  a different Quartet, run `tools/watch_ids.py` and update the table.
-- Apogee software updates could change the protocol; the app shows a red
-  offline status if Glue disappears or changes ports.
-- This is an independent interoperability tool; it contains no Apogee code.
+  (`quartet1528B15CEE547FA`). They are deterministic, but if you use a
+  *different* Quartet, run `tools/watch_ids.py` and update the table.
+- An Apogee software update could change the protocol; the app shows the
+  offline state and the debug log tells you where it broke. The protocol
+  notes contain everything needed to re-crack it.
+- This is an independent interoperability tool for your own hardware; it
+  contains no Apogee code.
