@@ -9,8 +9,8 @@ import AppKit
 enum LogoIcon {
 
     /// Fixed canvas: matches the logo's aspect ratio at iconHeight.
-    static let iconHeight: CGFloat = 17
-    static let canvasSize = NSSize(width: 21, height: 17)
+    static let iconHeight: CGFloat = 16
+    static let canvasSize = NSSize(width: 20, height: 16)
 
     private static var baseCache: NSImage?
     private static var cache: [String: NSImage] = [:]
