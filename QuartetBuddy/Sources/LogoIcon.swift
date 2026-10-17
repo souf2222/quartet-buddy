@@ -9,7 +9,7 @@ import AppKit
 /// state actually changes.
 enum LogoIcon {
 
-    static let menuBarHeight: CGFloat = 18
+    static let menuBarHeight: CGFloat = 15
 
     private static var baseCache: NSImage?
     private static var cache: [String: NSImage] = [:]

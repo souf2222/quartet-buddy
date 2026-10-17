@@ -1,5 +1,6 @@
 import AppKit
 import CoreMIDI
+import Carbon.HIToolbox
 
 // Path-ids captured from live traffic (see docs/protocol-notes.md).
 // They are deterministic per device — same values Apogee's own apps use.
@@ -304,7 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshMenu() {
         menu.removeAllItems()
 
-        let conn = glue.state == .connected ? "🟢 ApogeeGlue" : "🔴 ApogeeGlue (offline)"
+        // menubar icon + tooltip
         statusItem?.button?.title = ""
         let mutedSel = muted[selectedOutput] ?? false
         statusItem?.button?.image = LogoIcon.image(muted: mutedSel,
@@ -315,88 +316,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.toolTip =
             "Main Out \(String(format: "%.1f", mainGain)) dB · HP \(String(format: "%.1f", hpGain)) dB · Talkback \(talkbackOn ? "on" : "off")"
 
-        menu.addItem(withTitle: "Quartet Buddy", action: nil, keyEquivalent: "")
-            .isEnabled = false
+        // header
+        let headerTitle = "Quartet Buddy" + (glue.state == .connected ? "" : " — Glue Offline")
+        menu.addItem(sectionHeader(headerTitle))
 
-        let outItem = menu.addItem(withTitle: "Output for volume keys", action: nil, keyEquivalent: "")
+        // output target (with live levels)
+        let outItem = menu.addItem(withTitle: "Volume Keys Target", action: nil, keyEquivalent: "")
         outItem.submenu = NSMenu()
         for target in OutputTarget.allCases {
-            let item = outItem.submenu!.addItem(withTitle: target.rawValue,
+            let g = gain[target] ?? 0
+            let isMuted = muted[target] ?? false
+            let title = String(format: "%@ — %.1f dB%@", target.rawValue, g, isMuted ? "  muted" : "")
+            let item = outItem.submenu!.addItem(withTitle: title,
                                                 action: #selector(pickOutput(_:)),
                                                 keyEquivalent: "")
             item.representedObject = target.rawValue
             item.state = target == selectedOutput ? .on : .off
         }
 
-        // volume percent readout of the selected output
-        let p = volumePercent[selectedOutput] ?? 0
-        let blocks = Int((p * Double(Self.volumeSteps)).rounded())
-        menu.addItem(withTitle: String(format: "Volume: %d/%d blocks  (%.0f%% · %.1f dB)",
-                                       blocks, Self.volumeSteps, p * 100, Self.db(forPercent: p)),
-                     action: nil, keyEquivalent: "").isEnabled = false
-        menu.addItem(withTitle: "⌥ + volume keys = fine steps (¼ block)",
+        // compact level line
+        menu.addItem(withTitle: String(format: "Main %.1f dB  ·  HP %.1f dB", mainGain, hpGain),
                      action: nil, keyEquivalent: "").isEnabled = false
 
         menu.addItem(.separator())
 
-        menu.addItem(withTitle: String(format: "Main Out: %.1f dB%@", mainGain,
-                                        (muted[.mainOut] ?? false) ? " 🔇" : ""),
-                     action: nil, keyEquivalent: "").isEnabled = false
-        menu.addItem(withTitle: String(format: "Headphones: %.1f dB%@", hpGain,
-                                        (muted[.headphones] ?? false) ? " 🔇" : ""),
-                     action: nil, keyEquivalent: "").isEnabled = false
-        menu.addItem(withTitle: talkbackOn ? "🎙 Talkback: ON" : "🎙 Talkback: off",
-                     action: #selector(talkbackNow(_:)), keyEquivalent: "")
-
-        menu.addItem(.separator())
+        // talkback section
+        menu.addItem(sectionHeader("Talkback"))
+        let tbAction = menu.addItem(withTitle: talkbackOn ? "Turn Talkback Off" : "Turn Talkback On",
+                                    action: #selector(talkbackNow(_:)), keyEquivalent: "")
+        applyKeyEquivalent(tbAction, combo: talkbackHotKeys.current)
 
         let hk = talkbackHotKeys.current
-        menu.addItem(withTitle: "Talkback hotkey: \(hk?.displayString ?? "none — click to set")",
+        menu.addItem(withTitle: hk.map({ "Talkback Hotkey: \($0.displayString)…" }) ?? "Set Talkback Hotkey…",
                      action: #selector(recordHotKey(_:)), keyEquivalent: "")
+
         let sw = switchHotKeys.current
-        menu.addItem(withTitle: "Switch output hotkey: \(sw?.displayString ?? "none — click to set")  (Main Out ⇄ HP)",
+        menu.addItem(withTitle: sw.map({ "Switch Output Hotkey: \($0.displayString)…" }) ?? "Set Switch Output Hotkey…",
                      action: #selector(recordSwitchHotKey(_:)), keyEquivalent: "")
-        let midiLabel: String
+
+        let midiMenu = menu.addItem(withTitle: "MIDI Button", action: nil, keyEquivalent: "")
+        midiMenu.submenu = NSMenu()
         if learningMidi {
-            midiLabel = "learning… press a button on your keyboard"
-        } else if let t = midiTrigger {
-            midiLabel = "MIDI: \(t.kind == .note ? "Note" : "CC") \(t.number) ch \(t.channel + 1)"
+            midiMenu.submenu!.addItem(withTitle: "Learning… press a button on your keyboard",
+                                      action: nil, keyEquivalent: "").isEnabled = false
         } else {
-            midiLabel = "MIDI: none — click to learn"
+            midiMenu.submenu!.addItem(withTitle: "Learn…",
+                                      action: #selector(learnMIDI(_:)), keyEquivalent: "")
         }
-        menu.addItem(withTitle: "Talkback \(midiLabel)",
-                     action: #selector(learnMIDI(_:)), keyEquivalent: "")
-        let modeItem = menu.addItem(withTitle: "MIDI mode: \(talkbackMomentary ? "momentary" : "toggle")",
-                                    action: #selector(toggleMidiMode(_:)), keyEquivalent: "")
-        if midiTrigger == nil { modeItem.isEnabled = false }
+        if let t = midiTrigger {
+            let trig = midiMenu.submenu!.addItem(
+                withTitle: String(format: "Trigger: %@ %d · Ch %d", t.kind == .note ? "Note" : "CC", t.number, t.channel + 1),
+                action: nil, keyEquivalent: "")
+            trig.isEnabled = false
+            midiMenu.submenu!.addItem(withTitle: "Clear Trigger",
+                                      action: #selector(clearMidiTrigger(_:)), keyEquivalent: "")
+            let mode = midiMenu.submenu!.addItem(
+                withTitle: "Mode: \(talkbackMomentary ? "Momentary" : "Toggle")",
+                action: #selector(toggleMidiMode(_:)), keyEquivalent: "")
+            mode.state = .on
+        }
 
         menu.addItem(.separator())
 
-        // keyboard-access status + test items
-        if keyTap.isActive {
-            menu.addItem(withTitle: "⌨️ Media keys: active", action: nil, keyEquivalent: "").isEnabled = false
-        } else {
+        // warnings (only when something needs attention)
+        if !keyTap.isActive {
             let access = InputMonitoring.check()
-            let title: String
-            if access == .granted {
-                title = "⚠️ Media keys: event tap failed — check the debug log"
-            } else {
-                title = "⚠️ Volume keys need Input Monitoring — click to allow"
-            }
-            let item = menu.addItem(withTitle: title,
-                                    action: #selector(grantInputMonitoring(_:)),
-                                    keyEquivalent: "")
-            item.image = nil
+            let title = access == .granted
+                ? "⚠️ Media Key Tap Failed — Open Debug Log"
+                : "⚠️ Volume Keys Need Input Monitoring…"
+            menu.addItem(withTitle: title,
+                         action: access == .granted ? #selector(openLog(_:))
+                                                     : #selector(grantInputMonitoring(_:)),
+                         keyEquivalent: "")
         }
-        menu.addItem(withTitle: "Test: volume +1 dB", action: #selector(testUp(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Test: volume −1 dB", action: #selector(testDown(_:)), keyEquivalent: "")
+        if glue.state != .connected {
+            menu.addItem(withTitle: "Reconnect to ApogeeGlue",
+                         action: #selector(reconnect(_:)), keyEquivalent: "")
+        }
 
         menu.addItem(.separator())
-        menu.addItem(withTitle: conn, action: nil, keyEquivalent: "").isEnabled = false
-        menu.addItem(withTitle: "Open Input Monitoring settings…", action: #selector(openPrivacy(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Open debug log…", action: #selector(openLog(_:)), keyEquivalent: "")
+
+        // advanced
+        let adv = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
+        adv.submenu = NSMenu()
+        adv.submenu!.addItem(withTitle: "Volume +1 dB (Test)",
+                             action: #selector(testUp(_:)), keyEquivalent: "")
+        adv.submenu!.addItem(withTitle: "Volume −1 dB (Test)",
+                             action: #selector(testDown(_:)), keyEquivalent: "")
+        adv.submenu!.addItem(withTitle: "Open Input Monitoring Settings…",
+                             action: #selector(openPrivacy(_:)), keyEquivalent: "")
+        adv.submenu!.addItem(withTitle: "Open Debug Log…",
+                             action: #selector(openLog(_:)), keyEquivalent: "")
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    // MARK: menu helpers (macOS HIG styling)
+
+    /// Bold section header, like system menubar extras use.
+    private func sectionHeader(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold)])
+        item.isEnabled = false
+        return item
+    }
+
+    /// Show a registered hotkey as the item's key equivalent (when printable).
+    private func applyKeyEquivalent(_ item: NSMenuItem, combo: HotKeyManager.Combo?) {
+        guard let combo, let char = HotKeyManager.Combo.plainChar(combo.keyCode) else { return }
+        var mask: NSEvent.ModifierFlags = []
+        if combo.modifiers & UInt32(cmdKey) != 0 { mask.insert(.command) }
+        if combo.modifiers & UInt32(optionKey) != 0 { mask.insert(.option) }
+        if combo.modifiers & UInt32(controlKey) != 0 { mask.insert(.control) }
+        if combo.modifiers & UInt32(shiftKey) != 0 { mask.insert(.shift) }
+        item.keyEquivalent = char.lowercased()
+        item.keyEquivalentModifierMask = mask
     }
 
     // MARK: - Actions
@@ -408,8 +445,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func pickStep(_ sender: NSMenuItem) {
-        // removed: volume is now macOS-proportional (16 steps)
+    @objc private func clearMidiTrigger(_ sender: NSMenuItem) {
+        midiTrigger = nil
+        UserDefaults.standard.removeObject(forKey: "midiTrigger")
+        refreshMenu()
+    }
+
+    @objc private func reconnect(_ sender: NSMenuItem) {
+        glue.connect()
     }
 
     @objc private func talkbackNow(_ sender: NSMenuItem) {

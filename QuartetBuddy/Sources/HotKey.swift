@@ -34,6 +34,12 @@ final class HotKeyManager {
                 return "Key \(code)"
             }
         }
+
+        /// Single printable character for the key (for menu key equivalents).
+        static func plainChar(_ code: UInt32) -> String? {
+            guard let s = UCKeyTranslateForDisplay(code), s.count == 1 else { return nil }
+            return s
+        }
     }
 
     var onHotKey: (() -> Void)?
@@ -116,7 +122,7 @@ enum HotKeyRegistry {
     }
 }
 
-private func UCKeyTranslateForDisplay(_ keyCode: UInt32) -> String? {
+func UCKeyTranslateForDisplay(_ keyCode: UInt32) -> String? {
     guard let layoutData = TISGetInputSourcePropertySafe() else { return nil }
     var deadKeyState: UInt32 = 0
     var chars = [UniChar](repeating: 0, count: 4)
