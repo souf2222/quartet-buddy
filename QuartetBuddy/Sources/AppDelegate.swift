@@ -459,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         let show = talkbackOn && quartetPresence.isConnected
         if show {
-            let size: CGFloat = 7
+            let size: CGFloat = 9
             if talkbackDot == nil {
                 let dot = NSView(frame: .zero)
                 dot.wantsLayer = true
@@ -485,8 +485,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 iconFrame = NSRect(x: (b.width - 20) / 2, y: (b.height - 16) / 2,
                                    width: 20, height: 16)
             }
-            talkbackDot?.frame = NSRect(x: iconFrame.maxX - size + 2,
-                                        y: iconFrame.maxY - size + 1.5,
+            talkbackDot?.frame = NSRect(x: iconFrame.maxX - size + 3.5,
+                                        y: iconFrame.maxY - size + 3,
                                         width: size, height: size)
         } else if let dot = talkbackDot {
             dot.removeFromSuperview()
