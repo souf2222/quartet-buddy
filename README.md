@@ -18,18 +18,19 @@ routing) and everything stays in sync.
 | Feature | Details |
 |---|---|
 | **Native volume keys** | F11/F12 (and the volume HUD, ⌥-fine steps — everything) behave exactly like any Mac: they drive the macOS volume slider, which is **bound to the Quartet's real analog fader**. Key presses move the fader; fader moves (Apogee Control 2, the touchscreen) move the slider — always in sync, both directions. |
-| **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound / Control Center and the Quartet follows; 100% ⇔ 0 dB, 0% ⇔ −64 dB. Toggle in *Advanced → Bind to macOS Volume Slider*; off = classic mode (keys step the fader directly, 4 dB per block, ⌥ = 1 dB). |
-| **Mute key** | F10 toggles mute on the selected output. |
-| **Volume target** | Choose **Main Out** or **Headphones** for the slider binding and (in classic mode) the volume keys — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
+| **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound / Control Center and the Quartet follows; 100% ⇔ 0 dB, 0% ⇔ −64 dB. |
+| **Native mute key** | F10 (and the Control Center mute icon) toggle the selected output's mute — bridged to the hardware both ways, so the macOS mute display also follows mutes done in Apogee Control 2 or on the touchscreen. |
+| **Volume target** | Choose **Main Out** or **Headphones** for the binding — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
 | **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 | **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug) — and the menu header tells you why ("Quartet Not Connected" / "Glue Offline"). |
 
-In bound mode the volume keys are never intercepted — macOS handles them
-natively (whatever device is the current output). In classic mode the keys
-only take over while the **Quartet is the selected output device**; otherwise
-events pass through untouched (your MacBook speakers keep behaving normally).
+No media keys are ever intercepted — macOS handles the volume keys and F10
+natively, on whatever device is the current output (your MacBook speakers
+keep behaving normally). The Quartet's binding applies to its own macOS
+controls, and the app needs **no permissions at all** — no Input Monitoring,
+no prompts.
 
 ## Requirements
 
@@ -47,21 +48,15 @@ cd quartet-buddy/QuartetBuddy
 The script relaunches the app automatically, so every rebuild goes live
 immediately. The app lives in `build/Quartet Buddy.app`.
 
-**First launch only — grant Input Monitoring (required for the mute key — and
-for the volume keys in classic mode):**
-
-1. The menu shows a warning: **"⚠️ Media Keys Need Input Monitoring…"** — click it
-2. In **System Settings → Privacy & Security → Input Monitoring**, enable **Quartet Buddy**
-3. Within ~5 seconds the warning disappears — F10 works. No relaunch needed.
-
-> The volume keys don't need this in the default (bound) mode — they're never
-> intercepted, macOS handles them natively.
+**No permissions needed.** The app never intercepts media keys and needs no
+TCC grants (no Input Monitoring, no prompts, nothing to re-grant after
+rebuilds). Volume keys and F10 work through macOS's own controls, bridged
+to the Quartet's hardware.
 
 > The build script signs the app with the **QuartetBuddy Developer**
-> certificate (created in your keychain during setup). The grant is bound to
-> that certificate, so it **survives every rebuild**. If the identity is
-> missing, it falls back to ad-hoc signing and you'd need to re-grant after
-> each rebuild.
+> certificate (created in your keychain during setup) so the Launch-at-Login
+> registration survives every rebuild; without it, it falls back to ad-hoc
+> signing.
 
 **Launch at Login** is a menu toggle. Your choice is remembered, and if the
 registration ever goes missing (app moved/renamed), the app re-registers
@@ -79,20 +74,22 @@ itself automatically on the next launch.
 ## How it works
 
 ```
-volume keys ──► macOS (native, untouched) ──► OS "Quartet" volume slider
-                                                    ▲            │
-           fader changes (echoes from Control 2, ───┘            │ slider moves
-           the touchscreen) — enforce onto slider                ▼
+volume + mute keys ──► macOS (native, untouched) ──► OS "Quartet" volume + mute
+                                                          │  ▲
+                          OS control changes ─────────────┘  │ hardware state
+                          (applied to fader/mute)           │ (copied onto the
+                                                           ▼  OS controls)
                               ApogeeGlue IPC  ──►  ApogeeGlue daemon ──► Quartet
                               (TCP localhost)         ▲
 switch/talkback hotkey ──► RegisterEventHotKey ──────┤
 MIDI keyboard ──► CoreMIDI ("Quartet" source) ────────┘
 ```
 
-The OS "Quartet" volume slider is display-only (the driver never applies it
-to the audio), so `OSVolumeMirror` bridges it: slider moves are written to
-the real fader through ApogeeGlue, and fader moves are copied back onto the
-slider.
+The OS "Quartet" volume + mute controls are display-only (the driver never
+applies them to the audio), so `OSVolumeMirror` bridges them: OS control
+changes are written to the real hardware through ApogeeGlue, and hardware
+changes (from Apogee Control 2, the touchscreen, key presses) are copied
+back onto the OS controls.
 
 Quartet Buddy connects to ApogeeGlue like the official apps do and speaks its
 protocol: JUCE framing (magic `F2B49E2C`), the custom ValueTreeSyncProtocol
@@ -118,22 +115,18 @@ QuartetBuddy/build.sh        build + sign + bundle
 
 - **Icon is greyed out** — the Quartet isn't detected over USB. Check the
   cable/port; the icon returns to full color the moment it's seen again.
-- **Volume keys do nothing on the Quartet** — in the default (bound) mode the
-  keys drive the macOS slider, and the app carries its level to the Quartet.
-  So the bridge must be up: check the menu header — "Glue Offline" means the
-  app can't reach the Quartet (Apogee Control 2 / its daemon not running; it
-  auto-reconnects every 3 s). Also check *Advanced → Bind to macOS Volume
-  Slider* is on, and that the Quartet is the current output device — with any
+- **Volume keys do nothing on the Quartet** — the keys drive the macOS
+  slider, and the app carries its level to the Quartet, so the bridge must
+  be up: check the menu header — "Glue Offline" means the app can't reach
+  the Quartet (Apogee Control 2 / its daemon not running; it auto-reconnects
+  every 3 s). And the Quartet must be the current output device — with any
   other device selected, the keys adjust that device instead (native macOS
   behavior).
 - **Menu header shows "Glue Offline"** — ApogeeGlue isn't running (Apogee
   Control 2 not installed/running). The app auto-reconnects every 3 s; there's
   also a *Reconnect* menu item.
-- **Mute key (F10) does nothing** — it's the one key we still intercept, and
-  it needs the Input Monitoring grant: if the ⌨️ warning is back, the grant
-  got switched off or the app was rebuilt ad-hoc.
 - Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
-  Open Debug Log…*) — every key event, slider move, and write is recorded.
+  Open Debug Log…*) — every slider move, mute change, and write is recorded.
 - **MIDI learn finds nothing** — the keyboard must be plugged into the
   Quartet's MIDI port (CoreMIDI source named "Quartet"); it won't see USB
   keyboards connected directly to the Mac.

@@ -1,26 +1,28 @@
 import Foundation
 import CoreAudio
 
-/// The bridge between the macOS volume slider and the Quartet's real fader.
+/// The bridge between macOS's audio controls and the Quartet's real fader.
 ///
-/// The Quartet's driver exposes a CoreAudio "volume" control with the
-/// fader's exact range (−64…0 dB) — but it is a pure display: writing it
+/// The Quartet's driver exposes CoreAudio volume + mute controls with the
+/// fader's exact range (−64…0 dB) — but they are pure display: writing them
 /// changes nothing audible (verified with a live −64 dB dip test). macOS
-/// steps it natively with the volume keys (the media key tap is listen-only
-/// on this macOS and cannot swallow NX_SYSDEFINED anyway).
+/// drives them natively (volume keys, F10, Control Center — the media key
+/// tap is gone entirely).
 ///
-/// Quartet Buddy turns that dead display into a real control, bound both
-/// ways:
-///  • enforce(_:) — Quartet → macOS: copy the fader level onto the slider
-///    whenever the volume changes (glue tree + echoes).
-///  • onSliderMoved — macOS → Quartet: fired on the main thread whenever the
-///    slider moves for any reason (volume key press, a hand-dragged slider
-///    in Sound settings, our own enforce writes). The delegate applies the
-///    level to the real fader and filters out our own writes by value.
+/// Quartet Buddy turns those dead controls into real ones, bound both ways:
+///  • enforce(_:) / enforceMute(_:) — Quartet → macOS: copy the hardware
+///    state onto the OS controls whenever it changes (glue tree + echoes).
+///  • onSliderMoved / onMuteChanged — macOS → Quartet: fired on the main
+///    thread whenever the OS controls move for any reason (key press, a
+///    hand-dragged slider, our own enforce writes). The delegate applies the
+///    state to the hardware and filters out its own writes by value.
 final class OSVolumeMirror {
 
     /// Fired on the main thread with the slider's new level in dB.
     var onSliderMoved: ((Double) -> Void)?
+
+    /// Fired on the main thread with the OS mute's new state.
+    var onMuteChanged: ((Bool) -> Void)?
 
     private var listenedDevice: AudioDeviceID?
     private var listenerProc: AudioObjectPropertyListenerProc?
@@ -58,6 +60,17 @@ final class OSVolumeMirror {
         }
     }
 
+    /// Copy the hardware mute state onto the macOS mute display.
+    func enforceMute(_ muted: Bool) {
+        guard let dev = device() else { return }
+        armListener(on: dev)
+        if Self.write(mute: muted, to: dev) {
+            QBLog.log("mute sync: OS mute -> \(muted ? "on" : "off")")
+        } else {
+            QBLog.log("mute sync: OS mute write failed")
+        }
+    }
+
     // MARK: - macOS → Quartet
 
     private func sliderChanged() {
@@ -66,24 +79,48 @@ final class OSVolumeMirror {
         onSliderMoved?(db)
     }
 
+    private func muteChanged() {
+        guard let dev = device(),
+              let m = Self.readMute(from: dev) else { return }
+        onMuteChanged?(m)
+    }
+
+    private static let listenedSelectors: [AudioObjectPropertySelector] = [
+        kAudioDevicePropertyVolumeScalar,
+        kAudioDevicePropertyMute
+    ]
+
     private func armListener(on dev: AudioDeviceID) {
         guard dev != listenedDevice else { return }
         if let old = listenedDevice, let proc = listenerProc {
-            var addr = Self.volumeAddress()
-            AudioObjectRemovePropertyListener(old, &addr, proc,
-                                              Unmanaged.passUnretained(self).toOpaque())
+            for sel in Self.listenedSelectors {
+                var addr = AudioObjectPropertyAddress(mSelector: sel,
+                                                      mScope: kAudioDevicePropertyScopeOutput,
+                                                      mElement: kAudioObjectPropertyElementMain)
+                AudioObjectRemovePropertyListener(old, &addr, proc,
+                                                  Unmanaged.passUnretained(self).toOpaque())
+            }
         }
-        var addr = Self.volumeAddress()
         let proc: AudioObjectPropertyListenerProc = { _, _, _, refCon in
             let myself = Unmanaged<OSVolumeMirror>.fromOpaque(refCon!).takeUnretainedValue()
-            DispatchQueue.main.async { myself.sliderChanged() }
+            DispatchQueue.main.async {
+                myself.sliderChanged()
+                myself.muteChanged()
+            }
             return noErr
         }
         listenerProc = proc
-        if AudioObjectAddPropertyListener(dev, &addr, proc,
-                                           Unmanaged.passUnretained(self).toOpaque()) == noErr {
-            listenedDevice = dev
+        var allOK = true
+        for sel in Self.listenedSelectors {
+            var addr = AudioObjectPropertyAddress(mSelector: sel,
+                                                  mScope: kAudioDevicePropertyScopeOutput,
+                                                  mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectAddPropertyListener(dev, &addr, proc,
+                                               Unmanaged.passUnretained(self).toOpaque()) != noErr {
+                allOK = false
+            }
         }
+        listenedDevice = allOK ? dev : nil
     }
 
     // MARK: - CoreAudio helpers
@@ -120,6 +157,27 @@ final class OSVolumeMirror {
         var size = UInt32(MemoryLayout<Float32>.size)
         guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr else { return nil }
         return Double(v)
+    }
+
+    /// The OS mute flag (nil if the device has no mute control).
+    static func readMute(from dev: AudioDeviceID) -> Bool? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute,
+                                              mScope: kAudioDevicePropertyScopeOutput,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var v: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr else { return nil }
+        return v == 1
+    }
+
+    /// Mirror the hardware mute state onto the OS mute control.
+    static func write(mute: Bool, to dev: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute,
+                                              mScope: kAudioDevicePropertyScopeOutput,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var v: UInt32 = mute ? 1 : 0
+        return AudioObjectSetPropertyData(dev, &addr, 0, nil,
+                                          UInt32(MemoryLayout<UInt32>.size), &v) == noErr
     }
 
     /// Write the level onto the slider. Prefers VolumeDecibels (the HAL then

@@ -25,7 +25,6 @@ enum OutputTarget: String, CaseIterable, Codable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let glue = GlueClient()
-    let keyTap = MediaKeyTap()
     let talkbackHotKeys = HotKeyManager(signature: 0x51425442 /* 'QBTB' */, id: 1)
     let switchHotKeys = HotKeyManager(signature: 0x51515357 /* 'QBSW' */, id: 2)
     let midi = MidiWatcher()
@@ -36,51 +35,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var menu = NSMenu()
 
-    /// Which output the volume keys / macOS slider binding control. Defaults
-    /// to Main Out on every app launch and Quartet (re)connect — never
+    /// Which output the macOS volume/mute binding controls. Defaults to
+    /// Main Out on every app launch and Quartet (re)connect — never
     /// persisted across sessions.
     var selectedOutput: OutputTarget {
         didSet {
-            syncMacSlider(force: true)   // slider follows whichever output the keys control
+            syncMacSlider(force: true)   // slider follows whichever output is bound
+            syncMacMute(force: true)
             refreshMenu()
         }
     }
-    /// Volume as 0…1 in the app's linear-dB model (100% ⇔ 0 dB, 0% ⇔ −64 dB).
-    /// Used by classic key-stepping mode (see setupKeys); in bound mode the
-    /// macOS slider's own taper governs instead.
-    var volumePercent: [OutputTarget: Double] = [.mainOut: 0.5, .headphones: 0.5]
     var gain: [OutputTarget: Double] = [.mainOut: 0, .headphones: 0]
     var muted: [OutputTarget: Bool] = [.mainOut: false, .headphones: false]
 
-    static let volumeSteps = 16
-    static let fineDivisor = 4     // ⌥ = quarter block
     static let minDB: Double = -64
     static let maxDB: Double = 0
 
-    static func db(forPercent p: Double) -> Double {
-        let c = min(1, max(0, p))
-        return maxDB + (minDB - maxDB) * (1 - c)
-    }
-
-    static func percent(forDB db: Double) -> Double {
-        let d = min(maxDB, max(minDB, db))
-        return (d - minDB) / (maxDB - minDB)
-    }
-
-    private func syncPercent(for target: OutputTarget) {
-        volumePercent[target] = Self.percent(forDB: gain[target] ?? 0)
-    }
     var talkbackOn = false
     var talkbackMomentary = false
     /// True once a tree has given us real hardware gain values (never
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
     private var lastSliderDB: Double?
+    private var lastEnforcedMute: Bool?
 
     /// Copy the selected output's real level onto the macOS volume slider —
     /// the Quartet → macOS half of the binding (see OSVolumeMirror).
     private func syncMacSlider(force: Bool = false) {
-        guard wantsSliderSync, gainKnown else { return }
+        guard gainKnown else { return }
         let db = gain[selectedOutput] ?? 0
         guard force || lastSliderDB != db else { return }
         lastSliderDB = db
@@ -92,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// half of the binding. Our own enforce writes land here too and are
     /// filtered out by the value check.
     private func osSliderMoved(to db: Double) {
-        guard wantsSliderSync, gainKnown else { return }
+        guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
         let target = selectedOutput
         let current = gain[target] ?? 0
@@ -101,15 +83,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                          db, target.rawValue, current))
         glue.setDouble(id: target.gainId, db)
         gain[target] = db
-        syncPercent(for: target)
         lastSliderDB = db
         refreshMenu()
     }
 
-    private var wantsSliderSync: Bool {
-        get { UserDefaults.standard.object(forKey: "syncSlider") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "syncSlider") }
+    /// Copy the selected output's hardware mute onto the macOS mute display —
+    /// the Quartet → macOS half of the mute binding.
+    private func syncMacMute(force: Bool = false) {
+        guard gainKnown else { return }
+        let m = muted[selectedOutput] ?? false
+        guard force || lastEnforcedMute != m else { return }
+        lastEnforcedMute = m
+        osSlider.enforceMute(m)
     }
+
+    /// The macOS mute changed (F10, Control Center): apply it to the
+    /// Quartet's hardware mute — the macOS → Quartet half of the binding.
+    private func osMuteChanged(to m: Bool) {
+        guard gainKnown else { return }
+        guard case .connected = glue.state else { return }
+        let target = selectedOutput
+        let current = muted[target] ?? false
+        guard m != current else { return }                  // own enforce writes
+        QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
+        glue.setBool(id: target.muteId, m)
+        muted[target] = m
+        lastEnforcedMute = m
+        refreshMenu()
+    }
+
     var midiTrigger: MidiWatcher.Trigger? {
         didSet {
             if let midiTrigger, let data = try? JSONEncoder().encode(midiTrigger) {
@@ -119,7 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     var learningMidi = false
-    private var tccRetryTimer: Timer?
 
     override init() {
         self.selectedOutput = .mainOut   // default target; never persisted
@@ -134,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         QBLog.log("=== Quartet Buddy launched ===")
         setupMenu()
         setupGlue()
-        setupKeys()
+        setupOSSlider()
         setupMIDI()
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
@@ -145,43 +146,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.talkbackOn = false
             }
             if connected {
-                // Volume-key target defaults back to Main Out on every
-                // (re)connect; the didSet re-binds the macOS slider to it.
+                // Volume target defaults back to Main Out on every
+                // (re)connect; the didSet re-binds the macOS controls to it.
                 self?.selectedOutput = .mainOut
             }
             self?.refreshMenu()
         }
         quartetPresence.start()
         syncLoginItem()
-        // keep retrying the event tap until Input Monitoring gets granted
-        tccRetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if self.keyTap.isActive {
-                self.tccRetryTimer?.invalidate()
-                self.tccRetryTimer = nil
-                return
-            }
-            self.ensureMediaKeyTap()
-        }
-    }
-
-    /// Create the event tap if (and only if) Input Monitoring is granted.
-    /// Pass request=true to trigger the system permission dialog if needed.
-    @discardableResult
-    private func ensureMediaKeyTap(request: Bool = false) -> Bool {
-        if request && InputMonitoring.check() != .granted {
-            QBLog.log("input monitoring: requesting…")
-            InputMonitoring.request()
-        }
-        let granted = InputMonitoring.check() == .granted
-        if !granted {
-            QBLog.log("media keys: input monitoring not granted (tap not created)")
-            return false
-        }
-        let ok = keyTap.start()
-        QBLog.log("media keys: tap start -> \(ok ? "OK" : "FAILED")")
-        refreshMenu()
-        return ok
     }
 
     // MARK: - Glue
@@ -199,12 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
                 self.gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
-                self.syncPercent(for: .mainOut)
-                self.syncPercent(for: .headphones)
                 self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
                 self.gainKnown = true
                 self.syncMacSlider(force: true)
+                self.syncMacMute(force: true)
             }
             if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
                let props = tb["props"] as? [String: Any],
@@ -218,16 +189,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch event.id {
             case PathIds.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
-                self.syncPercent(for: .mainOut)
                 self.syncMacSlider()
             case PathIds.hwout1Gain where event.tag == 4:
                 self.gain[.headphones] = event.value.readDouble()
-                self.syncPercent(for: .headphones)
                 self.syncMacSlider()
             case PathIds.hwout0Mute where event.tag == 3:
                 self.muted[.mainOut] = event.value.first == 1
+                self.syncMacMute()
             case PathIds.hwout1Mute where event.tag == 3:
                 self.muted[.headphones] = event.value.first == 1
+                self.syncMacMute()
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
             default:
@@ -249,64 +220,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Media keys
+    // MARK: - macOS audio controls bridge
 
-    private func setupKeys() {
-        keyTap.onKey = { [weak self] key, keyIsDown, optionHeld in
-            guard let self, keyIsDown else { return false }
-            let quartetActive = DefaultDeviceMonitor.quartetIsDefaultOutput()
-            QBLog.log("media keys: handling key=\(key) opt=\(optionHeld) quartetIsDefault=\(quartetActive) glue=\(self.glue.state)")
-            switch key {
-            case .soundUp, .soundDown:
-                if self.wantsSliderSync {
-                    // Bound to the macOS volume slider: let macOS step it
-                    // natively (HUD, fine steps — all normal). The slider
-                    // listener applies the level to the Quartet.
-                    return false
-                }
-                // Classic mode: step the real fader directly.
-                guard quartetActive, case .connected = self.glue.state else { return false }
-                let delta = 1.0 / Double(Self.volumeSteps * (optionHeld ? Self.fineDivisor : 1))
-                self.adjustPercent(by: key == .soundUp ? delta : -delta)
-                return true
-            case .mute:
-                guard quartetActive, case .connected = self.glue.state else { return false }
-                self.toggleMute()
-                return true
-            }
-        }
+    /// Wire the macOS → Quartet halves of the volume + mute bindings. The
+    /// volume keys and F10 are never intercepted — macOS drives its own
+    /// controls natively, and OSVolumeMirror delivers every change here.
+    private func setupOSSlider() {
         osSlider.onSliderMoved = { [weak self] db in self?.osSliderMoved(to: db) }
-        ensureMediaKeyTap()
+        osSlider.onMuteChanged = { [weak self] m in self?.osMuteChanged(to: m) }
     }
 
-    /// Step the macOS-style volume percent and apply the mapped dB to hardware.
-    private func adjustPercent(by delta: Double) {
-        let target = selectedOutput
-        let p = min(1, max(0, (volumePercent[target] ?? 0) + delta))
-        volumePercent[target] = p
-        let db = Self.db(forPercent: p)
-        glue.setDouble(id: target.gainId, db)
-        gain[target] = db
-        syncMacSlider()
-        refreshMenu()
-    }
-
-    /// ± dB adjustments (Test menu items) — keeps percent in sync afterwards.
+    /// ± dB adjustments (Test menu items).
     private func adjustGain(by delta: Double) {
         let target = selectedOutput
         let new = min(0, max(Self.minDB, (gain[target] ?? 0) + delta))
         glue.setDouble(id: target.gainId, new)
         gain[target] = new
-        syncPercent(for: target)
         syncMacSlider()
-        refreshMenu()
-    }
-
-    private func toggleMute() {
-        let target = selectedOutput
-        let newState = !(muted[target] ?? false)
-        glue.setBool(id: target.muteId, newState)
-        muted[target] = newState
         refreshMenu()
     }
 
@@ -331,11 +261,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Hotkey action: toggle the volume-key target Main Out ↔ Headphones.
+    /// Hotkey action: toggle the volume target Main Out ↔ Headphones.
     func switchVolumeTarget() {
         selectedOutput = selectedOutput == .mainOut ? .headphones : .mainOut
-        QBLog.log("hotkey: volume keys now control \(selectedOutput.rawValue)")
-        refreshMenu()
+        QBLog.log("hotkey: volume target now \(selectedOutput.rawValue)")
     }
 
     // MARK: - MIDI
@@ -475,16 +404,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // warnings (only when something needs attention)
-        if !keyTap.isActive {
-            let access = InputMonitoring.check()
-            let title = access == .granted
-                ? "⚠️ Media Key Tap Failed — Open Debug Log"
-                : "⚠️ Media Keys Need Input Monitoring…"
-            menu.addItem(withTitle: title,
-                         action: access == .granted ? #selector(openLog(_:))
-                                                     : #selector(grantInputMonitoring(_:)),
-                         keyEquivalent: "")
-        }
         if glue.state != .connected {
             menu.addItem(withTitle: "Reconnect to ApogeeGlue",
                          action: #selector(reconnect(_:)), keyEquivalent: "")
@@ -495,15 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // advanced
         let adv = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
         adv.submenu = NSMenu()
-        let syncItem = adv.submenu!.addItem(withTitle: "Bind to macOS Volume Slider",
-                                            action: #selector(toggleSliderSync(_:)), keyEquivalent: "")
-        syncItem.state = wantsSliderSync ? .on : .off
         adv.submenu!.addItem(withTitle: "Volume +1 dB (Test)",
                              action: #selector(testUp(_:)), keyEquivalent: "")
         adv.submenu!.addItem(withTitle: "Volume −1 dB (Test)",
                              action: #selector(testDown(_:)), keyEquivalent: "")
-        adv.submenu!.addItem(withTitle: "Open Input Monitoring Settings…",
-                             action: #selector(openPrivacy(_:)), keyEquivalent: "")
         adv.submenu!.addItem(withTitle: "Open Debug Log…",
                              action: #selector(openLog(_:)), keyEquivalent: "")
 
@@ -688,20 +602,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openPrivacy(_ sender: NSMenuItem) {
-        openPrivacyPane()
-    }
-
-    @objc private func grantInputMonitoring(_ sender: NSMenuItem) {
-        ensureMediaKeyTap()
-        if InputMonitoring.check() != .granted {
-            showStatus("Enable Input Monitoring",
-                       "In System Settings → Privacy & Security → Input Monitoring, turn on Quartet Buddy.",
-                       action: openPrivacyPane)
-        }
-        refreshMenu()
-    }
-
     @objc private func testUp(_ sender: NSMenuItem) {
         QBLog.log("test: volume +1 dB")
         adjustGain(by: 1.0)
@@ -712,44 +612,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         adjustGain(by: -1.0)
     }
 
-    @objc private func toggleSliderSync(_ sender: NSMenuItem) {
-        wantsSliderSync.toggle()
-        if wantsSliderSync {
-            // (re)bind: slider := current fader level
-            syncMacSlider(force: true)
-        }
-        QBLog.log("slider sync: binding \(wantsSliderSync ? "enabled" : "disabled (classic keys)")")
-        refreshMenu()
-    }
-
     @objc private func openLog(_ sender: NSMenuItem) {
         NSWorkspace.shared.open(QBLog.url)
-    }
-
-    private func openPrivacyPane() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func showStatus(_ title: String, _ subtitle: String, action: (() -> Void)? = nil) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = subtitle
-        alert.addButton(withTitle: "Open Settings")
-        alert.addButton(withTitle: "Later")
-        if alert.runModal() == .alertFirstButtonReturn {
-            action?()
-        }
     }
 }
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
-        // re-check permission every time the menu opens (grant may have just happened)
-        if !keyTap.isActive {
-            ensureMediaKeyTap()
-        }
         // apply any coalesced rebuild now — never rebuild while a menu is open
         if menuRefreshPending {
             menuRefreshPending = false

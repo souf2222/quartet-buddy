@@ -1,27 +1,4 @@
 import Foundation
-import IOKit.hid
-
-enum InputMonitoring {
-    enum Access { case granted, denied, unknown }
-
-    static func check() -> Access {
-        switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
-        case kIOHIDAccessTypeGranted:
-            return .granted
-        case kIOHIDAccessTypeDenied:
-            return .denied
-        default:
-            return .unknown
-        }
-    }
-
-    /// Shows the system permission request (System Settings → Input Monitoring).
-    /// IOHIDRequestAccess returns a plain Bool in Swift (true = granted).
-    @discardableResult
-    static func request() -> Bool {
-        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-    }
-}
 
 enum QBLog {
     static var url: URL {

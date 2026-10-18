@@ -48,12 +48,11 @@ swiftc -O \
     "$SRC/AppDelegate.swift" \
     "$SRC/GlueProtocol.swift" \
     "$SRC/GlueClient.swift" \
-    "$SRC/MediaKeyTap.swift" \
     "$SRC/DefaultDeviceMonitor.swift" \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
     "$SRC/MidiWatcher.swift" \
-    "$SRC/InputMonitoring.swift" \
+    "$SRC/QBLog.swift" \
     "$SRC/LogoIcon.swift" \
     "$SRC/QuartetPresence.swift" \
     "$SRC/OSVolumeMirror.swift" \
