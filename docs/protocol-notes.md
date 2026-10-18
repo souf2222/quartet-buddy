@@ -14,7 +14,13 @@ QuartetBuddy (ours)   ─┘                                   Quartet firmware
 ```
 
 * Audio runs on Apple's class-compliant driver (`usbaudiod`), NOT Apogee's.
-* The Quartet exposes no CoreAudio volume control → media keys are dead.
+* CoreAudio: the Quartet *does* expose a master volume control (range −64…0 dB,
+  square-law taper, settable) — but it is **display-only**: writes change no
+  audio (verified with a live −64 dB dip test). macOS steps it natively with
+  the volume keys (the CGEventTap is listen-only on current macOS and can't
+  swallow NX_SYSDEFINED). Quartet Buddy binds it to the real fader both ways:
+  slider moves → `setProperty(hwoutN.gain)` writes, fader changes (glue tree
+  + echo broadcasts) → slider writes (`OSVolumeMirror.swift`).
 * ApogeeGlue owns device state as a JUCE ValueTree and applies changes to hardware.
 
 ## Transport

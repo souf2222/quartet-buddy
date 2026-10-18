@@ -4,28 +4,33 @@ A menubar companion for the **Apogee Quartet** audio interface, built by
 reverse-engineering Apogee Control 2's IPC protocol
 ([`docs/protocol-notes.md`](docs/protocol-notes.md)).
 
-It fixes what Apogee Control 2 breaks on modern macOS: because the Quartet
-exposes no CoreAudio volume control, the **system volume keys go dead**.
-Quartet Buddy makes them work again — and adds a few things Apogee never
-offered. It talks to the ApogeeGlue daemon directly, so you keep Apogee
-Control 2 installed (for routing) and everything stays in sync.
+It fixes what Apogee Control 2 breaks on modern macOS: the Quartet's driver
+never lets macOS's volume keys touch the **real fader** — all the system sees
+is a display-only volume slider (range −64…0 dB, no audible effect), so the
+volume keys are effectively dead. Quartet Buddy **binds that slider to the
+real fader, both directions**, giving the Quartet a fully native macOS
+volume experience — plus a few things Apogee never offered. It talks to the
+ApogeeGlue daemon directly, so you keep Apogee Control 2 installed (for
+routing) and everything stays in sync.
 
 ## Features
 
 | Feature | Details |
 |---|---|
-| **Volume keys work again** | F11/F12 (volume up/down) drive the Quartet's real analog fader, exactly like the fader in Apogee Control 2. macOS-proportional: **100% ⇔ 0 dB, 0% ⇔ −64 dB**, 16 blocks, one block per key press (4 dB). |
-| **⌥-fine steps** | Hold **⌥** while pressing volume for quarter-block steps (1 dB), just like macOS. |
+| **Native volume keys** | F11/F12 (and the volume HUD, ⌥-fine steps — everything) behave exactly like any Mac: they drive the macOS volume slider, which is **bound to the Quartet's real analog fader**. Key presses move the fader; fader moves (Apogee Control 2, the touchscreen) move the slider — always in sync, both directions. |
+| **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound and the Quartet follows. Toggle in *Advanced → Bind to macOS Volume Slider*; off = classic mode (keys step the fader directly, 4 dB per block, ⌥ = 1 dB). |
 | **Mute key** | F10 toggles mute on the selected output. |
+| **macOS slider sync** | The volume slider macOS shows for the Quartet (System Settings → Sound, Control Center) always displays the real fader level — 100% ⇔ 0 dB, 0% ⇔ −64 dB. It's a pure display (verified: writing it changes no audio), so the app owns it: it re-writes the level on every volume change and snaps the slider back when macOS or a stray drag moves it. Toggle in *Advanced → Sync macOS Volume Slider*. |
 | **Output selector** | Choose **Main Out** or **Headphones** for the volume keys — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
 | **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 | **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug) — and the menu header tells you why ("Quartet Not Connected" / "Glue Offline"). |
 
-The keys only take over while the **Quartet is the selected output device**;
-otherwise events pass through untouched (your MacBook speakers keep behaving
-normally).
+In bound mode the volume keys are never intercepted — macOS handles them
+natively (whatever device is the current output). In classic mode the keys
+only take over while the **Quartet is the selected output device**; otherwise
+events pass through untouched (your MacBook speakers keep behaving normally).
 
 ## Requirements
 
@@ -69,13 +74,20 @@ itself automatically on the next launch.
 ## How it works
 
 ```
-volume keys ──► CGEventTap (NX_SYSDEFINED, listen-only) ─┐
-switch/talkback hotkey ──► RegisterEventHotKey ───────────┤
-MIDI keyboard ──► CoreMIDI ("Quartet" source) ───────────┤
-                                                          ▼
+volume keys ──► macOS (native, untouched) ──► OS "Quartet" volume slider
+                                                    ▲            │
+           fader changes (echoes from Control 2, ───┘            │ slider moves
+           the touchscreen) — enforce onto slider                ▼
                               ApogeeGlue IPC  ──►  ApogeeGlue daemon ──► Quartet
-                              (TCP localhost)
+                              (TCP localhost)         ▲
+switch/talkback hotkey ──► RegisterEventHotKey ──────┤
+MIDI keyboard ──► CoreMIDI ("Quartet" source) ────────┘
 ```
+
+The OS "Quartet" volume slider is display-only (the driver never applies it
+to the audio), so `OSVolumeMirror` bridges it: slider moves are written to
+the real fader through ApogeeGlue, and fader moves are copied back onto the
+slider.
 
 Quartet Buddy connects to ApogeeGlue like the official apps do and speaks its
 protocol: JUCE framing (magic `F2B49E2C`), the custom ValueTreeSyncProtocol

@@ -31,16 +31,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let midi = MidiWatcher()
     let deviceMonitor = DefaultDeviceMonitor()
     let quartetPresence = QuartetPresence()
+    let osSlider = OSVolumeMirror()
 
     var statusItem: NSStatusItem!
     var menu = NSMenu()
 
     var selectedOutput: OutputTarget {
-        didSet { UserDefaults.standard.set(selectedOutput.rawValue, forKey: "output"); refreshMenu() }
+        didSet {
+            UserDefaults.standard.set(selectedOutput.rawValue, forKey: "output")
+            syncMacSlider(force: true)   // slider follows whichever output the keys control
+            refreshMenu()
+        }
     }
-    /// macOS-style volume: 0…1, each key press steps by 1/16
-    /// (⌥ + key = fine step, ¼ block — like macOS).
-    /// 100% ⇔ 0 dB, 0% ⇔ −64 dB, linear in dB (4 dB per block).
+    /// Volume as 0…1 in the app's linear-dB model (100% ⇔ 0 dB, 0% ⇔ −64 dB).
+    /// Used by classic key-stepping mode (see setupKeys); in bound mode the
+    /// macOS slider's own taper governs instead.
     var volumePercent: [OutputTarget: Double] = [.mainOut: 0.5, .headphones: 0.5]
     var gain: [OutputTarget: Double] = [.mainOut: 0, .headphones: 0]
     var muted: [OutputTarget: Bool] = [.mainOut: false, .headphones: false]
@@ -65,6 +70,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     var talkbackOn = false
     var talkbackMomentary = false
+    /// True once a tree has given us real hardware gain values (never
+    /// enforce the macOS slider from the pre-tree defaults).
+    private var gainKnown = false
+    private var lastSliderDB: Double?
+
+    /// Copy the selected output's real level onto the macOS volume slider —
+    /// the Quartet → macOS half of the binding (see OSVolumeMirror).
+    private func syncMacSlider(force: Bool = false) {
+        guard wantsSliderSync, gainKnown else { return }
+        let db = gain[selectedOutput] ?? 0
+        guard force || lastSliderDB != db else { return }
+        lastSliderDB = db
+        osSlider.enforce(db)
+    }
+
+    /// The macOS slider moved (volume key press, dragged in Sound settings):
+    /// apply its level to the Quartet's real fader — the macOS → Quartet
+    /// half of the binding. Our own enforce writes land here too and are
+    /// filtered out by the value check.
+    private func osSliderMoved(to db: Double) {
+        guard wantsSliderSync, gainKnown else { return }
+        guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
+        let target = selectedOutput
+        let current = gain[target] ?? 0
+        guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding
+        QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
+                         db, target.rawValue, current))
+        glue.setDouble(id: target.gainId, db)
+        gain[target] = db
+        syncPercent(for: target)
+        lastSliderDB = db
+        refreshMenu()
+    }
+
+    private var wantsSliderSync: Bool {
+        get { UserDefaults.standard.object(forKey: "syncSlider") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "syncSlider") }
+    }
     var midiTrigger: MidiWatcher.Trigger? {
         didSet {
             if let midiTrigger, let data = try? JSONEncoder().encode(midiTrigger) {
@@ -98,6 +141,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the TalkbackHelper resets talkback when the device goes away
                 QBLog.log("talkback: assumed off (device disconnected)")
                 self?.talkbackOn = false
+            }
+            if connected {
+                // re-attached: make sure the macOS slider shows the real level
+                self?.syncMacSlider(force: true)
             }
             self?.refreshMenu()
         }
@@ -153,6 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.syncPercent(for: .headphones)
                 self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
+                self.gainKnown = true
+                self.syncMacSlider(force: true)
             }
             if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
                let props = tb["props"] as? [String: Any],
@@ -167,9 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case PathIds.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
                 self.syncPercent(for: .mainOut)
+                self.syncMacSlider()
             case PathIds.hwout1Gain where event.tag == 4:
                 self.gain[.headphones] = event.value.readDouble()
                 self.syncPercent(for: .headphones)
+                self.syncMacSlider()
             case PathIds.hwout0Mute where event.tag == 3:
                 self.muted[.mainOut] = event.value.first == 1
             case PathIds.hwout1Mute where event.tag == 3:
@@ -202,21 +253,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, keyIsDown else { return false }
             let quartetActive = DefaultDeviceMonitor.quartetIsDefaultOutput()
             QBLog.log("media keys: handling key=\(key) opt=\(optionHeld) quartetIsDefault=\(quartetActive) glue=\(self.glue.state)")
-            guard quartetActive else { return false }
-            guard case .connected = self.glue.state else { return false }
-            let delta = 1.0 / Double(Self.volumeSteps * (optionHeld ? Self.fineDivisor : 1))
             switch key {
-            case .soundUp:
-                self.adjustPercent(by: delta)
-                return true
-            case .soundDown:
-                self.adjustPercent(by: -delta)
+            case .soundUp, .soundDown:
+                if self.wantsSliderSync {
+                    // Bound to the macOS volume slider: let macOS step it
+                    // natively (HUD, fine steps — all normal). The slider
+                    // listener applies the level to the Quartet.
+                    return false
+                }
+                // Classic mode: step the real fader directly.
+                guard quartetActive, case .connected = self.glue.state else { return false }
+                let delta = 1.0 / Double(Self.volumeSteps * (optionHeld ? Self.fineDivisor : 1))
+                self.adjustPercent(by: key == .soundUp ? delta : -delta)
                 return true
             case .mute:
+                guard quartetActive, case .connected = self.glue.state else { return false }
                 self.toggleMute()
                 return true
             }
         }
+        osSlider.onSliderMoved = { [weak self] db in self?.osSliderMoved(to: db) }
         ensureMediaKeyTap()
     }
 
@@ -228,6 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let db = Self.db(forPercent: p)
         glue.setDouble(id: target.gainId, db)
         gain[target] = db
+        syncMacSlider()
         refreshMenu()
     }
 
@@ -238,6 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         glue.setDouble(id: target.gainId, new)
         gain[target] = new
         syncPercent(for: target)
+        syncMacSlider()
         refreshMenu()
     }
 
@@ -419,6 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // advanced
         let adv = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
         adv.submenu = NSMenu()
+        let syncItem = adv.submenu!.addItem(withTitle: "Bind to macOS Volume Slider",
+                                            action: #selector(toggleSliderSync(_:)), keyEquivalent: "")
+        syncItem.state = wantsSliderSync ? .on : .off
         adv.submenu!.addItem(withTitle: "Volume +1 dB (Test)",
                              action: #selector(testUp(_:)), keyEquivalent: "")
         adv.submenu!.addItem(withTitle: "Volume −1 dB (Test)",
@@ -631,6 +692,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func testDown(_ sender: NSMenuItem) {
         QBLog.log("test: volume -1 dB")
         adjustGain(by: -1.0)
+    }
+
+    @objc private func toggleSliderSync(_ sender: NSMenuItem) {
+        wantsSliderSync.toggle()
+        if wantsSliderSync {
+            // (re)bind: slider := current fader level
+            syncMacSlider(force: true)
+        }
+        QBLog.log("slider sync: binding \(wantsSliderSync ? "enabled" : "disabled (classic keys)")")
+        refreshMenu()
     }
 
     @objc private func openLog(_ sender: NSMenuItem) {
