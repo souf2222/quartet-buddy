@@ -347,8 +347,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // compact level line
-        menu.addItem(withTitle: String(format: "Main %.1f dB  ·  HP %.1f dB", mainGain, hpGain),
-                     action: nil, keyEquivalent: "").isEnabled = false
+        if quartetPresence.isConnected {
+            menu.addItem(withTitle: String(format: "Main %.1f dB  ·  HP %.1f dB", mainGain, hpGain),
+                         action: nil, keyEquivalent: "").isEnabled = false
+        }
 
         menu.addItem(.separator())
 

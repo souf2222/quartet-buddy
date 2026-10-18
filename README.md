@@ -21,6 +21,7 @@ Control 2 installed (for routing) and everything stays in sync.
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
 | **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
+| **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug) — and the menu header tells you why ("Quartet Not Connected" / "Glue Offline"). |
 
 The keys only take over while the **Quartet is the selected output device**;
 otherwise events pass through untouched (your MacBook speakers keep behaving
@@ -92,6 +93,8 @@ QuartetBuddy/build.sh        build + sign + bundle
 
 ## Troubleshooting
 
+- **Icon is greyed out** — the Quartet isn't detected over USB. Check the
+  cable/port; the icon returns to full color the moment it's seen again.
 - **Volume keys do nothing** — check the menu icon: if the ⌨️ warning is back,
   Input Monitoring got switched off, or the app was rebuilt ad-hoc.
   Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
