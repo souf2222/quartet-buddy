@@ -9,13 +9,16 @@ import CoreAudio
 /// drives them natively (volume keys, F10, Control Center — the media key
 /// tap is gone entirely).
 ///
-/// Quartet Buddy turns those dead controls into real ones, bound both ways:
-///  • enforce(_:) / enforceMute(_:) — Quartet → macOS: copy the hardware
-///    state onto the OS controls whenever it changes (glue tree + echoes).
-///  • onSliderMoved / onMuteChanged — macOS → Quartet: fired on the main
-///    thread whenever the OS controls move for any reason (key press, a
-///    hand-dragged slider, our own enforce writes). The delegate applies the
-///    state to the hardware and filters out its own writes by value.
+/// Quartet Buddy turns those dead controls into real ones:
+///  • volume — bound BOTH ways: enforce(_:) copies the hardware level onto
+///    the slider (glue tree + echoes), and onSliderMoved applies OS slider
+///    moves to the fader. Volume writes are driver-safe (proven over hours).
+///  • mute — ONE way only: onMuteChanged applies OS mute changes (F10,
+///    Control Center) to the hardware mute. The app never writes the OS
+///    mute: doing so wedged the Apogee driver (CoreAudio 'what' errors on
+///    every volume write until the Quartet was power-cycled — live-tested
+///    incident, Oct 18 2026). Cosmetic side effect: mutes done in Apogee
+///    Control 2 / on the touchscreen don't update the macOS mute display.
 final class OSVolumeMirror {
 
     /// Fired on the main thread with the slider's new level in dB.
@@ -57,17 +60,6 @@ final class OSVolumeMirror {
             QBLog.log(String(format: "slider sync: macOS slider -> %.1f dB", db))
         } else {
             QBLog.log("slider sync: slider write failed")
-        }
-    }
-
-    /// Copy the hardware mute state onto the macOS mute display.
-    func enforceMute(_ muted: Bool) {
-        guard let dev = device() else { return }
-        armListener(on: dev)
-        if Self.write(mute: muted, to: dev) {
-            QBLog.log("mute sync: OS mute -> \(muted ? "on" : "off")")
-        } else {
-            QBLog.log("mute sync: OS mute write failed")
         }
     }
 
@@ -168,16 +160,6 @@ final class OSVolumeMirror {
         var size = UInt32(MemoryLayout<UInt32>.size)
         guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr else { return nil }
         return v == 1
-    }
-
-    /// Mirror the hardware mute state onto the OS mute control.
-    static func write(mute: Bool, to dev: AudioDeviceID) -> Bool {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute,
-                                              mScope: kAudioDevicePropertyScopeOutput,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var v: UInt32 = mute ? 1 : 0
-        return AudioObjectSetPropertyData(dev, &addr, 0, nil,
-                                          UInt32(MemoryLayout<UInt32>.size), &v) == noErr
     }
 
     /// Write the level onto the slider. Prefers VolumeDecibels (the HAL then

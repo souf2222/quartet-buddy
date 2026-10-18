@@ -18,10 +18,13 @@ QuartetBuddy (ours)   ─┘                                   Quartet firmware
   range −64…0 dB, square-law taper, settable) — but they are **display-only**:
   writes change no audio (verified with a live −64 dB dip test). macOS drives
   them natively (volume keys, F10, Control Center — no event tap, no Input
-  Monitoring needed). Quartet Buddy binds them to the real hardware both
-  ways: OS control changes → `setProperty` writes (gain / mute), hardware
-  changes (glue tree + echo broadcasts) → OS control writes
-  (`OSVolumeMirror.swift`).
+  Monitoring needed). Quartet Buddy binds volume both ways (OS slider →
+  `setProperty(hwoutN.gain)` writes; hardware changes → slider writes).
+  The OS **mute** is bound ONE way only (OS mute → hardware): writing the OS
+  mute wedged the Apogee driver — every volume write started returning
+  `kAudioHardwareUnspecifiedError` ('what') until the Quartet was
+  power-cycled (live-tested incident, Oct 18 2026). `OSVolumeMirror.swift`
+  never writes the OS mute.
 * ApogeeGlue owns device state as a JUCE ValueTree and applies changes to hardware.
 
 ## Transport

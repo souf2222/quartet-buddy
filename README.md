@@ -19,7 +19,7 @@ routing) and everything stays in sync.
 |---|---|
 | **Native volume keys** | F11/F12 (and the volume HUD, ⌥-fine steps — everything) behave exactly like any Mac: they drive the macOS volume slider, which is **bound to the Quartet's real analog fader**. Key presses move the fader; fader moves (Apogee Control 2, the touchscreen) move the slider — always in sync, both directions. |
 | **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound / Control Center and the Quartet follows; 100% ⇔ 0 dB, 0% ⇔ −64 dB. |
-| **Native mute key** | F10 (and the Control Center mute icon) toggle the selected output's mute — bridged to the hardware both ways, so the macOS mute display also follows mutes done in Apogee Control 2 or on the touchscreen. |
+| **Native mute key** | F10 (and the Control Center mute icon) toggle the selected output's hardware mute. One-way by necessity: writing the OS mute control wedges the Apogee driver, so mutes done in Apogee Control 2 / on the touchscreen don't update the macOS mute display. |
 | **Volume target** | Choose **Main Out** or **Headphones** for the binding — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |

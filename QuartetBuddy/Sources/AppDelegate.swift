@@ -41,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var selectedOutput: OutputTarget {
         didSet {
             syncMacSlider(force: true)   // slider follows whichever output is bound
-            syncMacMute(force: true)
             refreshMenu()
         }
     }
@@ -57,7 +56,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
     private var lastSliderDB: Double?
-    private var lastEnforcedMute: Bool?
 
     /// Copy the selected output's real level onto the macOS volume slider —
     /// the Quartet → macOS half of the binding (see OSVolumeMirror).
@@ -87,28 +85,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
-    /// Copy the selected output's hardware mute onto the macOS mute display —
-    /// the Quartet → macOS half of the mute binding.
-    private func syncMacMute(force: Bool = false) {
-        guard gainKnown else { return }
-        let m = muted[selectedOutput] ?? false
-        guard force || lastEnforcedMute != m else { return }
-        lastEnforcedMute = m
-        osSlider.enforceMute(m)
-    }
-
     /// The macOS mute changed (F10, Control Center): apply it to the
-    /// Quartet's hardware mute — the macOS → Quartet half of the binding.
+    /// Quartet's hardware mute. One-way by design — see OSVolumeMirror's
+    /// header for why the app never writes the OS mute.
     private func osMuteChanged(to m: Bool) {
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }
         let target = selectedOutput
         let current = muted[target] ?? false
-        guard m != current else { return }                  // own enforce writes
+        guard m != current else { return }
         QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
         glue.setBool(id: target.muteId, m)
         muted[target] = m
-        lastEnforcedMute = m
         refreshMenu()
     }
 
@@ -175,7 +163,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
                 self.gainKnown = true
                 self.syncMacSlider(force: true)
-                self.syncMacMute(force: true)
             }
             if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
                let props = tb["props"] as? [String: Any],
@@ -195,10 +182,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.syncMacSlider()
             case PathIds.hwout0Mute where event.tag == 3:
                 self.muted[.mainOut] = event.value.first == 1
-                self.syncMacMute()
             case PathIds.hwout1Mute where event.tag == 3:
                 self.muted[.headphones] = event.value.first == 1
-                self.syncMacMute()
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
             default:
