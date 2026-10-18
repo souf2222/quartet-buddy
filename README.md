@@ -18,10 +18,9 @@ routing) and everything stays in sync.
 | Feature | Details |
 |---|---|
 | **Native volume keys** | F11/F12 (and the volume HUD, ⌥-fine steps — everything) behave exactly like any Mac: they drive the macOS volume slider, which is **bound to the Quartet's real analog fader**. Key presses move the fader; fader moves (Apogee Control 2, the touchscreen) move the slider — always in sync, both directions. |
-| **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound and the Quartet follows. Toggle in *Advanced → Bind to macOS Volume Slider*; off = classic mode (keys step the fader directly, 4 dB per block, ⌥ = 1 dB). |
+| **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound / Control Center and the Quartet follows; 100% ⇔ 0 dB, 0% ⇔ −64 dB. Toggle in *Advanced → Bind to macOS Volume Slider*; off = classic mode (keys step the fader directly, 4 dB per block, ⌥ = 1 dB). |
 | **Mute key** | F10 toggles mute on the selected output. |
-| **macOS slider sync** | The volume slider macOS shows for the Quartet (System Settings → Sound, Control Center) always displays the real fader level — 100% ⇔ 0 dB, 0% ⇔ −64 dB. It's a pure display (verified: writing it changes no audio), so the app owns it: it re-writes the level on every volume change and snaps the slider back when macOS or a stray drag moves it. Toggle in *Advanced → Sync macOS Volume Slider*. |
-| **Output selector** | Choose **Main Out** or **Headphones** for the volume keys — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). |
+| **Volume target** | Choose **Main Out** or **Headphones** for the slider binding and (in classic mode) the volume keys — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
 | **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
@@ -48,11 +47,15 @@ cd quartet-buddy/QuartetBuddy
 The script relaunches the app automatically, so every rebuild goes live
 immediately. The app lives in `build/Quartet Buddy.app`.
 
-**First launch only — grant Input Monitoring (required for the volume keys):**
+**First launch only — grant Input Monitoring (required for the mute key — and
+for the volume keys in classic mode):**
 
-1. The menu shows a warning: **"⚠️ Volume Keys Need Input Monitoring…"** — click it
+1. The menu shows a warning: **"⚠️ Media Keys Need Input Monitoring…"** — click it
 2. In **System Settings → Privacy & Security → Input Monitoring**, enable **Quartet Buddy**
-3. Within ~5 seconds the warning disappears — the keys are live. No relaunch needed.
+3. Within ~5 seconds the warning disappears — F10 works. No relaunch needed.
+
+> The volume keys don't need this in the default (bound) mode — they're never
+> intercepted, macOS handles them natively.
 
 > The build script signs the app with the **QuartetBuddy Developer**
 > certificate (created in your keychain during setup). The grant is bound to
@@ -66,7 +69,9 @@ itself automatically on the next launch.
 
 ### Setup
 
-- **Output target:** *Volume Keys Target →* Main Out / Headphones (or record a switch hotkey)
+- **Volume target:** *Volume Target →* Main Out / Headphones (or record a
+  switch hotkey) — what the macOS slider binding controls. Resets to Main Out
+  whenever the app launches or the Quartet (re)connects.
 - **Talkback:** *Turn Talkback On* to test, then record the *Talkback Hotkey*
   and/or *MIDI Button → Learn…* (press a button on your keyboard)
 - **MIDI mode:** *Toggle* (press = on/off) or *Momentary* (hold to talk)
@@ -113,13 +118,22 @@ QuartetBuddy/build.sh        build + sign + bundle
 
 - **Icon is greyed out** — the Quartet isn't detected over USB. Check the
   cable/port; the icon returns to full color the moment it's seen again.
-- **Volume keys do nothing** — check the menu icon: if the ⌨️ warning is back,
-  Input Monitoring got switched off, or the app was rebuilt ad-hoc.
-  Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
-  Open Debug Log…*) — every key event and write is recorded there.
+- **Volume keys do nothing on the Quartet** — in the default (bound) mode the
+  keys drive the macOS slider, and the app carries its level to the Quartet.
+  So the bridge must be up: check the menu header — "Glue Offline" means the
+  app can't reach the Quartet (Apogee Control 2 / its daemon not running; it
+  auto-reconnects every 3 s). Also check *Advanced → Bind to macOS Volume
+  Slider* is on, and that the Quartet is the current output device — with any
+  other device selected, the keys adjust that device instead (native macOS
+  behavior).
 - **Menu header shows "Glue Offline"** — ApogeeGlue isn't running (Apogee
   Control 2 not installed/running). The app auto-reconnects every 3 s; there's
   also a *Reconnect* menu item.
+- **Mute key (F10) does nothing** — it's the one key we still intercept, and
+  it needs the Input Monitoring grant: if the ⌨️ warning is back, the grant
+  got switched off or the app was rebuilt ad-hoc.
+- Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
+  Open Debug Log…*) — every key event, slider move, and write is recorded.
 - **MIDI learn finds nothing** — the keyboard must be plugged into the
   Quartet's MIDI port (CoreMIDI source named "Quartet"); it won't see USB
   keyboards connected directly to the Mac.

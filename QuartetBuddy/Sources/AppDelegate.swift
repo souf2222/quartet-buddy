@@ -36,9 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var menu = NSMenu()
 
+    /// Which output the volume keys / macOS slider binding control. Defaults
+    /// to Main Out on every app launch and Quartet (re)connect — never
+    /// persisted across sessions.
     var selectedOutput: OutputTarget {
         didSet {
-            UserDefaults.standard.set(selectedOutput.rawValue, forKey: "output")
             syncMacSlider(force: true)   // slider follows whichever output the keys control
             refreshMenu()
         }
@@ -120,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tccRetryTimer: Timer?
 
     override init() {
-        self.selectedOutput = OutputTarget(rawValue: UserDefaults.standard.string(forKey: "output") ?? "") ?? .mainOut
+        self.selectedOutput = .mainOut   // default target; never persisted
         self.talkbackMomentary = UserDefaults.standard.bool(forKey: "momentary")
         if let data = UserDefaults.standard.data(forKey: "midiTrigger") {
             self.midiTrigger = try? JSONDecoder().decode(MidiWatcher.Trigger.self, from: data)
@@ -143,8 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.talkbackOn = false
             }
             if connected {
-                // re-attached: make sure the macOS slider shows the real level
-                self?.syncMacSlider(force: true)
+                // Volume-key target defaults back to Main Out on every
+                // (re)connect; the didSet re-binds the macOS slider to it.
+                self?.selectedOutput = .mainOut
             }
             self?.refreshMenu()
         }
@@ -370,10 +373,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.menu = menu
         menu.delegate = self
-        refreshMenu()
+        rebuildMenu()
     }
 
+    /// Rebuild the menu + menubar state. Coalesced: bursts of state changes
+    /// (slider drags, key repeats, echo + local update for the same event)
+    /// collapse into a single rebuild per runloop turn.
+    private var menuRefreshPending = false
+
     private func refreshMenu() {
+        guard !menuRefreshPending else { return }
+        menuRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.menuRefreshPending = false
+            self.rebuildMenu()
+        }
+    }
+
+    private func rebuildMenu() {
         menu.removeAllItems()
 
         // menubar icon + tooltip
@@ -397,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(sectionHeader(headerTitle))
 
         // output target (with live levels)
-        let outItem = menu.addItem(withTitle: "Volume Keys Target", action: nil, keyEquivalent: "")
+        let outItem = menu.addItem(withTitle: "Volume Target", action: nil, keyEquivalent: "")
         outItem.submenu = NSMenu()
         for target in OutputTarget.allCases {
             let g = gain[target] ?? 0
@@ -461,7 +479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let access = InputMonitoring.check()
             let title = access == .granted
                 ? "⚠️ Media Key Tap Failed — Open Debug Log"
-                : "⚠️ Volume Keys Need Input Monitoring…"
+                : "⚠️ Media Keys Need Input Monitoring…"
             menu.addItem(withTitle: title,
                          action: access == .granted ? #selector(openLog(_:))
                                                      : #selector(grantInputMonitoring(_:)),
@@ -731,6 +749,11 @@ extension AppDelegate: NSMenuDelegate {
         // re-check permission every time the menu opens (grant may have just happened)
         if !keyTap.isActive {
             ensureMediaKeyTap()
+        }
+        // apply any coalesced rebuild now — never rebuild while a menu is open
+        if menuRefreshPending {
+            menuRefreshPending = false
+            rebuildMenu()
         }
     }
 
