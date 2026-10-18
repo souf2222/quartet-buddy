@@ -20,6 +20,10 @@ final class GlueClient: NSObject, StreamDelegate {
     var onSetProperty: ((SetPropertyEvent) -> Void)?
     var onRawRecord: ((GlueProtocol.ParsedRecord) -> Void)?
 
+    /// Guards the one-time tree request per connection (hasSpaceAvailable
+    /// fires repeatedly while the socket is idle).
+    private var treeRequested = false
+
     private var inputStream: InputStream?
     private var outputStream: OutputStream?
     private var inBuffer = Data()
@@ -42,11 +46,12 @@ final class GlueClient: NSObject, StreamDelegate {
                     out.schedule(in: .main, forMode: .default)
                     inp.open()
                     out.open()
+                    self.treeRequested = false
                     self.setState(.connected)
-                    // hello: getEntireTree
-                    self.send(GlueProtocol.encode(VTSRecord(type: VTSType.getEntireTree.rawValue,
-                                                            flag: true,
-                                                            data: Data())))
+                    // hello (getEntireTree) is sent when the output stream
+                    // first reports .hasSpaceAvailable — writing any earlier
+                    // (right after open(), even at .openCompleted) returns -1
+                    // and the request is silently lost.
                     return
                 }
             }
@@ -62,6 +67,8 @@ final class GlueClient: NSObject, StreamDelegate {
             self.inputStream = nil
             self.outputStream = nil
             self.inBuffer.removeAll()
+            self.treeRequested = false
+            self.sawMeter = false
             self.setState(.disconnected)
         }
     }
@@ -91,7 +98,10 @@ final class GlueClient: NSObject, StreamDelegate {
             guard let self, let out = self.outputStream else { return }
             let frame = GlueProtocol.wrapJuce(payload)
             frame.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
-                _ = out.write(ptr.bindMemory(to: UInt8.self).baseAddress!, maxLength: frame.count)
+                let n = out.write(ptr.bindMemory(to: UInt8.self).baseAddress!, maxLength: frame.count)
+                if n < 0 {
+                    QBLog.log("glue: WRITE FAILED: \(out.streamError?.localizedDescription ?? "?")")
+                }
             }
         }
     }
@@ -126,6 +136,15 @@ final class GlueClient: NSObject, StreamDelegate {
 
     func stream(_ aStream: Stream, handle eventCode: Stream.Event) {
         switch eventCode {
+        case .hasSpaceAvailable:
+            // first moment the socket is actually writable: send the hello
+            if let out = outputStream, out == aStream, !treeRequested {
+                treeRequested = true
+                QBLog.log("glue: connected, requesting tree")
+                send(GlueProtocol.encode(VTSRecord(type: VTSType.getEntireTree.rawValue,
+                                                  flag: true,
+                                                  data: Data())))
+            }
         case .hasBytesAvailable:
             guard let inp = inputStream, inp == aStream else { return }
             var buf = [UInt8](repeating: 0, count: 65536)
@@ -159,20 +178,38 @@ final class GlueClient: NSObject, StreamDelegate {
             let lenRaw: UInt32 = inBuffer.readLE(at: inBuffer.index(inBuffer.startIndex, offsetBy: 4))
             let len = Int(lenRaw)
             guard len <= 64 * 1024 * 1024, inBuffer.count >= 8 + len else { break }
+            // skip the 8-byte JUCE header (magic + length) — the record starts after it
+            let bodyStart = inBuffer.index(inBuffer.startIndex, offsetBy: 8)
             let payload = inBuffer.subdata(
-                in: inBuffer.startIndex..<inBuffer.index(inBuffer.startIndex, offsetBy: 8 + len))
+                in: bodyStart..<inBuffer.index(inBuffer.startIndex, offsetBy: 8 + len))
             inBuffer.removeFirst(8 + len)
             handleFrame(payload)
         }
     }
 
+    private var sawMeter = false
+
     private func handleFrame(_ payload: Data) {
-        guard let (record, _) = GlueProtocol.decodeOne(payload) else { return }
+        guard let (record, _) = GlueProtocol.decodeOne(payload) else {
+            QBLog.log("glue: frame decode failed (\(payload.count) bytes)")
+            return
+        }
+        if record.type == VTSType.meterData.rawValue {
+            if !sawMeter {
+                sawMeter = true
+                QBLog.log("glue: meter stream flowing")
+            }
+        } else {
+            QBLog.log("glue: frame type \(record.type) checksumOK=\(record.checksumOK)")
+        }
         onRawRecord?(record)
         switch record.type {
         case VTSType.setEntireTree.rawValue:
             if let tree = parseTree(record.data) {
+                QBLog.log("glue: tree received")
                 DispatchQueue.main.async { [weak self] in self?.onTree?(tree) }
+            } else {
+                QBLog.log("glue: tree parse FAILED")
             }
         case VTSType.setProperty.rawValue:
             let d = record.data
