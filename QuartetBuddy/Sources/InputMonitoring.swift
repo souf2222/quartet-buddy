@@ -29,16 +29,42 @@ enum QBLog {
             .appendingPathComponent("Library/Logs/QuartetBuddy.log")
     }
 
+    /// Formatters are expensive to create — keep one (thread-safe in use).
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .medium
+        return f
+    }()
+
+    /// Writers come from several threads (main, CoreMIDI, IOKit, glue queue);
+    /// a serial queue + one persistent handle keep lines from interleaving.
+    private static let queue = DispatchQueue(label: "quartetbuddy.log")
+    private static var handle: FileHandle?
+
     static func log(_ s: String) {
-        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        let line = "\(stamp)  \(s)\n"
+        let line = "\(formatter.string(from: Date()))  \(s)\n"
         let data = line.data(using: .utf8) ?? Data()
-        if let h = FileHandle(forWritingAtPath: url.path) {
+        queue.async {
+            // cached handle still valid? (log file may have been deleted)
+            if let h = handle, FileManager.default.fileExists(atPath: url.path) {
+                h.seekToEndOfFile()
+                h.write(data)
+                return
+            }
+            if let h = handle {
+                try? h.close()
+                handle = nil
+            }
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            guard let h = FileHandle(forWritingAtPath: url.path) else {
+                try? data.write(to: url)
+                return
+            }
+            handle = h
             h.seekToEndOfFile()
             h.write(data)
-            try? h.close()
-        } else {
-            try? data.write(to: url)
         }
     }
 }

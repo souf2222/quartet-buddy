@@ -168,22 +168,29 @@ final class GlueClient: NSObject, StreamDelegate {
     }
 
     private func processBuffer() {
-        // parse + consume incrementally (no rescans)
-        while inBuffer.count >= 8 {
-            let magic: UInt32 = inBuffer.readLE(at: inBuffer.startIndex)
+        // Parse + consume in batches: advance a cursor through the buffer and
+        // trim once at the end — the meter stream sends ~20 frames/s, so one
+        // memmove per drain beats one per frame.
+        var consumed = 0
+        while inBuffer.count - consumed >= 8 {
+            let base = inBuffer.index(inBuffer.startIndex, offsetBy: consumed)
+            let magic: UInt32 = inBuffer.readLE(at: base)
             guard magic == GlueProtocol.juceMagic else {
-                inBuffer.removeFirst()   // resync byte-by-byte
+                consumed += 1          // resync byte-by-byte
                 continue
             }
-            let lenRaw: UInt32 = inBuffer.readLE(at: inBuffer.index(inBuffer.startIndex, offsetBy: 4))
+            let lenRaw: UInt32 = inBuffer.readLE(at: inBuffer.index(base, offsetBy: 4))
             let len = Int(lenRaw)
-            guard len <= 64 * 1024 * 1024, inBuffer.count >= 8 + len else { break }
+            guard len <= 64 * 1024 * 1024, inBuffer.count - consumed >= 8 + len else { break }
             // skip the 8-byte JUCE header (magic + length) — the record starts after it
-            let bodyStart = inBuffer.index(inBuffer.startIndex, offsetBy: 8)
+            let bodyStart = inBuffer.index(base, offsetBy: 8)
             let payload = inBuffer.subdata(
-                in: bodyStart..<inBuffer.index(inBuffer.startIndex, offsetBy: 8 + len))
-            inBuffer.removeFirst(8 + len)
+                in: bodyStart..<inBuffer.index(base, offsetBy: 8 + len))
+            consumed += 8 + len
             handleFrame(payload)
+        }
+        if consumed > 0 {
+            inBuffer.removeFirst(consumed)
         }
     }
 

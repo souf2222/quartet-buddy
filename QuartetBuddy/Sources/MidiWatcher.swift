@@ -52,10 +52,14 @@ final class MidiWatcher {
         return found
     }
 
+    /// Runs on CoreMIDI's own thread: parse the packet list here (the
+    /// pointer is only valid during the callback), then deliver the parsed
+    /// events on the main thread — the consumers mutate UI state.
     private func handle(_ pktList: UnsafePointer<MIDIPacketList>) {
         let list = pktList.pointee
         var offset = MemoryLayout<MIDIPacketList>.offset(of: \MIDIPacketList.packet)!
         let base = UnsafeRawPointer(pktList)
+        var messages: [(MidiEvent, Trigger?, Bool)] = []   // (event, trigger, isDown)
         for _ in 0..<list.numPackets {
             let packetPtr = (base + offset).assumingMemoryBound(to: MIDIPacket.self)
             let packet = packetPtr.pointee
@@ -71,20 +75,20 @@ final class MidiWatcher {
                     let note = Int(bytes[idx + 1])
                     let vel = Int(bytes[idx + 2])
                     let isDown = vel > 0
-                    onAnyEvent?(MidiEvent(channel: channel, kind: .note, number: note, value: vel, isDown: isDown))
-                    onTrigger?(Trigger(channel: channel, kind: .note, number: note), isDown)
+                    messages.append((MidiEvent(channel: channel, kind: .note, number: note, value: vel, isDown: isDown),
+                                      Trigger(channel: channel, kind: .note, number: note), isDown))
                     idx += 3
                 case 0x80 where idx + 2 < Int(packet.length):
                     let note = Int(bytes[idx + 1])
-                    onAnyEvent?(MidiEvent(channel: channel, kind: .note, number: note, value: 0, isDown: false))
-                    onTrigger?(Trigger(channel: channel, kind: .note, number: note), false)
+                    messages.append((MidiEvent(channel: channel, kind: .note, number: note, value: 0, isDown: false),
+                                      Trigger(channel: channel, kind: .note, number: note), false))
                     idx += 3
                 case 0xB0 where idx + 2 < Int(packet.length):
                     let cc = Int(bytes[idx + 1])
                     let val = Int(bytes[idx + 2])
                     let isDown = val >= 64
-                    onAnyEvent?(MidiEvent(channel: channel, kind: .cc, number: cc, value: val, isDown: isDown))
-                    onTrigger?(Trigger(channel: channel, kind: .cc, number: cc), isDown)
+                    messages.append((MidiEvent(channel: channel, kind: .cc, number: cc, value: val, isDown: isDown),
+                                      Trigger(channel: channel, kind: .cc, number: cc), isDown))
                     idx += 3
                 default:
                     idx += 1
@@ -92,6 +96,14 @@ final class MidiWatcher {
             }
             offset += MemoryLayout<MIDIPacket>.offset(of: \MIDIPacket.data)!
                      + Int(packet.length)
+        }
+        guard !messages.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            for (event, trigger, isDown) in messages {
+                self.onAnyEvent?(event)
+                if let trigger { self.onTrigger?(trigger, isDown) }
+            }
         }
     }
 }

@@ -44,7 +44,7 @@ final class QuartetPresence {
                 QBLog.log("presence: match notification fired")
                 let myself = Unmanaged<QuartetPresence>.fromOpaque(ctx!).takeUnretainedValue()
                 myself.drain(iterator)
-                myself.update()
+                DispatchQueue.main.async { myself.update() }
             }, ctx, &matchIter)
         if matchStatus == KERN_SUCCESS {
             retainedIterators.append(matchIter)
@@ -60,7 +60,7 @@ final class QuartetPresence {
                 QBLog.log("presence: terminate notification fired")
                 let myself = Unmanaged<QuartetPresence>.fromOpaque(ctx!).takeUnretainedValue()
                 myself.drain(iterator)
-                myself.update()
+                DispatchQueue.main.async { myself.update() }
             }, ctx, &goneIter)
         if goneStatus == KERN_SUCCESS {
             retainedIterators.append(goneIter)

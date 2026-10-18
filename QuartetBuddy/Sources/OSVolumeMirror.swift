@@ -24,12 +24,29 @@ final class OSVolumeMirror {
 
     private var listenedDevice: AudioDeviceID?
     private var listenerProc: AudioObjectPropertyListenerProc?
+    private var cachedDeviceID: AudioDeviceID?
+
+    /// The Quartet's CoreAudio device id, by name (nil if not present).
+    /// Cached — this runs on every slider event; one name read validates the
+    /// cache, a full device scan only happens on a miss (e.g. after replug).
+    /// Main-thread only (enforce and the listener callback both run there).
+    private func device() -> AudioDeviceID? {
+        if let id = cachedDeviceID, DefaultDeviceMonitor.deviceName(id) == "Quartet" {
+            return id
+        }
+        guard let id = Self.scanForQuartet() else {
+            cachedDeviceID = nil
+            return nil
+        }
+        cachedDeviceID = id
+        return id
+    }
 
     // MARK: - Quartet → macOS
 
     /// Copy `db` (the real fader level) onto the macOS volume slider.
     func enforce(_ db: Double) {
-        guard let dev = Self.quartetDevice() else {
+        guard let dev = device() else {
             QBLog.log("slider sync: no Quartet in CoreAudio")
             return
         }
@@ -44,7 +61,7 @@ final class OSVolumeMirror {
     // MARK: - macOS → Quartet
 
     private func sliderChanged() {
-        guard let dev = Self.quartetDevice(),
+        guard let dev = device(),
               let db = Self.readDecibels(from: dev) else { return }
         onSliderMoved?(db)
     }
@@ -78,7 +95,7 @@ final class OSVolumeMirror {
     }
 
     /// The Quartet's device id, by name (nil if not present in CoreAudio).
-    static func quartetDevice() -> AudioDeviceID? {
+    static func scanForQuartet() -> AudioDeviceID? {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                               mScope: kAudioObjectPropertyScopeGlobal,
                                               mElement: kAudioObjectPropertyElementMain)
