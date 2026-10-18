@@ -1,16 +1,18 @@
 #!/bin/bash
-# Builds QuartetBuddy.app (menubar companion for the Apogee Quartet).
+# Builds "Quartet Buddy.app", signs it, and restarts the running app so the
+# new build goes live immediately.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APPNAME="QuartetBuddy"
+APPNAME="Quartet Buddy"
 BUNDLE="build/$APPNAME.app"
 SRC="Sources"
 
-rm -rf "$BUNDLE"
+echo "building…"
+rm -rf "$BUNDLE" "build/QuartetBuddy.app"   # also remove the legacy pre-rename bundle
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
-# bundle the Apogee logo for the menubar icon / HUD
+# bundle the Apogee logo for the menubar icon
 cp assets/apogee-icon-small.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
 cp assets/apogee-icon.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
 
@@ -20,7 +22,7 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>QuartetBuddy</string>
+    <string>Quartet Buddy</string>
     <key>CFBundleIdentifier</key>
     <string>com.quartetbuddy.app</string>
     <key>CFBundleName</key>
@@ -28,9 +30,9 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1</string>
+    <string>0.2</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -41,7 +43,6 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
-echo "compiling..."
 swiftc -O \
     "$SRC/main.swift" \
     "$SRC/AppDelegate.swift" \
@@ -52,15 +53,15 @@ swiftc -O \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
     "$SRC/MidiWatcher.swift" \
-    "$SRC/QuartetPresence.swift" \
     "$SRC/InputMonitoring.swift" \
     "$SRC/LogoIcon.swift" \
+    "$SRC/QuartetPresence.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \
     -o "$BUNDLE/Contents/MacOS/$APPNAME"
 
-# Sign with the stable identity when available so the Input Monitoring
-# grant survives rebuilds; otherwise fall back to ad-hoc.
+# Sign with the stable identity when available so the Input Monitoring grant
+# and the login-item registration survive rebuilds; otherwise ad-hoc.
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(QuartetBuddy Developer\)".*/\1/p' | head -1)
 if [ -n "$IDENTITY" ] && codesign --force --sign "$IDENTITY" "$BUNDLE" 2>/dev/null; then
     echo "signed with identity: $IDENTITY"
@@ -69,5 +70,14 @@ else
     echo "signed ad-hoc (rebuilds will require re-granting Input Monitoring)"
 fi
 
-echo "built: $BUNDLE"
-echo "first run: $BUNDLE/Contents/MacOS/$APPNAME  (grant Input Monitoring when prompted)"
+# Restart: kill any running instance and launch the fresh build,
+# so compiling immediately puts the new code in the menubar.
+if pgrep -f "Quartet Buddy.app" >/dev/null 2>&1 || pgrep -x "$APPNAME" >/dev/null 2>&1; then
+    echo "restarting running app…"
+    pkill -f "Quartet Buddy.app" 2>/dev/null || true
+    sleep 1
+fi
+pkill -x "QuartetBuddy" 2>/dev/null || true   # legacy name (pre-rename)
+open "$BUNDLE"
+
+echo "built + running: $BUNDLE"

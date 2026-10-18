@@ -97,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refreshMenu()
         }
         quartetPresence.start()
+        syncLoginItem()
         // keep retrying the event tap until Input Monitoring gets granted
         tccRetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -484,14 +485,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Launch at login
 
+    private var wantsLaunchAtLogin: Bool {
+        get { UserDefaults.standard.bool(forKey: "launchAtLogin") }
+        set { UserDefaults.standard.set(newValue, forKey: "launchAtLogin") }
+    }
+
+    /// Re-register automatically if the user wants it but the registration
+    /// is missing (e.g. after the app moved or was renamed).
+    private func syncLoginItem() {
+        guard wantsLaunchAtLogin, SMAppService.mainApp.status != .enabled else { return }
+        do {
+            try SMAppService.mainApp.register()
+            QBLog.log("login item: re-registered automatically")
+        } catch {
+            QBLog.log("login item re-register error: \(error.localizedDescription)")
+        }
+    }
+
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
         let service = SMAppService.mainApp
         do {
             if service.status == .enabled {
                 try service.unregister()
+                wantsLaunchAtLogin = false
                 QBLog.log("login item: unregistered")
             } else {
                 try service.register()
+                wantsLaunchAtLogin = true
                 QBLog.log("login item: registered")
             }
         } catch {

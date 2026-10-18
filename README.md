@@ -37,9 +37,11 @@ normally).
 
 ```bash
 cd quartet-buddy/QuartetBuddy
-./build.sh
-open build/QuartetBuddy.app
+./build.sh          # builds "Quartet Buddy.app", signs, restarts the running app
 ```
+
+The script relaunches the app automatically, so every rebuild goes live
+immediately. The app lives in `build/Quartet Buddy.app`.
 
 **First launch only — grant Input Monitoring (required for the volume keys):**
 
@@ -52,6 +54,10 @@ open build/QuartetBuddy.app
 > that certificate, so it **survives every rebuild**. If the identity is
 > missing, it falls back to ad-hoc signing and you'd need to re-grant after
 > each rebuild.
+
+**Launch at Login** is a menu toggle. Your choice is remembered, and if the
+registration ever goes missing (app moved/renamed), the app re-registers
+itself automatically on the next launch.
 
 ### Setup
 
