@@ -37,15 +37,15 @@ enum LogoIcon {
         let out = NSImage(size: canvasSize)
         out.lockFocus()
         let rect = NSRect(origin: .zero, size: canvasSize)
-
-        if !active {
-            NSGraphicsContext.current?.cgContext.setAlpha(0.3)
-        }
+        // NOTE: CGContext.setAlpha is ignored by NSImage.draw — the
+        // `fraction:` argument is the reliable way to dim an NSImage.
+        let fraction: CGFloat = active ? 1.0 : 0.3
 
         if headphonesSelected, let hp = headphoneSymbol() {
             // native look: template glyph, macOS inverts it for the menubar
             let r = aspectFit(hp, in: rect)
-            hp.draw(in: r)
+            hp.draw(in: r, from: .zero, operation: .sourceOver,
+                    fraction: fraction, respectFlipped: false, hints: nil)
             if talkback {
                 NSColor.black.setFill()
                 NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
@@ -57,7 +57,8 @@ enum LogoIcon {
         }
 
         if let logo = loadAsset() ?? drawFallbackA(size: iconHeight) {
-            logo.draw(in: aspectFit(logo, in: rect))
+            logo.draw(in: aspectFit(logo, in: rect), from: .zero, operation: .sourceOver,
+                      fraction: fraction, respectFlipped: false, hints: nil)
         }
         if talkback {
             NSColor.systemRed.setFill()
