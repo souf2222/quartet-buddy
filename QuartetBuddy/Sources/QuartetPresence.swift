@@ -1,8 +1,13 @@
 import Foundation
 import IOKit
 
-/// Watches for the Quartet's USB presence (VID 0x0C60, PID 0x0014)
-/// via IOKit publish/terminate notifications — no polling.
+/// Watches for the Quartet's USB presence (VID 0x0C60, PID 0x0014).
+///
+/// Two layers, because USB notification semantics are fiddly:
+///  1. IOKit matching notifications (kIOFirstMatchNotification /
+///     kIOTerminatedNotification — the canonical pair for USB device matching)
+///  2. A cheap 2 s polling scan as a safety net
+/// The state only flips when the authoritative scan agrees.
 final class QuartetPresence {
 
     static let vendorID = 0x0C60
@@ -13,46 +18,58 @@ final class QuartetPresence {
 
     private(set) var isConnected = false
     private var notifyPort: IONotificationPortRef?
+    private var pollTimer: Timer?
     private var retainedIterators: [io_iterator_t] = []
 
     func start() {
-        isConnected = Self.scan()
-        onChange?(isConnected)
+        update()   // sets initial state + fires onChange once
 
         notifyPort = IONotificationPortCreate(kIOMainPortDefault)
-        guard let notifyPort else { return }
-        if let source = IONotificationPortGetRunLoopSource(notifyPort)?.takeRetainedValue() {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes)
+        guard let notifyPort else {
+            QBLog.log("presence: IONotificationPortCreate failed — polling only")
+            startPolling()
+            return
+        }
+        if let source = IONotificationPortGetRunLoopSource(notifyPort) {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source.takeRetainedValue(),
+                               CFRunLoopMode.commonModes)
         }
 
         let ctx = Unmanaged.passRetained(self).toOpaque()
 
-        var publishIter: io_iterator_t = 0
-        let publishStatus = IOServiceAddMatchingNotification(
-            notifyPort, kIOFirstPublishNotification, Self.matchingDict(),
+        var matchIter: io_iterator_t = 0
+        let matchStatus = IOServiceAddMatchingNotification(
+            notifyPort, kIOFirstMatchNotification, Self.matchingDict(),
             { ctx, iterator in
+                QBLog.log("presence: match notification fired")
                 let myself = Unmanaged<QuartetPresence>.fromOpaque(ctx!).takeUnretainedValue()
-                myself.consume(iterator)
+                myself.drain(iterator)
                 myself.update()
-            }, ctx, &publishIter)
-        if publishStatus == KERN_SUCCESS {
-            retainedIterators.append(publishIter)
-            consume(publishIter)
+            }, ctx, &matchIter)
+        if matchStatus == KERN_SUCCESS {
+            retainedIterators.append(matchIter)
+            drain(matchIter)   // arm the notification
+        } else {
+            QBLog.log("presence: match notification error \(matchStatus)")
         }
 
         var goneIter: io_iterator_t = 0
         let goneStatus = IOServiceAddMatchingNotification(
             notifyPort, kIOTerminatedNotification, Self.matchingDict(),
             { ctx, iterator in
+                QBLog.log("presence: terminate notification fired")
                 let myself = Unmanaged<QuartetPresence>.fromOpaque(ctx!).takeUnretainedValue()
-                myself.consume(iterator)
+                myself.drain(iterator)
                 myself.update()
             }, ctx, &goneIter)
         if goneStatus == KERN_SUCCESS {
             retainedIterators.append(goneIter)
-            consume(goneIter)
+            drain(goneIter)
+        } else {
+            QBLog.log("presence: terminate notification error \(goneStatus)")
         }
-        update()
+
+        startPolling()
     }
 
     /// One-shot scan: is a Quartet attached right now?
@@ -63,9 +80,8 @@ final class QuartetPresence {
             return false
         }
         var found = false
-        while IOIteratorNext(iterator) != 0 {
+        if IOIteratorNext(iterator) != 0 {
             found = true
-            break
         }
         IOObjectRelease(iterator)
         return found
@@ -78,15 +94,26 @@ final class QuartetPresence {
         return dict
     }
 
-    private func consume(_ iterator: io_iterator_t) {
+    private func drain(_ iterator: io_iterator_t) {
         while IOIteratorNext(iterator) != 0 {}
     }
 
-    private func update() {
+    /// Re-scan and flip state if it changed.
+    private func update(quiet: Bool = false) {
         let now = Self.scan()
         if now != isConnected {
             isConnected = now
+            if !quiet {
+                QBLog.log("presence: \(now ? "connected" : "disconnected")")
+            }
             onChange?(now)
+        }
+    }
+
+    /// Safety net: cheap authoritative scan every 2 s.
+    private func startPolling() {
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.update()
         }
     }
 }
