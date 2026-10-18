@@ -94,6 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
+            if !connected, self?.talkbackOn == true {
+                // the TalkbackHelper resets talkback when the device goes away
+                QBLog.log("talkback: assumed off (device disconnected)")
+                self?.talkbackOn = false
+            }
             self?.refreshMenu()
         }
         quartetPresence.start()

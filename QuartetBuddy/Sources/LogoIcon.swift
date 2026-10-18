@@ -2,11 +2,11 @@ import AppKit
 
 /// Menubar icon, drawn on a FIXED-SIZE canvas so the menubar item never
 /// changes width when state changes:
-///  - Main Out selected  → Apogee logo PNG (color)
-///  - Headphones selected → native macOS headphones glyph (template)
-///  - talkback on         → small red dot (top-right); black on the template variant
-///  - disconnected         → everything drawn at reduced alpha (greyed out)
-/// The mute state no longer alters the icon — macOS shows its own mute feedback.
+///  - Quartet unplugged     → always the Apogee logo, greyed out (30%), no talkback dot
+///  - Main Out selected     → Apogee logo PNG (full color)
+///  - Headphones selected   → native macOS headphones glyph, tinted to the menubar
+///                            label color (so the talkback dot can be red)
+///  - talkback on           → small red dot (top-right), on any connected variant
 enum LogoIcon {
 
     /// Fixed canvas: matches the logo's aspect ratio at iconHeight.
@@ -18,7 +18,10 @@ enum LogoIcon {
     private static let lock = NSLock()
 
     static func image(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
-        let key = "hp-\(headphonesSelected)-tb-\(talkback)-ac-\(active)"
+        // include the appearance in the key: the tinted headphones variant
+        // resolves its colors for the current light/dark mode
+        let appearance = NSApp?.effectiveAppearance.name.rawValue ?? "none"
+        let key = "hp-\(headphonesSelected)-tb-\(talkback)-ac-\(active)-\(appearance)"
         lock.lock()
         if let cached = cache[key] {
             lock.unlock()
@@ -34,6 +37,7 @@ enum LogoIcon {
     }
 
     private static func compose(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
+        let useHeadphones = active && headphonesSelected   // greyed state always shows the logo
         let out = NSImage(size: canvasSize)
         out.lockFocus()
         let rect = NSRect(origin: .zero, size: canvasSize)
@@ -41,26 +45,26 @@ enum LogoIcon {
         // `fraction:` argument is the reliable way to dim an NSImage.
         let fraction: CGFloat = active ? 1.0 : 0.3
 
-        if headphonesSelected, let hp = headphoneSymbol() {
-            // native look: template glyph, macOS inverts it for the menubar
+        if useHeadphones, let hp = headphoneSymbol() {
+            // Tint the template glyph to the menubar text color so the image
+            // can stay non-template — required for a red talkback dot.
             let r = aspectFit(hp, in: rect)
-            hp.draw(in: r, from: .zero, operation: .sourceOver,
-                    fraction: fraction, respectFlipped: false, hints: nil)
-            if talkback {
-                NSColor.black.setFill()
-                NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
-                                            width: 4.5, height: 4.5)).fill()
-            }
-            out.unlockFocus()
-            out.isTemplate = true
-            return out
-        }
-
-        if let logo = loadAsset() ?? drawFallbackA(size: iconHeight) {
+            let appearance = NSApp?.effectiveAppearance
+                ?? NSAppearance.current
+                ?? NSAppearance(named: .aqua)!
+            let tint = NSImage(size: canvasSize)
+            tint.lockFocus()
+            hp.draw(in: r)
+            glyphColor(for: appearance).set()
+            NSRect(origin: .zero, size: canvasSize).fill(using: .sourceIn)
+            tint.unlockFocus()
+            tint.draw(in: rect)
+        } else if let logo = loadAsset() ?? drawFallbackA(size: iconHeight) {
             logo.draw(in: aspectFit(logo, in: rect), from: .zero, operation: .sourceOver,
                       fraction: fraction, respectFlipped: false, hints: nil)
         }
-        if talkback {
+
+        if talkback, active {   // unplugged ⇒ assume talkback is off: no dot
             NSColor.systemRed.setFill()
             NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
                                         width: 4.5, height: 4.5)).fill()
@@ -74,6 +78,15 @@ enum LogoIcon {
         let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         return NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones")?
             .withSymbolConfiguration(cfg)
+    }
+
+    /// Menubar text color for the current appearance (white on dark, black on light).
+    private static func glyphColor(for appearance: NSAppearance) -> NSColor {
+        if let match = appearance.bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight]),
+           match == .darkAqua || match == .vibrantDark {
+            return .white
+        }
+        return .black
     }
 
     private static func loadAsset() -> NSImage? {
