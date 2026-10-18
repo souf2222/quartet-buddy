@@ -2,11 +2,12 @@ import AppKit
 
 /// Menubar icon, drawn on a FIXED-SIZE canvas so the menubar item never
 /// changes width when state changes:
-///  - Quartet unplugged     → always the Apogee logo, greyed out (30%), no talkback dot
+///  - Quartet unplugged     → always the Apogee logo, greyed out (30%)
 ///  - Main Out selected     → Apogee logo PNG (full color)
 ///  - Headphones selected   → native macOS headphones glyph, tinted to the menubar
-///                            label color (so the talkback dot can be red)
-///  - talkback on           → small red dot (top-right), on any connected variant
+///                            label color
+/// The talkback indicator is NOT part of the image — it's an animated
+/// subview managed by the AppDelegate (bigger + breathing).
 enum LogoIcon {
 
     /// Fixed canvas: matches the logo's aspect ratio at iconHeight.
@@ -17,11 +18,11 @@ enum LogoIcon {
     private static var cache: [String: NSImage] = [:]
     private static let lock = NSLock()
 
-    static func image(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
+    static func image(headphonesSelected: Bool, active: Bool) -> NSImage {
         // include the appearance in the key: the tinted headphones variant
         // resolves its colors for the current light/dark mode
         let appearance = NSApp?.effectiveAppearance.name.rawValue ?? "none"
-        let key = "hp-\(headphonesSelected)-tb-\(talkback)-ac-\(active)-\(appearance)"
+        let key = "hp-\(headphonesSelected)-ac-\(active)-\(appearance)"
         lock.lock()
         if let cached = cache[key] {
             lock.unlock()
@@ -29,14 +30,14 @@ enum LogoIcon {
         }
         lock.unlock()
 
-        let img = compose(talkback: talkback, headphonesSelected: headphonesSelected, active: active)
+        let img = compose(headphonesSelected: headphonesSelected, active: active)
         lock.lock()
         cache[key] = img
         lock.unlock()
         return img
     }
 
-    private static func compose(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
+    private static func compose(headphonesSelected: Bool, active: Bool) -> NSImage {
         let useHeadphones = active && headphonesSelected   // greyed state always shows the logo
         let out = NSImage(size: canvasSize)
         out.lockFocus()
@@ -47,7 +48,7 @@ enum LogoIcon {
 
         if useHeadphones, let hp = headphoneSymbol() {
             // Tint the template glyph to the menubar text color so the image
-            // can stay non-template — required for a red talkback dot.
+            // can stay non-template — the animated talkback dot draws on top.
             let r = aspectFit(hp, in: rect)
             let appearance = NSApp?.effectiveAppearance
                 ?? NSAppearance.current
@@ -62,12 +63,6 @@ enum LogoIcon {
         } else if let logo = loadAsset() ?? drawFallbackA(size: iconHeight) {
             logo.draw(in: aspectFit(logo, in: rect), from: .zero, operation: .sourceOver,
                       fraction: fraction, respectFlipped: false, hints: nil)
-        }
-
-        if talkback, active {   // unplugged ⇒ assume talkback is off: no dot
-            NSColor.systemRed.setFill()
-            NSBezierPath(ovalIn: NSRect(x: canvasSize.width - 5.5, y: canvasSize.height - 5.5,
-                                        width: 4.5, height: 4.5)).fill()
         }
         out.unlockFocus()
         out.isTemplate = false

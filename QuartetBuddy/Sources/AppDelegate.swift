@@ -321,9 +321,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // menubar icon + tooltip
         statusItem?.button?.title = ""
         let appActive = quartetPresence.isConnected && glue.state == .connected
-        statusItem?.button?.image = LogoIcon.image(talkback: talkbackOn,
-                                                    headphonesSelected: selectedOutput == .headphones,
+        statusItem?.button?.image = LogoIcon.image(headphonesSelected: selectedOutput == .headphones,
                                                     active: appActive)
+        updateTalkbackDot()
         let mainGain = gain[.mainOut] ?? 0
         let hpGain = gain[.headphones] ?? 0
         statusItem?.button?.toolTip =
@@ -447,6 +447,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loginItem.state = loginStatus == .enabled ? .on : .off
 
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    // MARK: Talkback indicator (animated red dot over the icon)
+
+    private var talkbackDot: NSView?
+
+    /// A layer-backed red circle over the icon's top-right corner, with a
+    /// breathing opacity animation while talkback is on.
+    private func updateTalkbackDot() {
+        guard let button = statusItem?.button else { return }
+        let show = talkbackOn && quartetPresence.isConnected
+        if show {
+            let size: CGFloat = 7
+            if talkbackDot == nil {
+                let dot = NSView(frame: .zero)
+                dot.wantsLayer = true
+                dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+                dot.layer?.cornerRadius = size / 2
+                let breathe = CABasicAnimation(keyPath: "opacity")
+                breathe.fromValue = 1.0
+                breathe.toValue = 0.25
+                breathe.duration = 0.65
+                breathe.autoreverses = true
+                breathe.repeatCount = .infinity
+                breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                dot.layer?.add(breathe, forKey: "breathe")
+                button.addSubview(dot, positioned: .above, relativeTo: nil)
+                talkbackDot = dot
+            }
+            let b = button.bounds
+            // icon frame inside the button (query the cell; fallback: centered 20×16)
+            let iconFrame: NSRect
+            if let cell = button.cell as? NSButtonCell, !cell.imageRect(forBounds: b).isEmpty {
+                iconFrame = cell.imageRect(forBounds: b)
+            } else {
+                iconFrame = NSRect(x: (b.width - 20) / 2, y: (b.height - 16) / 2,
+                                   width: 20, height: 16)
+            }
+            talkbackDot?.frame = NSRect(x: iconFrame.maxX - size + 2,
+                                        y: iconFrame.maxY - size + 1.5,
+                                        width: size, height: size)
+        } else if let dot = talkbackDot {
+            dot.removeFromSuperview()
+            talkbackDot = nil
+        }
     }
 
     // MARK: menu helpers (macOS HIG styling)
