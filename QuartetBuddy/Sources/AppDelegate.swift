@@ -459,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         let show = talkbackOn && quartetPresence.isConnected
         if show {
-            let size: CGFloat = 9
+            let size: CGFloat = 8
             if talkbackDot == nil {
                 let dot = NSView(frame: .zero)
                 dot.wantsLayer = true
@@ -477,14 +477,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 talkbackDot = dot
             }
             let b = button.bounds
-            // icon frame inside the button (query the cell; fallback: centered 20×16)
-            let iconFrame: NSRect
-            if let cell = button.cell as? NSButtonCell, !cell.imageRect(forBounds: b).isEmpty {
-                iconFrame = cell.imageRect(forBounds: b)
-            } else {
-                iconFrame = NSRect(x: (b.width - 20) / 2, y: (b.height - 16) / 2,
+            // NOTE: NSButtonCell.imageRect returns FLIPPED coordinates (y from
+            // top) — feeding them into the button's normal bottom-origin view
+            // coordinates mirrors the dot to the bottom. Compute the centered
+            // icon frame directly instead.
+            let iconFrame = NSRect(x: (b.width - 20) / 2, y: (b.height - 16) / 2,
                                    width: 20, height: 16)
-            }
             talkbackDot?.frame = NSRect(x: iconFrame.maxX - size + 3.5,
                                         y: iconFrame.maxY - size + 3,
                                         width: size, height: size)
