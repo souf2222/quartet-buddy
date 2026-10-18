@@ -5,6 +5,7 @@ import AppKit
 ///  - Main Out selected  → Apogee logo PNG (color)
 ///  - Headphones selected → native macOS headphones glyph (template)
 ///  - talkback on         → small red dot (top-right); black on the template variant
+///  - disconnected         → everything drawn at reduced alpha (greyed out)
 /// The mute state no longer alters the icon — macOS shows its own mute feedback.
 enum LogoIcon {
 
@@ -16,8 +17,8 @@ enum LogoIcon {
     private static var cache: [String: NSImage] = [:]
     private static let lock = NSLock()
 
-    static func image(talkback: Bool, headphonesSelected: Bool) -> NSImage {
-        let key = "hp-\(headphonesSelected)-tb-\(talkback)"
+    static func image(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
+        let key = "hp-\(headphonesSelected)-tb-\(talkback)-ac-\(active)"
         lock.lock()
         if let cached = cache[key] {
             lock.unlock()
@@ -25,17 +26,21 @@ enum LogoIcon {
         }
         lock.unlock()
 
-        let img = compose(talkback: talkback, headphonesSelected: headphonesSelected)
+        let img = compose(talkback: talkback, headphonesSelected: headphonesSelected, active: active)
         lock.lock()
         cache[key] = img
         lock.unlock()
         return img
     }
 
-    private static func compose(talkback: Bool, headphonesSelected: Bool) -> NSImage {
+    private static func compose(talkback: Bool, headphonesSelected: Bool, active: Bool) -> NSImage {
         let out = NSImage(size: canvasSize)
         out.lockFocus()
         let rect = NSRect(origin: .zero, size: canvasSize)
+
+        if !active {
+            NSGraphicsContext.current?.cgContext.setAlpha(0.3)
+        }
 
         if headphonesSelected, let hp = headphoneSymbol() {
             // native look: template glyph, macOS inverts it for the menubar

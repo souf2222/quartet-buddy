@@ -52,6 +52,7 @@ swiftc -O \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
     "$SRC/MidiWatcher.swift" \
+    "$SRC/QuartetPresence.swift" \
     "$SRC/InputMonitoring.swift" \
     "$SRC/LogoIcon.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \

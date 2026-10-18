@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let switchHotKeys = HotKeyManager(signature: 0x51515357 /* 'QBSW' */, id: 2)
     let midi = MidiWatcher()
     let deviceMonitor = DefaultDeviceMonitor()
+    let quartetPresence = QuartetPresence()
 
     var statusItem: NSStatusItem!
     var menu = NSMenu()
@@ -91,6 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupKeys()
         setupMIDI()
         deviceMonitor.start()
+        quartetPresence.onChange = { [weak self] connected in
+            QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
+            self?.refreshMenu()
+        }
+        quartetPresence.start()
         // keep retrying the event tap until Input Monitoring gets granted
         tccRetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -308,15 +314,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // menubar icon + tooltip
         statusItem?.button?.title = ""
+        let appActive = quartetPresence.isConnected && glue.state == .connected
         statusItem?.button?.image = LogoIcon.image(talkback: talkbackOn,
-                                                    headphonesSelected: selectedOutput == .headphones)
+                                                    headphonesSelected: selectedOutput == .headphones,
+                                                    active: appActive)
         let mainGain = gain[.mainOut] ?? 0
         let hpGain = gain[.headphones] ?? 0
         statusItem?.button?.toolTip =
             "Main Out \(String(format: "%.1f", mainGain)) dB · HP \(String(format: "%.1f", hpGain)) dB · Talkback \(talkbackOn ? "on" : "off")"
 
         // header
-        let headerTitle = "Quartet Buddy" + (glue.state == .connected ? "" : " — Glue Offline")
+        var headerTitle = "Quartet Buddy"
+        if !quartetPresence.isConnected {
+            headerTitle += " — Quartet Not Connected"
+        } else if glue.state != .connected {
+            headerTitle += " — Glue Offline"
+        }
         menu.addItem(sectionHeader(headerTitle))
 
         // output target (with live levels)
