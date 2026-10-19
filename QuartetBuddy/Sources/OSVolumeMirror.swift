@@ -27,6 +27,16 @@ final class OSVolumeMirror {
     /// Fired on the main thread with the OS mute's new state.
     var onMuteChanged: ((Bool) -> Void)?
 
+    /// True when the Quartet's macOS volume control is missing entirely
+    /// (HAL 'who!' on every volume read/write — driver wedge observed
+    /// after the device re-enumerates, e.g. overnight USB churn). The
+    /// binding cannot work until the Quartet is power-cycled; reset on
+    /// every device-list change (replug gives the control back).
+    private(set) static var volumeControlMissing = false
+
+    /// kAudioHardwareUnknownPropertyError — 'who!'
+    private static let whoErr: OSStatus = 2003332927
+
     private var listenedDevice: AudioDeviceID?
     private var listenerProc: AudioObjectPropertyListenerProc?
     private var cachedDeviceID: AudioDeviceID?
@@ -56,6 +66,7 @@ final class OSVolumeMirror {
     /// The device list changed: drop the stale id + listener binding and
     /// re-apply the last known level to the (possibly new) Quartet device.
     private func rebind() {
+        Self.volumeControlMissing = false
         guard let db = lastEnforcedDB else { return }
         cachedDeviceID = nil
         listenedDevice = nil     // force fresh listener registration
@@ -90,10 +101,34 @@ final class OSVolumeMirror {
         }
         cancelRetry()
         armListener(on: dev)
+        if !Self.volumeControlExists(dev) {
+            Self.noteMissingControl()
+            return
+        }
         if Self.write(decibels: db, to: dev) {
             QBLog.log(String(format: "slider sync: macOS slider -> %.1f dB", db))
-        } else {
+        } else if !Self.volumeControlMissing {
             QBLog.log("slider sync: slider write failed")
+        }
+    }
+
+    /// Does the device expose the output volume control at all?
+    private static func volumeControlExists(_ dev: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeScalar,
+                                               mScope: kAudioDevicePropertyScopeOutput,
+                                               mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectHasProperty(dev, &addr)
+    }
+
+    /// The control is gone ('who!' wedge) — the volume-keys binding is
+    /// dead until the Quartet is power-cycled. Say it once, clearly.
+    private static func noteMissingControl() {
+        guard !volumeControlMissing else { return }
+        volumeControlMissing = true
+        QBLog.log("volume control MISSING on the Quartet (HAL 'who!') — " +
+                  "the macOS volume keys binding is dead until the Quartet is power-cycled")
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .init("qb.volumeControlMissing"), object: nil)
         }
     }
 
@@ -233,6 +268,7 @@ final class OSVolumeMirror {
             }
         }
         // fallback: VolumeScalar, square-law taper
+        // (a 'who!' error here means the control is gone entirely — flagged)
         var lo = -64.0, hi = 0.0
         var rAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeRangeDecibels,
                                                mScope: kAudioDevicePropertyScopeOutput,

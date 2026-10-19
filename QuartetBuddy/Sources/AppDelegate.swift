@@ -429,6 +429,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(withTitle: "System Settings → Privacy → System Audio Recording",
                           action: #selector(openPrivacySettings(_:)), keyEquivalent: "")
         }
+        if OSVolumeMirror.volumeControlMissing {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "⚠️ macOS volume control missing — power-cycle the Quartet",
+                          action: nil, keyEquivalent: "").isEnabled = false
+            menu.addItem(withTitle: "Volume keys are dead until the Quartet is restarted (unplug/replug USB)",
+                          action: nil, keyEquivalent: "").isEnabled = false
+        }
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Quartet Buddy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
