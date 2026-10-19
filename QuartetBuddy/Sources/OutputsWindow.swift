@@ -19,7 +19,6 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
     private var editorButtons: [NSButton] = []
-    private var flowFields: [NSTextField] = []
 
     private static let nameKey: (Int) -> String = { "insertPair.\($0).name" }
 
@@ -90,32 +89,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             enabledChecks[i].isEnabled = live && server.pluginName(i) != nil
 
             editorButtons[i].isEnabled = server.pluginName(i) != nil
-
-            // SIGNAL FLOW (vertical: source ↓ …plug-ins… ↓ destination)
-            flowFields[i].stringValue = Self.flowParts(i).joined(separator: "\n↓\n")
         }
-    }
-
-    /// The flow for pair i: its source's playback pair, any plug-ins in
-    /// the path (source's, when mirroring AFTER it; its own when
-    /// enabled), then the destination.
-    private static func flowParts(_ i: Int) -> [String] {
-        let server = InsertServer.shared
-        guard let src = server.routes[i].src else {
-            return ["Silence", "Out \(2 * i + 1)–\(2 * i + 2)"]
-        }
-        var parts: [String] = ["Playback \(2 * src + 1)–\(2 * src + 2)"]
-        if server.routes[i].post {
-            // mirroring AFTER the source's plug-in: that plug-in is in
-            // the path before this pair's
-            let srcPlugin = server.pluginName(src).map(InsertServer.shortName) ?? nil
-            if let srcPlugin { parts.append("\(srcPlugin)") }
-        }
-        if let pl = server.pluginName(i), server.enabled(i), !server.bypassAll {
-            parts.append(InsertServer.shortName(pl))
-        }
-        parts.append("Out \(2 * i + 1)–\(2 * i + 2)")
-        return parts
     }
 
     // MARK: - build
@@ -194,19 +168,6 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             b.font = .systemFont(ofSize: 11)
             editorButtons.append(b)
             return b
-        })
-
-        // 8) SIGNAL FLOW
-        grid.addRow(with: (0..<4).map { _ in sectionField("SIGNAL FLOW") })
-        grid.addRow(with: (0..<4).map { i in
-            let f = NSTextField(labelWithString: "")
-            f.alignment = .center
-            f.font = .systemFont(ofSize: 11)
-            f.textColor = .secondaryLabelColor
-            f.lineBreakMode = .byWordWrapping
-            f.maximumNumberOfLines = 6
-            flowFields.append(f)
-            return f
         })
 
         // column widths (NSGridView sizes to content; pin the popups)
