@@ -160,7 +160,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
         // 7) editors
         grid.addRow(with: (0..<4).map { i in
-            let b = NSButton(title: "Open Editor…", target: self,
+            let b = NSButton(title: "Show Plug-in", target: self,
                              action: #selector(rowEditorOpened(_:)))
             b.tag = 450 + i
             b.bezelStyle = .rounded
