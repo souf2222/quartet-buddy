@@ -736,12 +736,11 @@ final class InsertServer: NSObject {
     /// Show pair i's plugin editor: its custom JUCE/AUv2 view via the
     /// prefetched info, else the generic parameter view.
     ///
-    /// If the window already exists for this pair (same plugin), it is
-    /// simply re-fronted — plugins' `uiViewForAudioUnit:` implementations
-    /// are often not safe to call repeatedly (JUCE views in particular
-    /// can crash on a second request while the first view is alive —
-    /// live-tested SIGSEGV), so we create the view exactly once per
-    /// plugin instance and keep it.
+    /// The view is created exactly once per plugin instance (plugins'
+    /// `uiViewForAudioUnit:` isn't safe to call repeatedly — SIGSEGV,
+    /// live-tested). Re-front the existing window instead. NOTE:
+    /// NSWindow.close() releases the window (isReleasedWhenClosed), so
+    /// we must drop the reference on close or hold a zombie → SIGSEGV.
     func showPluginUI(_ i: Int) {
         if let w = viewWindow[i] {
             // existing editor: just bring it back
@@ -768,8 +767,10 @@ final class InsertServer: NSObject {
         let window = NSWindow(contentRect: frame,
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false   // ARC owns it; close() must not release under us
         window.title = "\(Self.pairNames[i]) — \(pairs[i].pluginName.map(Self.shortName) ?? "AU Plugin")"
         window.contentView = view
+        window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -778,6 +779,18 @@ final class InsertServer: NSObject {
     }
 
     private var viewWindow: [Int: NSWindow] = [:]
+
+    /// Hide instead of destroy on close: the window owns the plugin view
+    /// (created exactly once per plugin instance — re-requesting it from
+    /// the AU crashes, see showPluginUI). orderOut keeps it alive; a
+    /// later "Open" re-fronts it.
+    func windowWillClose(_ notification: Notification) {
+        guard let w = notification.object as? NSWindow else { return }
+        if viewWindow.values.contains(where: { $0 === w }) {
+            QBLog.log("insert: editor window hidden (kept alive)")
+            DispatchQueue.main.async { w.orderOut(nil) }
+        }
+    }
 
     /// The plugin's custom Cocoa UI from PREFETCHED info (no property
     /// gets here — they deadlock under active rendering), driving the
@@ -967,3 +980,4 @@ final class StereoABL {
         pointer.deallocate()
     }
 }
+extension InsertServer: NSWindowDelegate {}
