@@ -111,9 +111,12 @@ final class InsertServer: NSObject {
     }
 
     func start() {
+        QBLog.log("insert: start() called, running=\(running)")
         guard !running else { return }
         do {
+            QBLog.log("insert: building…")
             try build()
+            QBLog.log("insert: built ok")
             running = true
             QBLog.log("insert: running (\(pluginName ?? "no plugin"), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
         } catch {
@@ -133,6 +136,7 @@ final class InsertServer: NSObject {
     }
 
     private func build() throws {
+        QBLog.log("insert: build() enter")
         guard #available(macOS 14.2, *) else {
             throw InsertError.other("needs macOS 14.2+ for Core Audio taps")
         }
@@ -140,6 +144,7 @@ final class InsertServer: NSObject {
         guard let quartet = OSVolumeMirror.scanForQuartet() else {
             throw InsertError.other("Quartet not found in Core Audio")
         }
+        QBLog.log("insert: build() quartet=\(quartet)")
         let quartetUID = try Self.deviceUID(quartet)
         sampleRate = Self.deviceRate(quartet)
 
@@ -156,6 +161,7 @@ final class InsertServer: NSObject {
         try Self.check(AudioHardwareCreateProcessTap(desc, &tap), "tap create")
         guard tap != 0 else { throw InsertError.other("tap id 0") }
         tapID = tap
+        QBLog.log("insert: build() tap=\(tap)")
 
         // 2) the aggregate that exposes the tap as input and the Quartet
         //    (master) as output — all IO happens on this one device.
@@ -171,6 +177,7 @@ final class InsertServer: NSObject {
         try Self.check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &agg), "aggregate create")
         guard agg != 0 else { throw InsertError.other("aggregate id 0") }
         aggregateID = agg
+        QBLog.log("insert: build() aggregate=\(agg)")
 
         // Latency: the IO slice drives the insert's round-trip delay
         // (32 frames = 0.67 ms @ 48 kHz). Persisted; defaults to 32.
@@ -192,6 +199,7 @@ final class InsertServer: NSObject {
         }
 
         // 3) dry buffer + plugin (if it fails, don't leave the system silent)
+        QBLog.log("insert: build() step 3 — plugin load")
         dry = StereoABL(frames: 4096)
         if let key = UserDefaults.standard.string(forKey: "insertPluginDesc"),
            let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
@@ -201,6 +209,7 @@ final class InsertServer: NSObject {
         }
 
         // 4) the IO cycle.
+        QBLog.log("insert: build() step 4 — IOProc")
         let proc: AudioDeviceIOProc = { _, _, inInputData, _, outOutputData, _, refCon in
             let myself = Unmanaged<InsertServer>.fromOpaque(refCon!).takeUnretainedValue()
             return myself.cycle(inInputData, outOutputData)
@@ -230,6 +239,7 @@ final class InsertServer: NSObject {
         procBufL = nil
         procBufR = nil
         pluginDesc = nil
+        pluginViewInfo = nil
         dry = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -502,6 +512,12 @@ final class InsertServer: NSObject {
         self.pluginName = Self.name(for: desc)
         self.renderBuffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 512)
 
+        // prefetch the custom-view info asynchronously — the CocoaUI
+        // property get can wedge (JUCE/AU threading), so it must never
+        // block build() or the menu. Runs on its own thread; a
+        // watchdog logs if it never completes.
+        prefetchViewInfoAsync(unit: effect.audioUnit)
+
         // quick sanity render (main thread, before IO starts)
         if let renderBuffer, let st = try? engine.renderOffline(512, to: renderBuffer) {
             QBLog.log("insert: plugin sanity render \(st == .success ? "ok (\(renderBuffer.frameLength) frames)" : "failed")")
@@ -534,22 +550,94 @@ final class InsertServer: NSObject {
 
     // MARK: - Plugin UI
 
+    /// Prefetched plugin view info (bundle URL + view class names).
+    /// NOTE: the CocoaUI property get must NEVER happen while our IO
+    /// cycle renders the AU (it deadlocks on JUCE plugins — ARC X hangs
+    /// the main thread, live-tested Oct 2026). So we fetch once at
+    /// plugin load, before the device starts, and cache it here.
+    private var pluginViewInfo: (bundleURL: URL, classNames: [String])?
+
+    /// Fetch the custom-view info — plugin load time only, NOT from the
+    /// menu action (deadlock, see pluginViewInfo).
+    private func prefetchViewInfo(unit: AudioUnit) {
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
+        raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
+        defer { raw.deallocate() }
+        var size = UInt32(16)
+        guard AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
+                                    kAudioUnitScope_Global, 0, raw, &size) == noErr else {
+            QBLog.log("insert: no custom view (CocoaUI get failed at load)")
+            pluginViewInfo = nil
+            return
+        }
+        let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        guard let bundlePtr, let classArrayPtr else {
+            pluginViewInfo = nil
+            return
+        }
+        let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
+        // The class field is USUALLY a CFArray of class names — but some
+        // plugins (IK Multimedia: ARC X) return a single CFString instead.
+        // Type-check before touching it: CFArray calls on a CFString throw
+        // an ObjC exception Swift can't catch (crash, live-tested).
+        let classObj: AnyObject = Unmanaged<AnyObject>.fromOpaque(classArrayPtr).takeUnretainedValue()
+        var classNames: [String] = []
+        if CFGetTypeID(classObj) == CFArrayGetTypeID() {
+            let classArray = classObj as! CFArray
+            for i in 0..<CFArrayGetCount(classArray) {
+                if let p = CFArrayGetValueAtIndex(classArray, i) {
+                    classNames.append(Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String)
+                }
+            }
+        } else if CFGetTypeID(classObj) == CFStringGetTypeID() {
+            classNames.append(classObj as! String)
+        } else {
+            QBLog.log("insert: CocoaUI class field has unexpected type \(CFGetTypeID(classObj))")
+        }
+        pluginViewInfo = (bundleURL, classNames)
+        QBLog.log("insert: custom view prefetched (class \(classNames.first ?? "?"))")
+    }
+
+    /// Async wrapper: run prefetchViewInfo on its own thread with a
+    /// watchdog — the AU's CocoaUI getter may block (JUCE threading),
+    /// and that must never stall build(), the menu, or the app.
+    private func prefetchViewInfoAsync(unit: AudioUnit) {
+        viewPrefetchState = .running
+        Thread.detachNewThread { [weak self] in
+            guard let self else { return }
+            self.prefetchViewInfo(unit: unit)
+            self.viewPrefetchState = .done
+            DispatchQueue.main.async { self.onStateChange?() }
+        }
+        // watchdog: log if it never completes (stuck in the get)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4) { [weak self] in
+            if self?.viewPrefetchState == .running {
+                QBLog.log("insert: view prefetch still stuck after 4 s — plugin's CocoaUI get blocks; using generic UI")
+            }
+        }
+    }
+
+    private enum ViewPrefetchState { case idle, running, done }
+    private var viewPrefetchState: ViewPrefetchState = .idle
+
     func showPluginUI() {
+        QBLog.log("insert: showPluginUI called, effect=\(effect != nil)")
         guard let effect else { return }
         let unit = effect.audioUnit
 
         var view: NSView?
 
-        // 1) the plugin's custom view (kAudioUnitProperty_CocoaUI).
-        //    The struct is read raw (Swift mis-imports the class array),
-        //    and JUCE view classes are registered at runtime — try both
-        //    NSClassFromString and the ObjC runtime, then the AUv2
-        //    uiViewForAudioUnit:withSize: protocol.
-        view = Self.makeCustomView(unit: unit, log: { QBLog.log($0) })
+        // 1) the plugin's custom view — from the prefetched info only
+        //    (no AudioUnitGetProperty here; it deadlocks under render).
+        view = Self.makeCustomView(unit: unit, info: pluginViewInfo, log: { QBLog.log($0) })
+        QBLog.log("insert: custom view = \(view != nil)")
 
         // 2) fallback: generic parameter view (always available)
         if view == nil {
+            QBLog.log("insert: trying generic view…")
             view = Self.makeGenericView(for: effect, log: { QBLog.log($0) })
+            QBLog.log("insert: generic view = \(view != nil)")
         }
 
         guard let view else {
@@ -574,37 +662,38 @@ final class InsertServer: NSObject {
     }
 
     /// The plugin's custom Cocoa UI: resolve the (often dynamically
-    /// registered) JUCE view class, then drive the AUv2 view protocol.
-    private static func makeCustomView(unit: AudioUnit, log: (String) -> Void) -> NSView? {
-        let raw = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
-        raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
-        defer { raw.deallocate() }
-        var size = UInt32(16)
-        guard AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
-                                   kAudioUnitScope_Global, 0, raw, &size) == noErr else { return nil }
-        let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        guard let bundlePtr, let classArrayPtr else { return nil }
-        let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
-        let classArray = Unmanaged<CFArray>.fromOpaque(classArrayPtr).takeUnretainedValue()
-        var classNames: [String] = []
-        for i in 0..<CFArrayGetCount(classArray) {
-            if let p = CFArrayGetValueAtIndex(classArray, i) {
-                classNames.append(Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String)
-            }
+    /// registered) JUCE view class from PREFETCHED info — no property
+    /// gets here (they deadlock under active rendering) — then drive
+    /// the AUv2 view protocol.
+    private static func makeCustomView(unit: AudioUnit,
+                                        info: (bundleURL: URL, classNames: [String])?,
+                                        log: (String) -> Void) -> NSView? {
+        guard let info, let className = info.classNames.first else {
+            log("insert: no prefetched custom view — generic UI")
+            return nil
         }
-        guard let className = classNames.first else { return nil }
+        let bundleURL = info.bundleURL
         log("insert: CocoaUI class=\(className) bundle=\(bundleURL.lastPathComponent)")
 
-        // JUCE registers its view class at runtime in-process; try both lookups
+        // JUCE registers its view class at runtime in-process; if the
+        // class isn't registered yet, loading the plugin's view bundle
+        // registers it — then retry both lookups.
         var cls: AnyClass? = NSClassFromString(className)
         if cls == nil, let c = className.cString(using: .utf8),
            let o = objc_getClass(c) as? AnyClass {
             cls = o
-            log("insert: NSClassFromString miss, objc_getClass=\(true)")
+        }
+        if cls == nil, let bundle = Bundle(url: bundleURL) {
+            _ = bundle.load()
+            cls = NSClassFromString(className)
+            if cls == nil, let c = className.cString(using: .utf8),
+               let o = objc_getClass(c) as? AnyClass {
+                cls = o
+            }
+            log("insert: view class after bundle load = \(cls != nil)")
         }
         guard let cls else {
-            log("insert: custom view class not registered in-process — falling back to generic UI")
+            log("insert: custom view class not registered in-process — generic UI")
             return nil
         }
 
@@ -616,17 +705,18 @@ final class InsertServer: NSObject {
             let imp = method_getImplementation(class_getInstanceMethod(cls, sel)!)
             let fn = unsafeBitCast(imp, to: Fn.self)
             if let v = fn(instance, sel, UnsafeMutableRawPointer(unit), CGSize(width: 1000, height: 650)) as? NSView {
-                log("insert: custom view via uiViewForAudioUnit ok (\(v))")
+                log("insert: custom view via uiViewForAudioUnit ok")
                 return v
             }
         }
         // plain NSView subclass (non-JUCE AUv2 views)
         if let v = instance as? NSView, !v.subviews.isEmpty {
-            log("insert: custom view direct (\(v))")
+            log("insert: custom view direct")
             return v
         }
         return nil
     }
+
 
     /// Generic parameter UI from the AU's parameter tree (always works).
     private static func makeGenericView(for effect: AVAudioUnitEffect, log: (String) -> Void) -> NSView? {

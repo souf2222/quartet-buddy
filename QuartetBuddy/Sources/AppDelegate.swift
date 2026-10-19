@@ -126,6 +126,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupOSSlider()
         setupMIDI()
         setupInsert()
+        if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                QBLog.log("insert: AUTO-UI debug trigger")
+                InsertServer.shared.showPluginUI()
+            }
+        }
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
@@ -299,7 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupInsert() {
         let server = InsertServer.shared
         server.onStateChange = { [weak self] in self?.refreshMenu() }
-        if UserDefaults.standard.bool(forKey: "insertEnabled") {
+        let enabled = UserDefaults.standard.bool(forKey: "insertEnabled")
+        QBLog.log("insert: launch, insertEnabled=\(enabled)")
+        if enabled {
             server.start()
         }
     }
@@ -691,6 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openInsertUI(_ sender: NSMenuItem) {
+        QBLog.log("insert: menu → open plugin UI")
         InsertServer.shared.showPluginUI()
     }
 
