@@ -59,6 +59,16 @@ final class GlueClient: NSObject, StreamDelegate {
         }
     }
 
+    /// Ask the daemon for a fresh full-tree sync — e.g. after the Quartet was
+    /// (re)plugged and the hardware state may have changed while away.
+    func requestTree() {
+        queue.async { [weak self] in
+            guard let self, self.outputStream != nil, self.state == .connected else { return }
+            self.send(GlueProtocol.encode(VTSRecord(type: VTSType.getEntireTree.rawValue,
+                                                    flag: true, data: Data())))
+        }
+    }
+
     func disconnect() {
         queue.async { [weak self] in
             guard let self else { return }

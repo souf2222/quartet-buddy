@@ -30,6 +30,37 @@ final class OSVolumeMirror {
     private var listenedDevice: AudioDeviceID?
     private var listenerProc: AudioObjectPropertyListenerProc?
     private var cachedDeviceID: AudioDeviceID?
+    private var lastEnforcedDB: Double?
+    private var systemListenerProc: AudioObjectPropertyListenerProc?
+    private var retryTimer: Timer?
+    private var retryCount = 0
+
+    /// Watch the system device list. When the Quartet is (re)plugged it gets
+    /// a fresh CoreAudio device id, and USB presence fires BEFORE CoreAudio
+    /// has published the new device — so the mirror re-binds itself here,
+    /// from the CoreAudio event, when the device really exists.
+    func start() {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        let proc: AudioObjectPropertyListenerProc = { _, _, _, refCon in
+            let myself = Unmanaged<OSVolumeMirror>.fromOpaque(refCon!).takeUnretainedValue()
+            DispatchQueue.main.async { myself.rebind() }
+            return noErr
+        }
+        systemListenerProc = proc
+        AudioObjectAddPropertyListener(AudioObjectID(kAudioObjectSystemObject), &addr, proc,
+                                       Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// The device list changed: drop the stale id + listener binding and
+    /// re-apply the last known level to the (possibly new) Quartet device.
+    private func rebind() {
+        guard let db = lastEnforcedDB else { return }
+        cachedDeviceID = nil
+        listenedDevice = nil     // force fresh listener registration
+        enforce(db)
+    }
 
     /// The Quartet's CoreAudio device id, by name (nil if not present).
     /// Cached — this runs on every slider event; one name read validates the
@@ -51,16 +82,38 @@ final class OSVolumeMirror {
 
     /// Copy `db` (the real fader level) onto the macOS volume slider.
     func enforce(_ db: Double) {
+        lastEnforcedDB = db
         guard let dev = device() else {
-            QBLog.log("slider sync: no Quartet in CoreAudio")
+            QBLog.log("slider sync: no Quartet in CoreAudio yet — will retry")
+            scheduleRetry()
             return
         }
+        cancelRetry()
         armListener(on: dev)
         if Self.write(decibels: db, to: dev) {
             QBLog.log(String(format: "slider sync: macOS slider -> %.1f dB", db))
         } else {
             QBLog.log("slider sync: slider write failed")
         }
+    }
+
+    // MARK: - retry (device not yet enumerated when presence beat CoreAudio)
+
+    private func scheduleRetry() {
+        guard retryCount < 4 else { return }   // the devices listener re-triggers anyway
+        let delays: [TimeInterval] = [0.5, 1, 2, 4]
+        retryTimer = Timer.scheduledTimer(withTimeInterval: delays[retryCount], repeats: false) { [weak self] _ in
+            self?.retryTimer = nil
+            guard let self, let db = self.lastEnforcedDB else { return }
+            self.retryCount += 1
+            self.enforce(db)
+        }
+    }
+
+    private func cancelRetry() {
+        retryCount = 0
+        retryTimer?.invalidate()
+        retryTimer = nil
     }
 
     // MARK: - macOS → Quartet

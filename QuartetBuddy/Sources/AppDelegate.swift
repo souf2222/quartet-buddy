@@ -135,8 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if connected {
                 // Volume target defaults back to Main Out on every
-                // (re)connect; the didSet re-binds the macOS controls to it.
+                // (re)connect; the didSet re-binds the macOS slider to it.
                 self?.selectedOutput = .mainOut
+                // the fader may have moved while unplugged (touchscreen,
+                // Control 2) — pull a fresh tree so slider + menu are truth
+                self?.glue.requestTree()
             }
             self?.refreshMenu()
         }
@@ -213,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupOSSlider() {
         osSlider.onSliderMoved = { [weak self] db in self?.osSliderMoved(to: db) }
         osSlider.onMuteChanged = { [weak self] m in self?.osMuteChanged(to: m) }
+        osSlider.start()   // re-bind automatically when the Quartet is replugged
     }
 
     /// ± dB adjustments (Test menu items).
