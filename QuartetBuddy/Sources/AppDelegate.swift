@@ -459,18 +459,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pairItem.submenu!.addItem(withTitle: server.statusLine(i),
                                       action: nil, keyEquivalent: "").isEnabled = false
 
-            // Source ▸ system mix / copies of other pairs / off
-            let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
-            srcItem.submenu = NSMenu()
-            let currentSrc = server.source(i)
-            let srcOptions: [InsertServer.PairSource] = [.systemMix]
-                + InsertServer.PairSource.copies(excluding: i) + [.off]
-            for src in srcOptions {
-                let item = srcItem.submenu!.addItem(withTitle: src.label,
-                                                    action: #selector(pickPairSource(_:)), keyEquivalent: "")
-                item.tag = i
-                item.representedObject = src.rawValue
-                item.state = src == currentSrc ? .on : .off
+            // Source ▸ copies of other pairs' pre-plugin inputs, or Off.
+            // Out 1‑2 is the dry system mix itself (fixed source), so
+            // "Copy of Out 1‑2" == dry mix — no separate "system mix dry".
+            if i > 0 {
+                let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
+                srcItem.submenu = NSMenu()
+                let currentSrc = server.source(i)
+                let srcOptions: [InsertServer.PairSource] =
+                    [0, 1, 2, 3].filter { $0 != i }.map { InsertServer.PairSource.copy($0) } + [.off]
+                for src in srcOptions {
+                    let item = srcItem.submenu!.addItem(withTitle: src.label,
+                                                        action: #selector(pickPairSource(_:)), keyEquivalent: "")
+                    item.tag = i
+                    item.representedObject = src.rawValue
+                    item.state = src == currentSrc ? .on : .off
+                }
             }
 
             // Plugin ▸ none + all installed effects

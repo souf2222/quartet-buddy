@@ -57,12 +57,12 @@ final class InsertServer: NSObject {
 
         var label: String {
             switch self {
-            case .systemMix: return "System mix (dry)"
+            case .systemMix: return "System mix"
             case .off: return "Off (silent)"
-            case .copy0: return "Copy of Out 1‑2"
-            case .copy1: return "Copy of Out 3‑4"
-            case .copy2: return "Copy of Out 5‑6"
-            case .copy3: return "Copy of Out 7‑8"
+            case .copy0: return "Out 1‑2 (dry mix)"
+            case .copy1: return "Out 3‑4 (pre‑plugin)"
+            case .copy2: return "Out 5‑6 (pre‑plugin)"
+            case .copy3: return "Out 7‑8 (pre‑plugin)"
             }
         }
 
@@ -79,11 +79,6 @@ final class InsertServer: NSObject {
 
         static func copy(_ i: Int) -> PairSource {
             PairSource(rawValue: "copy:\(i)")!
-        }
-
-        /// Copy-source options for a pair, excluding itself.
-        static func copies(excluding i: Int) -> [PairSource] {
-            [0, 1, 2, 3].filter { $0 != i }.map { copy($0) }
         }
     }
 
@@ -113,8 +108,6 @@ final class InsertServer: NSObject {
     private var sampleRate: Double = 48000
     private var dry: StereoABL?
 
-    /// Render order (topological on copy-sources; cycles broken main-side).
-    private var renderOrder: [Int] = [0, 1, 2, 3]
 
     // MARK: - Audio-thread state
 
@@ -172,11 +165,15 @@ final class InsertServer: NSObject {
     private func loadPairs() {
         pairs = (0..<4).map { i in
             var p = Pair()
-            // v1 defaults: 1‑2 + 3‑4 hear the system mix, 5‑8 silent.
-            p.source = i < 2 ? .systemMix : .off
-            if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
-               let src = PairSource(rawValue: s) {
-                p.source = src
+            // Out 1‑2 IS the dry system mix (fixed source, pre-plugin).
+            // Other pairs default to hearing that mix.
+            p.source = i == 0 ? .systemMix : .copy0
+            if i > 0 {
+                if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
+                   let src = PairSource(rawValue: s) {
+                    // v2→v3: "system mix" on pairs 1‑3 == "copy of Out 1‑2"
+                    p.source = src == .systemMix ? .copy0 : src
+                }
             }
             p.bypass = UserDefaults.standard.bool(forKey: Self.bypassKey(i))
             // migrate the v1 single-plugin settings to pair 0
@@ -229,7 +226,7 @@ final class InsertServer: NSObject {
         }
         tapSilent = true
         loadPairs()
-        recomputeRenderOrder()
+        resolveInputs()
 
         guard let quartet = OSVolumeMirror.scanForQuartet() else {
             throw InsertError.other("Quartet not found in Core Audio")
@@ -334,52 +331,42 @@ final class InsertServer: NSObject {
         }
     }
 
-    // MARK: - Render order (copies resolved main-side)
+    // MARK: - Input resolution (main-side)
 
-    /// Pairs are rendered in dependency order (a pair copying another
-    /// renders after it). Cycles are broken here, never in the audio
-    /// thread. The pair's rendered output is used as the copy source,
-    /// i.e. copy = post-plugin ("what that pair actually outputs").
-    private func recomputeRenderOrder() {
-        var order: [Int] = []
-        var state = [Int](repeating: 0, count: 4)   // 0 new, 1 in-stack, 2 done
-        func visit(_ i: Int) -> Bool {   // false = cycle
-            switch state[i] {
-            case 2: return true
-            case 1: return false
+    /// Resolved per-pair inputs: true = hears the dry system mix
+    /// (directly or via copy chain), false = off/silent. Copies are
+    /// PRE-plugin (Out 1‑2 IS the dry mix), so plugins never depend on
+    /// each other — no render order needed. Cycles resolve to off.
+    private var inputIsDry = [true, true, true, true]
+
+    private func resolveInputs() {
+        func resolve(_ i: Int, _ stack: Set<Int>) -> Bool {
+            switch pairs[i].source {
+            case .systemMix: return true
+            case .off: return false
             default: break
             }
-            state[i] = 1
-            var ok = true
-            if let j = pairs[i].source.copyIndex, j != i {
-                ok = visit(j)
-                if !ok {
-                    QBLog.log("insert: routing cycle at pair \(i) (copy of \(j)) — pair falls back to system mix")
-                    pairs[i].source = .systemMix
-                    saveSource(i)
-                }
+            guard let j = pairs[i].source.copyIndex else { return false }
+            guard j != i, !stack.contains(j) else {
+                QBLog.log("insert: routing cycle at pair \(i) — Off")
+                return false
             }
-            state[i] = 2
-            order.append(i)
-            return ok
+            return resolve(j, stack.union([i]))
         }
-        for i in 0..<4 where state[i] == 0 { _ = visit(i) }
-        renderOrder = order.isEmpty ? [0, 1, 2, 3] : order
-        QBLog.log("insert: render order \(renderOrder)")
+        inputIsDry = (0..<4).map { i in resolve(i, [i]) }
     }
 
-    /// Menu summary, e.g. "System mix → ARC X · Copy → (dry)".
+    /// Menu summary, e.g. "System mix → ARC X" / "Out 1‑2 → dry".
     func statusLine(_ i: Int) -> String {
         let p = pairs[i]
-        switch p.source {
-        case .off: return "Off"
-        case .systemMix: return "System mix → \(p.pluginName ?? "dry")"
-        default: break
-        }
+        if p.source == .off { return "Off" }
+        let srcLabel: String
         if let j = p.source.copyIndex, j != i {
-            return "\(PairSource.copy(j).label) → \(p.pluginName ?? "dry")"
+            srcLabel = PairSource.copy(j).label
+        } else {
+            srcLabel = "System mix"
         }
-        return p.source.label
+        return "\(srcLabel) → \(p.pluginName ?? "dry")"
     }
 
     private func statusSummary() -> String {
@@ -436,28 +423,18 @@ final class InsertServer: NSObject {
             DispatchQueue.main.async { [weak self] in self?.onStateChange?() }
         }
 
-        // 2) render the 4 chains in dependency order
+        // 2) render the 4 chains — copies are PRE-plugin (Out 1‑2 IS the
+        //    dry mix), so every pair's input is the dry mix (or silence);
+        //    no inter-pair render dependencies.
         var outL: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         var outR: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
-        var silent = [false, false, false, false]
-        for i in renderOrder {
+        for i in 0..<4 {
             let p = pairs[i]
-            switch p.source {
-            case .off:
-                silent[i] = true
-            case .systemMix:
-                outL[i] = dry.buffers[0]; outR[i] = dry.buffers[1]
-            default:
-                break
-            }
-            if !silent[i], let j = p.source.copyIndex, j != i {
-                outL[i] = silent[j] ? nil : outL[j]
-                outR[i] = silent[j] ? nil : outR[j]
-                silent[i] = silent[j]
-            }
+            guard inputIsDry[i] else { continue }   // off / cycle → silent
+            outL[i] = dry.buffers[0]; outR[i] = dry.buffers[1]
             // plugin chain (in 512-frame chunks — the renderOffline path;
             // see instantiatePlugin for why manual mode at all)
-            if !silent[i], let effect = p.effect, !p.bypass,
+            if let effect = p.effect, !p.bypass,
                let engine = p.engine, let renderBuffer = p.renderBuffer, let proc = p.proc {
                 var offset = 0
                 var ok = true
@@ -493,19 +470,19 @@ final class InsertServer: NSObject {
         let outList = UnsafeMutableAudioBufferListPointer(out)
         if outList.count >= 8 {
             for i in 0..<4 {
-                if silent[i] || outL[i] == nil {
+                if let l = outL[i], let r = outR[i] {
+                    Self.copyMono(into: outList, at: i * 2, from: l, frames)
+                    Self.copyMono(into: outList, at: i * 2 + 1, from: r, frames)
+                } else {
                     Self.clear(outList[i * 2], frames)
                     Self.clear(outList[i * 2 + 1], frames)
-                } else {
-                    Self.copyMono(into: outList, at: i * 2, from: outL[i]!, frames)
-                    Self.copyMono(into: outList, at: i * 2 + 1, from: outR[i]!, frames)
                 }
             }
         } else if outList.count == 1, let interleaved = outList[0].mData?.assumingMemoryBound(to: Float.self) {
             for f in 0..<frames {
                 for i in 0..<4 {
-                    interleaved[f * 8 + i * 2] = silent[i] ? 0 : (outL[i]?[f] ?? 0)
-                    interleaved[f * 8 + i * 2 + 1] = silent[i] ? 0 : (outR[i]?[f] ?? 0)
+                    interleaved[f * 8 + i * 2] = outL[i]?[f] ?? 0
+                    interleaved[f * 8 + i * 2 + 1] = outR[i]?[f] ?? 0
                 }
             }
         }
@@ -589,11 +566,12 @@ final class InsertServer: NSObject {
         onStateChange?()
     }
 
-    /// Set a pair's routing source.
+    /// Set a pair's routing source (pair 0 is fixed: it IS the dry mix).
     func setSource(_ i: Int, _ source: PairSource) {
+        guard i > 0 else { return }
         pairs[i].source = source
         saveSource(i)
-        recomputeRenderOrder()
+        resolveInputs()
         QBLog.log("insert: pair \(i) source → \(source.label)")
         onStateChange?()
     }
