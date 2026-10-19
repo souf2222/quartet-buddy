@@ -84,7 +84,11 @@ final class InsertServer: NSObject {
 
     struct Pair {
         var source: PairSource = .systemMix
-        var bypass = false
+        /// Plugin processing enabled for this pair (bypass = raw passthrough).
+        var enabled = true
+        /// For mirrored sources: copy BEFORE the source pair's plug-in
+        /// (raw playback channels) or AFTER (its processed output).
+        var mirrorPre = true
         // runtime (main thread only)
         var engine: AVAudioEngine?
         var srcNode: AVAudioSourceNode?
@@ -159,7 +163,11 @@ final class InsertServer: NSObject {
 
     private static func sourceKey(_ i: Int) -> String { "insertPair.\(i).source" }
     private static func pluginKey(_ i: Int) -> String { "insertPair.\(i).plugin" }
-    private static func bypassKey(_ i: Int) -> String { "insertPair.\(i).bypass" }
+    private static func enabledKey(_ i: Int) -> String { "insertPair.\(i).enabled" }
+    private static func mirrorKey(_ i: Int) -> String { "insertPair.\(i).mirror" }
+    private static let bypassAllKey = "insertBypassAll"
+    /// Global override: all plug-ins bypassed (per-pair state untouched).
+    private(set) var bypassAll = UserDefaults.standard.bool(forKey: "insertBypassAll")
     private static func pluginStateKey(_ d: AudioComponentDescription, _ i: Int) -> String {
         "insertPluginState.\(descKey(d)).\(i)"
     }
@@ -185,13 +193,22 @@ final class InsertServer: NSObject {
                 if i > 0 { p.source = .systemMix }
                 UserDefaults.standard.set(p.source.rawValue, forKey: Self.sourceKey(i))
             }
-            p.bypass = UserDefaults.standard.bool(forKey: Self.bypassKey(i))
+            // enabled (v6): migrate old "bypass" (true = no processing)
+            if UserDefaults.standard.object(forKey: Self.enabledKey(i)) != nil {
+                p.enabled = UserDefaults.standard.bool(forKey: Self.enabledKey(i))
+            } else if UserDefaults.standard.object(forKey: "insertPair.\(i).bypass") != nil {
+                p.enabled = !UserDefaults.standard.bool(forKey: "insertPair.\(i).bypass")
+            }
+            // mirror point: before (default) / after the source plug-in
+            if let m = UserDefaults.standard.string(forKey: Self.mirrorKey(i)) {
+                p.mirrorPre = (m == "before")
+            }
             // migrate the v1 single-plugin settings to pair 0
             if i == 0, UserDefaults.standard.string(forKey: Self.pluginKey(0)) == nil,
                let old = UserDefaults.standard.string(forKey: "insertPluginDesc") {
                 UserDefaults.standard.set(old, forKey: Self.pluginKey(0))
                 if UserDefaults.standard.bool(forKey: "insertPluginBypass") {
-                    UserDefaults.standard.set(true, forKey: Self.bypassKey(0))
+                    UserDefaults.standard.set(false, forKey: Self.enabledKey(0))
                 }
             }
             return p
@@ -208,16 +225,33 @@ final class InsertServer: NSObject {
         if on { start() } else { stop() }
     }
 
+    private var startRetries = 0
+    private var lastStartAttempt: TimeInterval = 0
+
     func start() {
         guard !running else { return }
+        // a fresh burst of retries whenever a new event (wake, replug)
+        // triggers a start more than 5 s after the previous attempt
+        let now = Date().timeIntervalSince1970
+        if now - lastStartAttempt > 5 { startRetries = 0 }
+        lastStartAttempt = now
         do {
             try build()
+            startRetries = 0
             running = true
-            QBLog.log("insert: running (\(statusSummary()), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
+            QBLog.log("insert: running (\((0..<4).map { routeSummaryInner($0) }.joined(separator: " · ")), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
         } catch {
             QBLog.log("insert: start failed — \(error.localizedDescription)")
             teardown()
             running = false
+            // races at relaunch (previous instance still releasing the
+            // device) — retry briefly, then give up until replug
+            if startRetries < 6 {
+                startRetries += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.start()
+                }
+            }
         }
         onStateChange?()
     }
@@ -236,7 +270,7 @@ final class InsertServer: NSObject {
         }
         tapSilent = true
         loadPairs()
-        resolveInputs()
+        resolveRoutes()
 
         guard let quartet = OSVolumeMirror.scanForQuartet() else {
             throw InsertError.other("Quartet not found in Core Audio")
@@ -345,43 +379,132 @@ final class InsertServer: NSObject {
         }
     }
 
-    // MARK: - Input resolution (main-side)
+    // MARK: - Route resolution (main-side)
 
-    /// Resolved per-pair input pair: pair i's input = channels (2j, 2j+1)
-    /// of the tapped system stream, where j = inputPair[i] (nil = off).
-    ///
-    /// The tap captures the Quartet's FULL 8-channel stream — 4 stereo
-    /// pairs. "No routing" (pair hears itself, j == i) = pass-through:
-    /// whatever apps (e.g. a DAW) send to pair i's channels reaches pair
-    /// i. Copies are PRE-plugin (raw system channels of pair j).
-    /// Cycles resolve to off, never in the audio thread.
-    private var inputPair: [Int?] = [0, 1, 2, 3]
-
-    private func resolveInputs() {
-        func resolve(_ i: Int, _ stack: Set<Int>) -> Int? {
-            switch pairs[i].source {
-            case .systemMix: return i          // "No routing" = own channels
-            case .off: return nil
-            default: break
-            }
-            guard let j = pairs[i].source.copyIndex else { return nil }
-            if j == i { return i }
-            guard !stack.contains(j) else {
-                QBLog.log("insert: routing cycle at pair \(i) — Off")
-                return nil
-            }
-            return resolve(j, stack.union([i]))
-        }
-        inputPair = (0..<4).map { i in resolve(i, [i]) }
+    /// A pair's resolved input: pair `src`'s raw playback channels
+    /// (pre) or rendered output (post — mirror AFTER the source's
+    /// plug-in). `nil` = silence (Off or a routing cycle).
+    struct Route {
+        var src: Int?
+        var post = false
     }
 
-    /// Menu summary, e.g. "No routing → ARC X" / "Out 1‑2 → no plugin".
-    func statusLine(_ i: Int) -> String {
-        let p = pairs[i]
-        guard let j = inputPair[i] else { return "Off" }
-        let srcLabel = (j == i) ? "No routing" : PairSource.copy(j).label
-        let plugin = p.pluginName.map(Self.shortName) ?? "no plugin"
-        return "\(srcLabel) → \(plugin)"
+    /// The tap captures the Quartet's FULL 8-channel stream — 4 stereo
+    /// pairs. Pair i's own channels = (2i, 2i+1): whatever apps send to
+    /// pair i. Mirrors copy a source pair's raw channels (before) or
+    /// its processed output (after). Cycles resolve to silence, never
+    /// in the audio thread.
+    private(set) var routes: [Route] = [Route(src: 0), Route(src: 1), Route(src: 2), Route(src: 3)]
+
+    /// Render order (post-mirrors render after their source).
+    private var renderOrder: [Int] = [0, 1, 2, 3]
+
+    private func resolveRoutes() {
+        var routes = [Route?](repeating: nil, count: 4)
+        var order: [Int] = []
+        var state = [Int](repeating: 0, count: 4)   // 0 new, 1 in-stack, 2 done
+        func resolve(_ i: Int, _ stack: Set<Int>) -> Route {
+            if let r = routes[i] { return r }
+            var r = Route(src: nil)
+            switch pairs[i].source {
+            case .off:
+                break
+            case .systemMix:
+                r = Route(src: i)                       // own playback channels
+            default:
+                guard let j = pairs[i].source.copyIndex else { break }
+                if j == i {
+                    r = Route(src: i)                   // self == own channels
+                } else if pairs[i].mirrorPre {
+                    r = Route(src: j)                    // source's raw channels
+                } else {
+                    // AFTER the source's plug-in: the source's rendered
+                    // output — source renders first (order), silence flows
+                    if state[j] == 1 {
+                        QBLog.log("insert: routing cycle at pair \(i) — silence")
+                        routes[i] = Route(src: nil)
+                        return routes[i]!
+                    }
+                    let rj = resolve(j, stack.union([i]))
+                    r = Route(src: rj.src, post: rj.src != nil)
+                }
+            }
+            routes[i] = r
+            return r
+        }
+        func orderVisit(_ i: Int) -> Bool {   // false = cycle
+            switch state[i] {
+            case 2: return true
+            case 1: return false
+            default: break
+            }
+            state[i] = 1
+            var ok = true
+            if pairs[i].source != .off, let j = pairs[i].source.copyIndex,
+               j != i, !pairs[i].mirrorPre, j != i {
+                ok = orderVisit(j)
+            }
+            state[i] = 2
+            order.append(i)
+            return ok
+        }
+        for i in 0..<4 { _ = resolve(i, [i]) }
+        for i in 0..<4 where order.firstIndex(of: i) == nil { order.append(i) }
+        // stable, dependency-first order:
+        var ordered: [Int] = []
+        var seen = Set<Int>()
+        func add(_ i: Int) {
+            if seen.contains(i) { return }
+            seen.insert(i)
+            if pairs[i].source != .off, let j = pairs[i].source.copyIndex,
+               j != i, !pairs[i].mirrorPre { add(j) }
+            ordered.append(i)
+        }
+        for i in 0..<4 { add(i) }
+        self.routes = routes.map { $0 ?? Route(src: nil) }
+        renderOrder = ordered
+    }
+
+    /// Label for a source option in pair i's picker.
+    static func sourceLabel(_ src: PairSource, for i: Int) -> String {
+        if src == .off { return "Silence" }
+        if src == .systemMix { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
+        if let j = src.copyIndex { return "Mirror Out \(2 * j + 1)–\(2 * j + 2)" }
+        return "Silence"
+    }
+
+    /// Source options for pair i (own playback + mirrors + silence).
+    static func sourceOptions(_ i: Int) -> [PairSource] {
+        [.systemMix] + [0, 1, 2, 3].filter { $0 != i }.map { PairSource.copy($0) } + [.off]
+    }
+
+    /// Human route summary (mirrors label with before/after).
+    func routeSummary(_ i: Int) -> String {
+        guard let src = routes[i].src else { return "Silence" }
+        if src == i { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
+        let srcName = "Out \(2 * src + 1)–\(2 * src + 2)"
+        let point = pairs[i].mirrorPre ? "before" : "after"
+        return "Mirror \(srcName) (\(point) its plug-in)"
+    }
+
+    /// Signal-flow line for the Outputs window, e.g.
+    /// "Playback 1–2 → ARC X → Out 1–2" /
+    /// "Playback 1–2 → Out 1–2 plug-in → Out 3–4".
+    func flowLine(_ i: Int) -> String {
+        guard let src = routes[i].src else { return "Silence → Out \(2 * i + 1)–\(2 * i + 2)" }
+        var parts: [String] = []
+        if routes[i].post {
+            let srcPlugin = pairs[src].pluginName.map(Self.shortName) ?? "no plug-in"
+            parts.append("Playback \(2 * src + 1)–\(2 * src + 2)")
+            parts.append("\(srcPlugin) (Out \(2 * src + 1)–\(2 * src + 2))")
+        } else {
+            parts.append("Playback \(2 * src + 1)–\(2 * src + 2)")
+        }
+        if let pl = pairs[i].pluginName, pairs[i].enabled, !bypassAll {
+            parts.append(Self.shortName(pl))
+        }
+        parts.append("Out \(2 * i + 1)–\(2 * i + 2)")
+        return parts.joined(separator: " → ")
     }
 
     /// "IK Multimedia: ARC X" → "ARC X" (unchanged when no company).
@@ -390,9 +513,14 @@ final class InsertServer: NSObject {
         return name
     }
 
-    private func statusSummary() -> String {
-        (0..<4).map { "\(Self.pairNames[$0]): \(statusLine($0))" }.joined(separator: " · ")
+    private func routeSummaryInner(_ i: Int) -> String {
+        "\(Self.pairNames[i]): \(routeSummary(i))"
     }
+
+    func mirrorPre(_ i: Int) -> Bool { pairs[i].mirrorPre }
+    func enabled(_ i: Int) -> Bool { pairs[i].enabled }
+    /// Current device sample rate (48000 by default before start).
+    func currentRate() -> Double { sampleRate }
 
     // MARK: - The IO cycle
 
@@ -448,18 +576,24 @@ final class InsertServer: NSObject {
             DispatchQueue.main.async { [weak self] in self?.onStateChange?() }
         }
 
-        // 2) render the 4 chains — each pair's input = its resolved pair's
-        //    channels (pre-plugin), or silence when off/cycle.
+        // 2) render the 4 chains in dependency order — each pair's input
+        //    = its route: the source pair's raw playback channels (pre)
+        //    or its rendered output (post-mirror), or silence.
         var outL: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         var outR: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
-        for i in 0..<4 {
+        for i in renderOrder {
             let p = pairs[i]
-            guard let src = inputPair[i] else { continue }   // off / cycle → silent
-            outL[i] = sys.buffers[src * 2]
-            outR[i] = sys.buffers[src * 2 + 1]
+            let route = routes[i]
+            guard let src = route.src else { continue }   // off / cycle → silent
+            if route.post, let l = outL[src], let r = outR[src] {
+                outL[i] = l; outR[i] = r       // mirror AFTER source's plug-in
+            } else {
+                outL[i] = sys.buffers[src * 2]  // raw playback channels
+                outR[i] = sys.buffers[src * 2 + 1]
+            }
             // plugin chain (in 512-frame chunks — the renderOffline path;
             // see instantiatePlugin for why manual mode at all)
-            if let effect = p.effect, !p.bypass,
+            if let effect = p.effect, p.enabled, !bypassAll,
                let engine = p.engine, let renderBuffer = p.renderBuffer, let proc = p.proc {
                 var offset = 0
                 var ok = true
@@ -594,27 +728,47 @@ final class InsertServer: NSObject {
         onStateChange?()
     }
 
-    /// Set a pair's routing source (pair 0 is fixed: it IS the dry mix).
+    /// Set a pair's routing source (any pair; default = its own
+    /// playback channels).
     func setSource(_ i: Int, _ source: PairSource) {
-        guard i > 0 else { return }
         pairs[i].source = source
         saveSource(i)
-        resolveInputs()
+        resolveRoutes()
         QBLog.log("insert: pair \(i) source → \(source.label)")
         onStateChange?()
     }
 
-    func setBypass(_ i: Int, _ on: Bool) {
-        pairs[i].bypass = on
-        UserDefaults.standard.set(on, forKey: Self.bypassKey(i))
-        pairs[i].effect?.bypass = on
-        QBLog.log("insert: pair \(i) bypass \(on ? "on" : "off")")
+    /// Enable/disable pair i's plug-in processing (raw passthrough
+    /// when disabled — the plug-in stays loaded).
+    func setEnabled(_ i: Int, _ on: Bool) {
+        pairs[i].enabled = on
+        UserDefaults.standard.set(on, forKey: Self.enabledKey(i))
+        pairs[i].effect?.bypass = !on || bypassAll
+        QBLog.log("insert: pair \(i) processing \(on ? "on" : "off")")
+        onStateChange?()
+    }
+
+    /// Global override: bypass every plug-in (per-pair state untouched).
+    func setBypassAll(_ on: Bool) {
+        bypassAll = on
+        UserDefaults.standard.set(on, forKey: Self.bypassAllKey)
+        for i in 0..<4 { pairs[i].effect?.bypass = on || !pairs[i].enabled }
+        QBLog.log("insert: bypass all plug-ins \(on ? "on" : "off")")
+        onStateChange?()
+    }
+
+    /// Mirror point for pair i: before/after the source pair's plug-in.
+    func setMirrorPre(_ i: Int, _ pre: Bool) {
+        pairs[i].mirrorPre = pre
+        UserDefaults.standard.set(pre ? "before" : "after", forKey: Self.mirrorKey(i))
+        resolveRoutes()
+        QBLog.log("insert: pair \(i) mirror \(pre ? "before" : "after") source plug-in")
         onStateChange?()
     }
 
     func pluginName(_ i: Int) -> String? { pairs[i].pluginName }
     func source(_ i: Int) -> PairSource { pairs[i].source }
-    func bypass(_ i: Int) -> Bool { pairs[i].bypass }
+    func bypass(_ i: Int) -> Bool { !pairs[i].enabled }
 
     private func instantiatePlugin(_ i: Int, _ desc: AudioComponentDescription) throws {
         let effect = AVAudioUnitEffect(audioComponentDescription: desc)
@@ -657,7 +811,7 @@ final class InsertServer: NSObject {
         engine.prepare()
         try engine.start()
 
-        effect.bypass = pairs[i].bypass
+        effect.bypass = !pairs[i].enabled || bypassAll
 
         let proc = StereoABL(frames: 4096)
         pairs[i].engine = engine

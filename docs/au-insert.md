@@ -27,52 +27,43 @@ private aggregate device (master: Quartet, taps: [tap])
 
 ## Routing model
 
-The Quartet presents **one 8-channel stream** to macOS = 4 stereo pairs.
-The tap captures the **full 8 channels**; each pair i's *own* system
-audio is channels (2i, 2i+1) — i.e. whatever apps send to that pair
-(a DAW addressing "Out 3‑4" lands exactly there).
+The Quartet presents macOS **one 8-channel stream** = 4 stereo pairs.
+The tap captures the **full 8 channels**; pair i's *own* playback audio
+is channels (2i, 2i+1) — a DAW addressing "Out 3‑4" lands exactly there.
 
-Each pair picks a **Source**:
+Each pair picks a **Source** (Outputs & Plug-ins window):
 
-- **No routing** (default) — the pair passes through *its own* system
-  channels (pair i ← channels 2i, 2i+1). A DAW outputting to Out 3‑4
-  comes out of Out 3‑4, plugin and all.
-- **Out X‑Y** — that pair's channels **pre-plugin** (the raw system
-  audio of pair X‑Y). Cross-pair copies resolve to the *raw* channels,
-  never another pair's processed output.
-- **Off (silent)** — the pair outputs silence.
+- **Playback i–2** (default) — the pair passes through **its own**
+  playback channels.
+- **Mirror Out X–Y** — that pair's signal. Mirror point, per pair:
+  **Before Source Plug-in** (raw playback channels — independent
+  correction per destination) or **After Source Plug-in** (the source's
+  processed output — the destination inherits its processing, then may
+  apply its own plug-in).
+- **Silence**.
 
-Routing cycles (A copies B, B copies A) resolve to Off, detected and
-logged on the main thread — never in the audio thread. Resolution
-(`resolveInputs`) runs main-side; in the IO cycle every pair's input is
-just a slice of the deinterleaved tap, so the 4 plugin engines render
-fully independently.
+Routing cycles resolve to silence, detected and logged main-side —
+never in the audio thread. `resolveRoutes` computes each pair's route
+(source pair + pre/post) and the render order (post-mirrors render
+after their source); in the IO cycle every pair's input is a slice of
+the deinterleaved tap or another pair's rendered output.
 
-Routing cycles (A copies B, B copies A) resolve to Off, detected and
-logged on the main thread — never in the audio thread. Chains are
-resolved main-side (`resolveInputs`); in the IO cycle every pair's
-input is simply the dry mix or silence, so the 4 plugin engines render
-fully independently.
+## Menu & windows
 
-## Menu
+- **Menubar** (quick actions only): Control Volume target, live
+  speaker/headphone levels, Mute Speakers/Headphones, Dim Speakers,
+  Start/Stop Talkback, **Bypass All Plug-ins**, Outputs & Plug-ins…,
+  Settings…, Quit.
+- **Outputs & Plug-ins window**: one row per pair
+  (Audio Source / Plug-in / Enabled) with a details pane —
+  route summary, mirror point, Open Editor…, signal flow
+  ("Playback 1–2 → ARC X → Out 3‑4" — double processing is visible).
+- **Settings window**: General (launch at login), Talkback (momentary),
+  Shortcuts & MIDI (hotkey recording, MIDI learn), Audio (latency).
 
-`AU Insert` section:
-
-- **Insert On/Off** — master toggle (persisted; `insertEnabled`)
-- **Latency ▸** — IO buffer size 32…512 frames (32 = 0.67 ms @ 48 kHz;
-  persisted)
-- **⚠️ Tap silent** — warning + link to System Settings when macOS
-  denies the System Audio Recording permission (it silences taps
-  instead of failing them)
-- **One submenu per stereo pair**, e.g.
-  `Out 1‑2 · Main — System mix → ARC X`:
-  - live status line
-  - **Source ▸** (pairs 2‑4 only — Out 1‑2 is fixed)
-  - **Plugin ▸** — None (dry) + every installed AU effect
-  - **Bypass Plugin** / **Open Plugin UI…** (when a plugin is set)
-
-Per-pair persistence: `insertPair.N.source`, `.plugin`, `.bypass`,
-and the plugin's ClassInfo state per pair.
+Per-pair persistence: `insertPair.N.source` (`mix`/`copy:j`/`off`),
+`.plugin`, `.enabled`, `.mirror` (`before`/`after`), plus per-plug-in
+ClassInfo state. Global: `insertBypassAll`.
 
 ## Plugin hosting
 

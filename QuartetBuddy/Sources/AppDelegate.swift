@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var talkbackOn = false
     var talkbackMomentary = false
+    /// Hardware dim on the speakers (Out 1‑2), synced from the glue tree.
+    var speakerDim = false
     /// True once a tree has given us real hardware gain values (never
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
@@ -126,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupOSSlider()
         setupMIDI()
         setupInsert()
+        setupSettingsWindow()
         if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 QBLog.log("insert: AUTO-UI debug trigger")
@@ -177,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
                 self.gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
                 self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
+                self.speakerDim = (GlueClient.intProp(hw0, "dim") ?? 0) == 1
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
                 self.gainKnown = true
                 self.syncMacSlider(force: true)
@@ -201,6 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.muted[.mainOut] = event.value.first == 1
             case PathIds.hwout1Mute where event.tag == 3:
                 self.muted[.headphones] = event.value.first == 1
+            case PathIds.hwout0Dim where event.tag == 3:
+                self.speakerDim = event.value.first == 1
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
             default:
@@ -333,6 +339,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.menuRefreshPending = false
             self.rebuildMenu()
+            self.outputsWindow.refresh()
+            self.settingsWindow.refresh()
         }
     }
 
@@ -350,211 +358,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.toolTip =
             "Main Out \(String(format: "%.1f", mainGain)) dB · HP \(String(format: "%.1f", hpGain)) dB · Talkback \(talkbackOn ? "on" : "off")"
 
-        // header
-        var headerTitle = "Quartet Buddy"
-        if !quartetPresence.isConnected {
-            headerTitle += " — Quartet Not Connected"
-        } else if glue.state != .connected {
-            headerTitle += " — Glue Offline"
-        }
-        menu.addItem(sectionHeader(headerTitle))
+        // header — name + live connection state
+        menu.addItem(sectionHeader("Quartet Buddy"))
+        let stateLine: String
+        if !quartetPresence.isConnected { stateLine = "Quartet Not Connected" }
+        else if glue.state != .connected { stateLine = "Glue Offline" }
+        else { stateLine = "Quartet Connected" }
+        let stateItem = menu.addItem(withTitle: stateLine, action: nil, keyEquivalent: "")
+        stateItem.isEnabled = false
 
-        // output target (with live levels)
-        let outItem = menu.addItem(withTitle: "Volume Target", action: nil, keyEquivalent: "")
-        outItem.submenu = NSMenu()
+        menu.addItem(.separator())
+
+        // Control Volume ▸ Speakers / Headphones (the fader binding target)
+        let volItem = menu.addItem(withTitle: "Control Volume", action: nil, keyEquivalent: "")
+        volItem.submenu = NSMenu()
         for target in OutputTarget.allCases {
-            let g = gain[target] ?? 0
-            let isMuted = muted[target] ?? false
-            let title = String(format: "%@ — %.1f dB%@", target.rawValue, g, isMuted ? "  muted" : "")
-            let item = outItem.submenu!.addItem(withTitle: title,
-                                                action: #selector(pickOutput(_:)),
-                                                keyEquivalent: "")
+            let item = volItem.submenu!.addItem(withTitle: target.rawValue,
+                                                action: #selector(pickOutput(_:)), keyEquivalent: "")
             item.representedObject = target.rawValue
             item.state = target == selectedOutput ? .on : .off
         }
 
-        // compact level line
-        if quartetPresence.isConnected {
-            menu.addItem(withTitle: String(format: "Main %.1f dB  ·  HP %.1f dB", mainGain, hpGain),
-                         action: nil, keyEquivalent: "").isEnabled = false
-        }
-
-        menu.addItem(.separator())
-
-        // talkback section
-        menu.addItem(sectionHeader("Talkback"))
-        let tbAction = menu.addItem(withTitle: talkbackOn ? "Turn Talkback Off" : "Turn Talkback On",
-                                    action: #selector(talkbackNow(_:)), keyEquivalent: "")
-        applyKeyEquivalent(tbAction, combo: talkbackHotKeys.current)
-
-        let hk = talkbackHotKeys.current
-        menu.addItem(withTitle: hk.map({ "Talkback Hotkey: \($0.displayString)…" }) ?? "Set Talkback Hotkey…",
-                     action: #selector(recordHotKey(_:)), keyEquivalent: "")
-
-        let sw = switchHotKeys.current
-        menu.addItem(withTitle: sw.map({ "Switch Output Hotkey: \($0.displayString)…" }) ?? "Set Switch Output Hotkey…",
-                     action: #selector(recordSwitchHotKey(_:)), keyEquivalent: "")
-
-        let midiMenu = menu.addItem(withTitle: "MIDI Button", action: nil, keyEquivalent: "")
-        midiMenu.submenu = NSMenu()
-        if learningMidi {
-            midiMenu.submenu!.addItem(withTitle: "Learning… press a button on your keyboard",
-                                      action: nil, keyEquivalent: "").isEnabled = false
-        } else {
-            midiMenu.submenu!.addItem(withTitle: "Learn…",
-                                      action: #selector(learnMIDI(_:)), keyEquivalent: "")
-        }
-        if let t = midiTrigger {
-            let trig = midiMenu.submenu!.addItem(
-                withTitle: String(format: "Trigger: %@ %d · Ch %d", t.kind == .note ? "Note" : "CC", t.number, t.channel + 1),
-                action: nil, keyEquivalent: "")
-            trig.isEnabled = false
-            midiMenu.submenu!.addItem(withTitle: "Clear Trigger",
-                                      action: #selector(clearMidiTrigger(_:)), keyEquivalent: "")
-            let mode = midiMenu.submenu!.addItem(
-                withTitle: "Mode: \(talkbackMomentary ? "Momentary" : "Toggle")",
-                action: #selector(toggleMidiMode(_:)), keyEquivalent: "")
-            mode.state = .on
-        }
-
-        menu.addItem(.separator())
-
-        // AU insert section
+        // live levels, one line each
         let server = InsertServer.shared
-        menu.addItem(sectionHeader("AU Insert"))
+        let mainMuted = muted[.mainOut] ?? false
+        let hpMuted = muted[.headphones] ?? false
+        menu.addItem(withTitle: "Speakers\(String(format: "  %.1f dB", mainGain))\(mainMuted ? "  (muted)" : "")",
+                      action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "Headphones\(String(format: "  %.1f dB", hpGain))\(hpMuted ? "  (muted)" : "")",
+                      action: nil, keyEquivalent: "").isEnabled = false
 
-        // quick access: Out 1‑2's plugin editor, right under the header
-        if let mainPlugin = server.pluginName(0) {
-            let ui = menu.addItem(withTitle: "Open \(InsertServer.shortName(mainPlugin))…",
-                                  action: #selector(openMainPluginUI(_:)), keyEquivalent: "")
-            ui.tag = 0
+        menu.addItem(.separator())
+
+        // mutes + dim (hardware, via ApogeeGlue)
+        let muteMain = menu.addItem(withTitle: "Mute Speakers", action: #selector(toggleMuteTarget(_:)), keyEquivalent: "")
+        muteMain.representedObject = OutputTarget.mainOut.rawValue
+        muteMain.state = mainMuted ? .on : .off
+        let muteHP = menu.addItem(withTitle: "Mute Headphones", action: #selector(toggleMuteTarget(_:)), keyEquivalent: "")
+        muteHP.representedObject = OutputTarget.headphones.rawValue
+        muteHP.state = hpMuted ? .on : .off
+        let dimItem = menu.addItem(withTitle: "Dim Speakers", action: #selector(toggleDim(_:)), keyEquivalent: "")
+        dimItem.state = speakerDim ? .on : .off
+
+        menu.addItem(.separator())
+
+        // talkback + global plug-in bypass
+        let tbTitle = talkbackOn ? "Stop Talkback" : "Start Talkback"
+        let tbItem = menu.addItem(withTitle: tbTitle, action: #selector(talkbackNow(_:)), keyEquivalent: "")
+        applyKeyEquivalent(tbItem, combo: talkbackHotKeys.current)
+        let bypassItem = menu.addItem(withTitle: "Bypass All Plug-ins",
+                                       action: #selector(toggleBypassAll(_:)), keyEquivalent: "")
+        bypassItem.state = server.bypassAll ? .on : .off
+
+        menu.addItem(.separator())
+
+        // windows
+        menu.addItem(withTitle: "Outputs & Plug-ins…", action: #selector(openOutputs(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
+
+        // warnings (only when something needs attention)
+        if glue.state != .connected {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Reconnect to ApogeeGlue",
+                          action: #selector(reconnect(_:)), keyEquivalent: "")
         }
-
-        // master toggle — title shows live state
-        let insertItem = menu.addItem(
-            withTitle: server.running ? "Insert On" : "Insert Off",
-            action: #selector(toggleInsert(_:)), keyEquivalent: "")
-        insertItem.state = server.running ? .on : .off
-
-        if server.running, server.tapSilent {
+        if server.running && server.tapSilent {
+            menu.addItem(.separator())
             menu.addItem(withTitle: "⚠️ Tap silent — allow Quartet Buddy in",
                           action: nil, keyEquivalent: "").isEnabled = false
             menu.addItem(withTitle: "System Settings → Privacy → System Audio Recording",
                           action: #selector(openPrivacySettings(_:)), keyEquivalent: "")
         }
 
-        // latency submenu
-        let bufItem = menu.addItem(withTitle: "Latency", action: nil, keyEquivalent: "")
-        bufItem.submenu = NSMenu()
-        let currentBuf = InsertServer.savedBufferFrames()
-        for choice in InsertServer.bufferChoices {
-            let item = bufItem.submenu!.addItem(withTitle: choice.label,
-                                                action: #selector(pickInsertBuffer(_:)), keyEquivalent: "")
-            item.representedObject = choice.frames
-            item.state = choice.frames == currentBuf ? .on : .off
-        }
-
         menu.addItem(.separator())
-
-        // one submenu per stereo pair: source routing + plugin + controls
-        for i in 0..<4 {
-            let pairTitle = "\(InsertServer.pairNames[i]) → \(server.statusLine(i))"
-            let pairItem = menu.addItem(withTitle: pairTitle, action: nil, keyEquivalent: "")
-            pairItem.submenu = NSMenu()
-
-            // live status line
-            pairItem.submenu!.addItem(withTitle: server.statusLine(i),
-                                      action: nil, keyEquivalent: "").isEnabled = false
-
-            // Source ▸ copies of other pairs' pre-plugin inputs, or Off.
-            // Out 1‑2 is the dry system mix itself (fixed source), so
-            // "Copy of Out 1‑2" == dry mix — no separate "system mix dry".
-            if i > 0 {
-                let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
-                srcItem.submenu = NSMenu()
-                let currentSrc = server.source(i)
-                // No routing (= the dry mix directly) first, then the
-                // other pairs, then Off
-                let srcOptions: [InsertServer.PairSource] = [.systemMix]
-                    + [0, 1, 2, 3].filter { $0 != i }.map { InsertServer.PairSource.copy($0) }
-                    + [.off]
-                for src in srcOptions {
-                    let item = srcItem.submenu!.addItem(withTitle: src.label,
-                                                        action: #selector(pickPairSource(_:)), keyEquivalent: "")
-                    item.tag = i
-                    item.representedObject = src.rawValue
-                    item.state = src == currentSrc ? .on : .off
-                }
-            }
-
-            // Plugin ▸ none + all installed effects
-            let plugItem = pairItem.submenu!.addItem(withTitle: "Plugin", action: nil, keyEquivalent: "")
-            plugItem.submenu = NSMenu()
-            let noneItem = plugItem.submenu!.addItem(withTitle: "None",
-                                                     action: #selector(pickPairPlugin(_:)), keyEquivalent: "")
-            noneItem.tag = i
-            noneItem.representedObject = ""
-            noneItem.state = server.pluginName(i) == nil ? .on : .off
-            let currentPlug = UserDefaults.standard.string(forKey: "insertPair.\(i).plugin")
-            for (name, desc) in InsertServer.listPlugins() {
-                let item = plugItem.submenu!.addItem(withTitle: name,
-                                                     action: #selector(pickPairPlugin(_:)), keyEquivalent: "")
-                item.tag = i
-                item.representedObject = InsertServer.descKey(desc)
-                item.state = server.pluginName(i) != nil && InsertServer.descKey(desc) == currentPlug ? .on : .off
-            }
-
-            // per-pair bypass + editor
-            if server.pluginName(i) != nil {
-                let bypass = pairItem.submenu!.addItem(
-                    withTitle: "Bypass Plugin",
-                    action: #selector(togglePairBypass(_:)), keyEquivalent: "")
-                bypass.tag = i
-                bypass.state = server.bypass(i) ? .on : .off
-                let ui = pairItem.submenu!.addItem(
-                    withTitle: "Open Plugin UI…",
-                    action: #selector(openPairUI(_:)), keyEquivalent: "")
-                ui.tag = i
-            }
-        }
-
-        menu.addItem(.separator())
-        if glue.state != .connected {
-            menu.addItem(withTitle: "Reconnect to ApogeeGlue",
-                         action: #selector(reconnect(_:)), keyEquivalent: "")
-        }
-
-        menu.addItem(.separator())
-
-        // advanced
-        let adv = menu.addItem(withTitle: "Advanced", action: nil, keyEquivalent: "")
-        adv.submenu = NSMenu()
-        adv.submenu!.addItem(withTitle: "Volume +1 dB (Test)",
-                             action: #selector(testUp(_:)), keyEquivalent: "")
-        adv.submenu!.addItem(withTitle: "Volume −1 dB (Test)",
-                             action: #selector(testDown(_:)), keyEquivalent: "")
-        adv.submenu!.addItem(withTitle: "Open Debug Log…",
-                             action: #selector(openLog(_:)), keyEquivalent: "")
-
-        menu.addItem(.separator())
-
-        // launch at login
-        let loginStatus = SMAppService.mainApp.status
-        let loginTitle: String
-        switch loginStatus {
-        case .enabled:
-            loginTitle = "Launch at Login"
-        case .requiresApproval:
-            loginTitle = "Launch at Login (approve in System Settings)"
-        default:
-            loginTitle = "Launch at Login"
-        }
-        let loginItem = menu.addItem(withTitle: loginTitle,
-                                     action: #selector(toggleLaunchAtLogin(_:)),
-                                     keyEquivalent: "")
-        loginItem.state = loginStatus == .enabled ? .on : .off
-
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Quartet Buddy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
 
     // MARK: Talkback indicator (animated red dot over the icon)
@@ -717,55 +594,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func testUp(_ sender: NSMenuItem) {
-        QBLog.log("test: volume +1 dB")
-        adjustGain(by: 1.0)
-    }
+    // MARK: - Mute / Dim (hardware, via ApogeeGlue)
 
-    @objc private func testDown(_ sender: NSMenuItem) {
-        QBLog.log("test: volume -1 dB")
-        adjustGain(by: -1.0)
-    }
-
-    // MARK: AU insert
-
-    @objc private func toggleInsert(_ sender: NSMenuItem) {
-        let on = !InsertServer.shared.running
-        UserDefaults.standard.set(on, forKey: "insertEnabled")
-        InsertServer.shared.setRunning(on)
-    }
-
-    /// Pair submenu actions — `sender.tag` is the pair index.
-    @objc private func pickPairSource(_ sender: NSMenuItem) {
+    /// Hardware mute per output target (Speakers / Headphones).
+    @objc private func toggleMuteTarget(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
-              let src = InsertServer.PairSource(rawValue: raw) else { return }
-        InsertServer.shared.setSource(sender.tag, src)
+              let t = OutputTarget(rawValue: raw) else { return }
+        let new = !(muted[t] ?? false)
+        QBLog.log("mute: \(t.rawValue) \(new ? "on" : "off")")
+        glue.setBool(id: t.muteId, new)
+        muted[t] = new
+        refreshMenu()
     }
 
-    @objc private func pickPairPlugin(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        let desc = key.isEmpty ? nil
-            : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
-        InsertServer.shared.setPlugin(sender.tag, desc)
+    /// Hardware dim on the speakers (Out 1‑2), via the glue.
+    @objc private func toggleDim(_ sender: NSMenuItem) {
+        let new = !speakerDim
+        QBLog.log("dim: speakers \(new ? "on" : "off")")
+        glue.setBool(id: PathIds.hwout0Dim, new)
+        speakerDim = new
+        refreshMenu()
     }
 
-    @objc private func togglePairBypass(_ sender: NSMenuItem) {
-        let i = sender.tag
-        InsertServer.shared.setBypass(i, !InsertServer.shared.bypass(i))
+    // MARK: - Windows
+
+    private lazy var outputsWindow = OutputsWindowController()
+    private lazy var settingsWindow = SettingsWindowController()
+
+    @objc private func openOutputs(_ sender: NSMenuItem) {
+        outputsWindow.show()
     }
 
-    @objc private func openPairUI(_ sender: NSMenuItem) {
-        InsertServer.shared.showPluginUI(sender.tag)
+    @objc private func openSettings(_ sender: NSMenuItem) {
+        settingsWindow.show()
     }
 
-    /// Quick access: Out 1‑2 (Main) plugin editor.
-    @objc private func openMainPluginUI(_ sender: NSMenuItem) {
-        InsertServer.shared.showPluginUI(0)
+    /// Wire the Settings window's callbacks to this delegate's plumbing.
+    private func setupSettingsWindow() {
+        settingsWindow.onTalkbackHotkey = { [weak self] combo in
+            guard let self, let combo else { return }
+            self.talkbackHotKeys.register(combo)
+            if let data = try? JSONEncoder().encode(combo) {
+                UserDefaults.standard.set(data, forKey: "hotkeyCombo")
+            }
+        }
+        settingsWindow.onSwitchHotkey = { [weak self] combo in
+            guard let self, let combo else { return }
+            self.switchHotKeys.register(combo)
+            if let data = try? JSONEncoder().encode(combo) {
+                UserDefaults.standard.set(data, forKey: "hotkeySwitchCombo")
+            }
+        }
+        settingsWindow.onMidiLearn = { [weak self] in
+            self?.learningMidi = true
+            self?.refreshMenu()
+        }
+        settingsWindow.onMidiClear = { [weak self] in
+            self?.midiTrigger = nil
+            UserDefaults.standard.removeObject(forKey: "midiTrigger")
+        }
+        NotificationCenter.default.addObserver(forName: .init("qb.momentaryChanged"),
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.talkbackMomentary = UserDefaults.standard.bool(forKey: "momentary")
+        }
     }
 
-    @objc private func pickInsertBuffer(_ sender: NSMenuItem) {
-        guard let frames = sender.representedObject as? Int else { return }
-        InsertServer.shared.setBufferFrames(frames)
+    // MARK: - Insert shortcuts
+
+    @objc private func toggleBypassAll(_ sender: NSMenuItem) {
+        InsertServer.shared.setBypassAll(!InsertServer.shared.bypassAll)
     }
 
     @objc private func openPrivacySettings(_ sender: NSMenuItem) {
