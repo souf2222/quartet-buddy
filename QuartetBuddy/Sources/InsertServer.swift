@@ -140,11 +140,11 @@ final class InsertServer: NSObject {
 
     // MARK: - Buffer size (latency)
 
-    /// Supported IO slice sizes (frames @ 48 kHz → ms). 15 is the
-    /// Quartet driver's hard floor (probed: the HAL clamps anything
-    /// lower to 15) — fixed safety offsets (~0.3 ms out) remain.
+    /// Supported IO slice sizes (frames @ 48 kHz → ms). 16 sits just
+    /// above the Quartet driver's hard floor (15 — the HAL clamps
+    /// anything lower); fixed safety offsets (~0.3 ms out) remain.
     static let bufferChoices: [(frames: Int, label: String)] = [
-        (15, "15 — 0.3 ms (minimum)"),
+        (16, "16 — 0.3 ms (minimum)"),
         (32, "32 — 0.7 ms"),
         (64, "64 — 1.3 ms"),
         (128, "128 — 2.7 ms"),
