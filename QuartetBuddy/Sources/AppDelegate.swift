@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 QBLog.log("insert: AUTO-UI debug trigger")
-                InsertServer.shared.showPluginUI()
+                InsertServer.shared.showPluginUI(0)
             }
         }
         deviceMonitor.start()
@@ -422,51 +422,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // AU insert section
         let server = InsertServer.shared
         menu.addItem(sectionHeader("AU Insert"))
-        let insertItem = menu.addItem(withTitle: server.running ? "Insert On" : "Insert Off",
-                                      action: #selector(toggleInsert(_:)), keyEquivalent: "")
+
+        // master toggle — title shows live state
+        let insertItem = menu.addItem(
+            withTitle: server.running ? "Insert On" : "Insert Off",
+            action: #selector(toggleInsert(_:)), keyEquivalent: "")
         insertItem.state = server.running ? .on : .off
 
-        let plugItem = menu.addItem(withTitle: "Outs 1‑2 Plugin", action: nil, keyEquivalent: "")
-        plugItem.submenu = NSMenu()
-        let none = plugItem.submenu!.addItem(withTitle: "None (dry)",
-                                              action: #selector(pickInsertPlugin(_:)), keyEquivalent: "")
-        none.representedObject = ""
-        none.state = server.pluginName == nil ? .on : .off
-        for (name, desc) in InsertServer.listPlugins() {
-            let item = plugItem.submenu!.addItem(withTitle: name,
-                                                 action: #selector(pickInsertPlugin(_:)), keyEquivalent: "")
-            item.representedObject = InsertServer.descKey(desc)
-            item.state = server.pluginName != nil && InsertServer.descKey(desc) == UserDefaults.standard.string(forKey: "insertPluginDesc") ? .on : .off
+        if server.running, server.tapSilent {
+            menu.addItem(withTitle: "⚠️ Tap silent — allow Quartet Buddy in",
+                          action: nil, keyEquivalent: "").isEnabled = false
+            menu.addItem(withTitle: "System Settings → Privacy → System Audio Recording",
+                          action: #selector(openPrivacySettings(_:)), keyEquivalent: "")
         }
 
-        if server.pluginName != nil {
-            let bypass = menu.addItem(withTitle: "Bypass Plugin",
-                                       action: #selector(toggleInsertBypass(_:)), keyEquivalent: "")
-            bypass.state = server.pluginBypass ? .on : .off
-            menu.addItem(withTitle: "Open Plugin UI…",
-                         action: #selector(openInsertUI(_:)), keyEquivalent: "")
-        }
-        // latency (buffer size)
+        // latency submenu
         let bufItem = menu.addItem(withTitle: "Latency", action: nil, keyEquivalent: "")
         bufItem.submenu = NSMenu()
-        let current = InsertServer.savedBufferFrames()
+        let currentBuf = InsertServer.savedBufferFrames()
         for choice in InsertServer.bufferChoices {
             let item = bufItem.submenu!.addItem(withTitle: choice.label,
                                                 action: #selector(pickInsertBuffer(_:)), keyEquivalent: "")
             item.representedObject = choice.frames
-            item.state = choice.frames == current ? .on : .off
+            item.state = choice.frames == currentBuf ? .on : .off
         }
-        if server.running {
-            if server.tapSilent {
-                menu.addItem(withTitle: "⚠️ Tap silent — allow Quartet Buddy in",
-                             action: nil, keyEquivalent: "").isEnabled = false
-                let fix = menu.addItem(withTitle: "System Settings → Privacy → System Audio Recording",
-                                       action: #selector(openPrivacySettings(_:)), keyEquivalent: "")
-                fix.isEnabled = true
-            } else {
-                let info = menu.addItem(withTitle: "Outs 1‑2 → plugin · 3‑4 → dry",
-                                        action: nil, keyEquivalent: "")
-                info.isEnabled = false
+
+        menu.addItem(.separator())
+
+        // one submenu per stereo pair: source routing + plugin + controls
+        for i in 0..<4 {
+            let pairTitle = "\(InsertServer.pairNames[i]) — \(server.statusLine(i))"
+            let pairItem = menu.addItem(withTitle: pairTitle, action: nil, keyEquivalent: "")
+            pairItem.submenu = NSMenu()
+
+            // live status line
+            pairItem.submenu!.addItem(withTitle: server.statusLine(i),
+                                      action: nil, keyEquivalent: "").isEnabled = false
+
+            // Source ▸ system mix / copies of other pairs / off
+            let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
+            srcItem.submenu = NSMenu()
+            let currentSrc = server.source(i)
+            let srcOptions: [InsertServer.PairSource] = [.systemMix]
+                + InsertServer.PairSource.copies(excluding: i) + [.off]
+            for src in srcOptions {
+                let item = srcItem.submenu!.addItem(withTitle: src.label,
+                                                    action: #selector(pickPairSource(_:)), keyEquivalent: "")
+                item.tag = i
+                item.representedObject = src.rawValue
+                item.state = src == currentSrc ? .on : .off
+            }
+
+            // Plugin ▸ none + all installed effects
+            let plugItem = pairItem.submenu!.addItem(withTitle: "Plugin", action: nil, keyEquivalent: "")
+            plugItem.submenu = NSMenu()
+            let noneItem = plugItem.submenu!.addItem(withTitle: "None (dry)",
+                                                     action: #selector(pickPairPlugin(_:)), keyEquivalent: "")
+            noneItem.tag = i
+            noneItem.representedObject = ""
+            noneItem.state = server.pluginName(i) == nil ? .on : .off
+            let currentPlug = UserDefaults.standard.string(forKey: "insertPair.\(i).plugin")
+            for (name, desc) in InsertServer.listPlugins() {
+                let item = plugItem.submenu!.addItem(withTitle: name,
+                                                     action: #selector(pickPairPlugin(_:)), keyEquivalent: "")
+                item.tag = i
+                item.representedObject = InsertServer.descKey(desc)
+                item.state = server.pluginName(i) != nil && InsertServer.descKey(desc) == currentPlug ? .on : .off
+            }
+
+            // per-pair bypass + editor
+            if server.pluginName(i) != nil {
+                let bypass = pairItem.submenu!.addItem(
+                    withTitle: "Bypass Plugin",
+                    action: #selector(togglePairBypass(_:)), keyEquivalent: "")
+                bypass.tag = i
+                bypass.state = server.bypass(i) ? .on : .off
+                let ui = pairItem.submenu!.addItem(
+                    withTitle: "Open Plugin UI…",
+                    action: #selector(openPairUI(_:)), keyEquivalent: "")
+                ui.tag = i
             }
         }
 
@@ -687,20 +721,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         InsertServer.shared.setRunning(on)
     }
 
-    @objc private func pickInsertPlugin(_ sender: NSMenuItem) {
+    /// Pair submenu actions — `sender.tag` is the pair index.
+    @objc private func pickPairSource(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let src = InsertServer.PairSource(rawValue: raw) else { return }
+        InsertServer.shared.setSource(sender.tag, src)
+    }
+
+    @objc private func pickPairPlugin(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         let desc = key.isEmpty ? nil
             : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
-        InsertServer.shared.setPlugin(desc)
+        InsertServer.shared.setPlugin(sender.tag, desc)
     }
 
-    @objc private func toggleInsertBypass(_ sender: NSMenuItem) {
-        InsertServer.shared.setBypass(!InsertServer.shared.pluginBypass)
+    @objc private func togglePairBypass(_ sender: NSMenuItem) {
+        let i = sender.tag
+        InsertServer.shared.setBypass(i, !InsertServer.shared.bypass(i))
     }
 
-    @objc private func openInsertUI(_ sender: NSMenuItem) {
-        QBLog.log("insert: menu → open plugin UI")
-        InsertServer.shared.showPluginUI()
+    @objc private func openPairUI(_ sender: NSMenuItem) {
+        InsertServer.shared.showPluginUI(sender.tag)
     }
 
     @objc private func pickInsertBuffer(_ sender: NSMenuItem) {

@@ -1,26 +1,26 @@
 import Foundation
 import CoreAudio
-import ObjectiveC
 import AudioToolbox
 import AudioUnit
 import AVFAudio
 import CoreAudioKit
+import ObjectiveC
 import AppKit
 
-/// The AU insert engine: real-time plugin processing on the Quartet's outputs.
+/// The AU insert engine: real-time plugin processing on the Quartet's 4
+/// stereo output pairs, with per-pair routing.
 ///
 /// Architecture:
 ///
-///   all system audio (bound for the Quartet)
-///      ↓  CATap — stereo tap on the Quartet's stream 0, EXCLUDES this
-///         process, muteBehavior = .muted — captured audio never reaches
-///         the Quartet's DAC (true insert), and our own output passes
-///         through untouched (no feedback loop).
+///   all system audio (bound for the Quartet — default output unchanged)
+///      ↓  CATap — stereo tap on Quartet stream 0, EXCLUDES this process,
+///         muteBehavior = .muted (true insert, no feedback loop)
 ///   private aggregate device (master: Quartet, taps: [tap])
 ///      ↓  one IOProc
-///      ├─ outs 1‑2 (speakers): AU plugin chain (ARC X…) or dry bypass
-///      ├─ outs 3‑4 (HP):       dry passthrough
-///      └─ outs 5‑6 / 7‑8:      silence (future plugin slots)
+///         4 stereo chains, one per output pair (1‑2 / 3‑4 / 5‑6 / 7‑8):
+///            source (system mix / copy of another pair / off)
+///            → AU plugin chain (or dry when bypassed / absent)
+///            → that pair's hardware channels
 ///
 /// The system default output stays "Quartet", so the volume-keys / fader /
 /// mute bindings in OSVolumeMirror are unaffected.
@@ -31,51 +31,107 @@ final class InsertServer: NSObject {
     /// Fired on the main thread whenever state changed (menu refresh).
     var onStateChange: (() -> Void)?
 
-    /// True when the tap has never delivered a non-silent cycle while the
-    /// insert is running — the signature of macOS denying the System Audio
-    /// Recording permission (it silences taps instead of failing them).
+    private(set) var running = false
+
+    /// True until the tap delivers a non-silent cycle while running —
+    /// the signature of macOS denying the System Audio Recording
+    /// permission (it silences taps instead of failing them).
     private(set) var tapSilent = true
 
-    private(set) var running = false
-    private(set) var pluginName: String?
-    private(set) var pluginBypass: Bool = UserDefaults.standard.bool(forKey: "insertPluginBypass")
+    // MARK: - The 4 stereo pairs
+
+    static let pairNames = [
+        "Out 1‑2 · Main",
+        "Out 3‑4 · Headphones",
+        "Out 5‑6",
+        "Out 7‑8",
+    ]
+
+    enum PairSource: String {
+        case systemMix = "mix"
+        case off = "off"
+        case copy0 = "copy:0"
+        case copy1 = "copy:1"
+        case copy2 = "copy:2"
+        case copy3 = "copy:3"
+
+        var label: String {
+            switch self {
+            case .systemMix: return "System mix (dry)"
+            case .off: return "Off (silent)"
+            case .copy0: return "Copy of Out 1‑2"
+            case .copy1: return "Copy of Out 3‑4"
+            case .copy2: return "Copy of Out 5‑6"
+            case .copy3: return "Copy of Out 7‑8"
+            }
+        }
+
+        /// The pair this source copies from (nil = not a copy).
+        var copyIndex: Int? {
+            switch self {
+            case .copy0: return 0
+            case .copy1: return 1
+            case .copy2: return 2
+            case .copy3: return 3
+            default: return nil
+            }
+        }
+
+        static func copy(_ i: Int) -> PairSource {
+            PairSource(rawValue: "copy:\(i)")!
+        }
+
+        /// Copy-source options for a pair, excluding itself.
+        static func copies(excluding i: Int) -> [PairSource] {
+            [0, 1, 2, 3].filter { $0 != i }.map { copy($0) }
+        }
+    }
+
+    struct Pair {
+        var source: PairSource = .systemMix
+        var bypass = false
+        // runtime (main thread only)
+        var engine: AVAudioEngine?
+        var srcNode: AVAudioSourceNode?
+        var effect: AVAudioUnitEffect?
+        var renderBuffer: AVAudioPCMBuffer?
+        /// this pair's rendered output storage (audio thread reads)
+        var proc: StereoABL?
+        var pluginName: String?
+        var desc: AudioComponentDescription?
+        var viewInfo: (bundleURL: URL, classNames: [String])?
+        var viewPrefetchState: Int = 0   // 0 idle, 1 running, 2 done
+    }
+
+    private(set) var pairs: [Pair] = [Pair(), Pair(), Pair(), Pair()]
+
+    // MARK: - Core Audio plumbing
 
     private var tapID = AudioObjectID(0)
     private var aggregateID = AudioObjectID(0)
     private var ioProcID: AudioDeviceIOProcID?
     private var sampleRate: Double = 48000
-
-    // MARK: - Plugin (AVAudioEngine realtime manual rendering)
-
-    private var engine: AVAudioEngine?
-    private var sourceNode: AVAudioSourceNode?
-    private var effect: AVAudioUnitEffect?
-    /// Render target for the engine (offline renderManual → copy out).
-    private var renderBuffer: AVAudioPCMBuffer?
-    private var pluginDesc: AudioComponentDescription?
     private var dry: StereoABL?
-    /// Processing output buffers (chunks assembled per cycle).
-    private var procBufL: UnsafeMutablePointer<Float>?
-    private var procBufR: UnsafeMutablePointer<Float>?
-    private var viewWindow: NSWindow?
-    private var cycleCount = 0
-    private var renderOK = 0
-    private var renderErr = 0
 
-    /// Current plugin-chain render chunk (the source node pulls it from
-    /// `dry`). Audio-thread only — no locking.
-    private var chunkOffset = 0
-    private var chunkFrames = 0
-    /// Source-node pull counter (diagnostics).
+    /// Render order (topological on copy-sources; cycles broken main-side).
+    private var renderOrder: [Int] = [0, 1, 2, 3]
+
+    // MARK: - Audio-thread state
+
+    private var cycleCount = 0
     private var sourcePulls = 0
     private var lastLoggedPulls = 0
-    /// Time-based log throttle state (audio thread).
     private var lastLogTime: UInt64 = 0
     private let logIntervalTicks: UInt64 = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         return 5_000_000_000 * UInt64(info.numer) / UInt64(info.denom)   // ~5 s
     }()
+    /// The chain currently rendering (its source pointers, chunk state).
+    private var chainSrcL: UnsafeMutablePointer<Float>?
+    private var chainSrcR: UnsafeMutablePointer<Float>?
+    private var chainOffset = 0
+    private var chainFrames = 0
 
     // MARK: - Buffer size (latency)
 
@@ -87,8 +143,6 @@ final class InsertServer: NSObject {
         (256, "256 — 5.3 ms"),
         (512, "512 — 10.7 ms"),
     ]
-
-    /// Default when never configured: 32 (lowest latency).
     private static let defaultBufferFrames = 32
 
     static func savedBufferFrames() -> Int {
@@ -106,19 +160,53 @@ final class InsertServer: NSObject {
         onStateChange?()
     }
 
+    // MARK: - Persistence
+
+    private static func sourceKey(_ i: Int) -> String { "insertPair.\(i).source" }
+    private static func pluginKey(_ i: Int) -> String { "insertPair.\(i).plugin" }
+    private static func bypassKey(_ i: Int) -> String { "insertPair.\(i).bypass" }
+    private static func pluginStateKey(_ d: AudioComponentDescription, _ i: Int) -> String {
+        "insertPluginState.\(descKey(d)).\(i)"
+    }
+
+    private func loadPairs() {
+        pairs = (0..<4).map { i in
+            var p = Pair()
+            // v1 defaults: 1‑2 + 3‑4 hear the system mix, 5‑8 silent.
+            p.source = i < 2 ? .systemMix : .off
+            if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
+               let src = PairSource(rawValue: s) {
+                p.source = src
+            }
+            p.bypass = UserDefaults.standard.bool(forKey: Self.bypassKey(i))
+            // migrate the v1 single-plugin settings to pair 0
+            if i == 0, UserDefaults.standard.string(forKey: Self.pluginKey(0)) == nil,
+               let old = UserDefaults.standard.string(forKey: "insertPluginDesc") {
+                UserDefaults.standard.set(old, forKey: Self.pluginKey(0))
+                if UserDefaults.standard.bool(forKey: "insertPluginBypass") {
+                    UserDefaults.standard.set(true, forKey: Self.bypassKey(0))
+                }
+            }
+            return p
+        }
+    }
+
+    private func saveSource(_ i: Int) {
+        UserDefaults.standard.set(pairs[i].source.rawValue, forKey: Self.sourceKey(i))
+    }
+
+    // MARK: - Lifecycle
+
     func setRunning(_ on: Bool) {
         if on { start() } else { stop() }
     }
 
     func start() {
-        QBLog.log("insert: start() called, running=\(running)")
         guard !running else { return }
         do {
-            QBLog.log("insert: building…")
             try build()
-            QBLog.log("insert: built ok")
             running = true
-            QBLog.log("insert: running (\(pluginName ?? "no plugin"), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
+            QBLog.log("insert: running (\(statusSummary()), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
         } catch {
             QBLog.log("insert: start failed — \(error.localizedDescription)")
             teardown()
@@ -136,15 +224,16 @@ final class InsertServer: NSObject {
     }
 
     private func build() throws {
-        QBLog.log("insert: build() enter")
         guard #available(macOS 14.2, *) else {
             throw InsertError.other("needs macOS 14.2+ for Core Audio taps")
         }
         tapSilent = true
+        loadPairs()
+        recomputeRenderOrder()
+
         guard let quartet = OSVolumeMirror.scanForQuartet() else {
             throw InsertError.other("Quartet not found in Core Audio")
         }
-        QBLog.log("insert: build() quartet=\(quartet)")
         let quartetUID = try Self.deviceUID(quartet)
         sampleRate = Self.deviceRate(quartet)
 
@@ -161,10 +250,8 @@ final class InsertServer: NSObject {
         try Self.check(AudioHardwareCreateProcessTap(desc, &tap), "tap create")
         guard tap != 0 else { throw InsertError.other("tap id 0") }
         tapID = tap
-        QBLog.log("insert: build() tap=\(tap)")
 
-        // 2) the aggregate that exposes the tap as input and the Quartet
-        //    (master) as output — all IO happens on this one device.
+        // 2) the aggregate: tap as input, Quartet (master) as output.
         let aggDict: [String: Any] = [
             kAudioAggregateDeviceUIDKey: "com.quartetbuddy.insert." + UUID().uuidString,
             kAudioAggregateDeviceNameKey: "Quartet Buddy Insert",
@@ -177,19 +264,15 @@ final class InsertServer: NSObject {
         try Self.check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &agg), "aggregate create")
         guard agg != 0 else { throw InsertError.other("aggregate id 0") }
         aggregateID = agg
-        QBLog.log("insert: build() aggregate=\(agg)")
 
-        // Latency: the IO slice drives the insert's round-trip delay
-        // (32 frames = 0.67 ms @ 48 kHz). Persisted; defaults to 32.
-        let requested = Self.savedBufferFrames()
+        // Latency: 32 frames default (see bufferChoices).
         var bufAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
                                                   mScope: kAudioDevicePropertyScopeOutput,
                                                   mElement: kAudioObjectPropertyElementMain)
-        var bufFrames = UInt32(requested)
+        let requested = UInt32(Self.savedBufferFrames())
+        var bufFrames = requested
         let bufErr = AudioObjectSetPropertyData(agg, &bufAddr, 0, nil,
-                                                 UInt32(MemoryLayout<UInt32>.size), &bufFrames)
-        // read back what the HAL actually granted (safety offsets may
-        // clamp it — the Quartet is USB)
+                                                UInt32(MemoryLayout<UInt32>.size), &bufFrames)
         var granted = UInt32(0)
         var gSize = UInt32(MemoryLayout<UInt32>.size)
         if AudioObjectGetPropertyData(agg, &bufAddr, 0, nil, &gSize, &granted) == noErr, granted != requested {
@@ -198,18 +281,18 @@ final class InsertServer: NSObject {
             QBLog.log("insert: buffer size set err \(bufErr)")
         }
 
-        // 3) dry buffer + plugin (if it fails, don't leave the system silent)
-        QBLog.log("insert: build() step 3 — plugin load")
+        // 3) dry buffer + one engine per pair
         dry = StereoABL(frames: 4096)
-        if let key = UserDefaults.standard.string(forKey: "insertPluginDesc"),
-           let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
-            do { try instantiatePlugin(d) } catch {
-                QBLog.log("insert: plugin failed to load (\(key)) — running dry. \(error)")
+        for i in 0..<4 {
+            if let key = UserDefaults.standard.string(forKey: Self.pluginKey(i)),
+               let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
+                do { try instantiatePlugin(i, d) } catch {
+                    QBLog.log("insert: pair \(i) plugin failed to load (\(key)) — dry. \(error)")
+                }
             }
         }
 
         // 4) the IO cycle.
-        QBLog.log("insert: build() step 4 — IOProc")
         let proc: AudioDeviceIOProc = { _, _, inInputData, _, outOutputData, _, refCon in
             let myself = Unmanaged<InsertServer>.fromOpaque(refCon!).takeUnretainedValue()
             return myself.cycle(inInputData, outOutputData)
@@ -226,20 +309,20 @@ final class InsertServer: NSObject {
             AudioDeviceDestroyIOProcID(aggregateID, ioProcID)
             self.ioProcID = nil
         }
-        if let effect, let pluginDesc {
-            Self.savePluginState(desc: pluginDesc, effect: effect)
+        for i in 0..<4 {
+            if let d = pairs[i].desc, let effect = pairs[i].effect {
+                Self.savePluginState(i: i, desc: d, effect: effect)
+            }
+            pairs[i].engine?.stop()
+            pairs[i].engine = nil
+            pairs[i].srcNode = nil
+            pairs[i].effect = nil
+            pairs[i].renderBuffer = nil
+            pairs[i].proc = nil
+            pairs[i].desc = nil
+            pairs[i].pluginName = nil
+            pairs[i].viewInfo = nil
         }
-        if let engine { engine.stop() }
-        engine = nil
-        sourceNode = nil
-        effect = nil
-        renderBuffer = nil
-        procBufL?.deallocate()
-        procBufR?.deallocate()
-        procBufL = nil
-        procBufR = nil
-        pluginDesc = nil
-        pluginViewInfo = nil
         dry = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -251,26 +334,74 @@ final class InsertServer: NSObject {
         }
     }
 
+    // MARK: - Render order (copies resolved main-side)
+
+    /// Pairs are rendered in dependency order (a pair copying another
+    /// renders after it). Cycles are broken here, never in the audio
+    /// thread. The pair's rendered output is used as the copy source,
+    /// i.e. copy = post-plugin ("what that pair actually outputs").
+    private func recomputeRenderOrder() {
+        var order: [Int] = []
+        var state = [Int](repeating: 0, count: 4)   // 0 new, 1 in-stack, 2 done
+        func visit(_ i: Int) -> Bool {   // false = cycle
+            switch state[i] {
+            case 2: return true
+            case 1: return false
+            default: break
+            }
+            state[i] = 1
+            var ok = true
+            if let j = pairs[i].source.copyIndex, j != i {
+                ok = visit(j)
+                if !ok {
+                    QBLog.log("insert: routing cycle at pair \(i) (copy of \(j)) — pair falls back to system mix")
+                    pairs[i].source = .systemMix
+                    saveSource(i)
+                }
+            }
+            state[i] = 2
+            order.append(i)
+            return ok
+        }
+        for i in 0..<4 where state[i] == 0 { _ = visit(i) }
+        renderOrder = order.isEmpty ? [0, 1, 2, 3] : order
+        QBLog.log("insert: render order \(renderOrder)")
+    }
+
+    /// Menu summary, e.g. "System mix → ARC X · Copy → (dry)".
+    func statusLine(_ i: Int) -> String {
+        let p = pairs[i]
+        switch p.source {
+        case .off: return "Off"
+        case .systemMix: return "System mix → \(p.pluginName ?? "dry")"
+        default: break
+        }
+        if let j = p.source.copyIndex, j != i {
+            return "\(PairSource.copy(j).label) → \(p.pluginName ?? "dry")"
+        }
+        return p.source.label
+    }
+
+    private func statusSummary() -> String {
+        (0..<4).map { "\(Self.pairNames[$0]): \(statusLine($0))" }.joined(separator: " · ")
+    }
+
     // MARK: - The IO cycle
 
-    /// One IO cycle on the aggregate: tap input (stereo) → plugin →
-    /// Quartet's 8 output channels. Audio thread: no allocation.
+    /// One IO cycle on the aggregate: tap input (stereo) → 4 chains →
+    /// the Quartet's 8 output channels. Audio thread: no allocation.
     private func cycle(_ inInputData: UnsafePointer<AudioBufferList>?,
                        _ outOutputData: UnsafeMutablePointer<AudioBufferList>?) -> OSStatus {
-        guard let out = outOutputData else { return noErr }
+        guard let out = outOutputData, let dry else { return noErr }
         let frames = Self.frames(of: out)
-        guard frames > 0, frames <= 4096, let dry else { return noErr }
+        guard frames > 0, frames <= 4096 else { return noErr }
 
-        // 1) the tapped system mix → dry stereo.
-        //    The aggregate input carries TWO streams: the Quartet's own
-        //    12ch input stream + our 8ch tap (copy of Quartet stream 0).
-        //    Find the 8ch tap buffer; the system's stereo mix sits on its
-        //    channels 1‑2 (device stereo pair [1,2] → stream ch 0,1).
+        // 1) the tapped system mix → dry stereo
         if let inp = inInputData {
             let inList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inp))
             var tap: AudioBuffer?
             if inList.count == 1, inList[0].mNumberChannels == 2 {
-                tap = inList[0]   // future stereo-mixdown tap: interleaved stereo
+                tap = inList[0]
             } else {
                 for b in inList where b.mNumberChannels == 8 || b.mNumberChannels == 2 {
                     tap = b; break
@@ -297,88 +428,103 @@ final class InsertServer: NSObject {
         } else {
             for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
         }
-        cycleCount += 1
-        let now = mach_absolute_time()
-        if lastLogTime == 0 { lastLogTime = now }
 
-        // 2) outs 1‑2: plugin chain via AVAudioEngine manual rendering
-        //    (offline + renderOffline — the block API returns -50 on
-        //    macOS 27.0.1), in 512-frame chunks.
-        var procL = dry.buffers[0], procR = dry.buffers[1]
-        if let engine, !pluginBypass, let renderBuffer {
-            var offset = 0
-            var ok = true
-            while offset < frames {
-                let n = min(512, frames - offset)
-                chunkOffset = offset
-                chunkFrames = n
-                if let st = try? engine.renderOffline(AVAudioFrameCount(n), to: renderBuffer),
-                   st == .success, renderBuffer.frameLength == AVAudioFrameCount(n),
-                   let cl = renderBuffer.floatChannelData?[0],
-                   let cr = renderBuffer.floatChannelData?[1],
-                   let pl = procBufL, let pr = procBufR {
-                    memcpy(pl + offset, cl, n * 4)
-                    memcpy(pr + offset, cr, n * 4)
-                } else {
-                    ok = false
-                    break
-                }
-                offset += n
-            }
-            if ok, let pl = procBufL, let pr = procBufR {
-                renderOK += 1
-                procL = pl
-                procR = pr
-            } else {
-                renderErr += 1
-                if renderErr <= 3 || renderErr % 512 == 0 {
-                    QBLog.log("insert: plugin render failed (frames=\(frames), ok=\(renderOK)) — falling back dry")
-                }
-                procL = dry.buffers[0]   // graceful dry fallback
-                procR = dry.buffers[1]
-            }
-        }
-
-        // tap health: sustained exact silence = capture denied/muted.
-        // Cheap check every cycle; the full log only on the throttle.
-        if !tapSilent { /* already known-live */ }
-        else if dry.buffers[0][0] != 0 || dry.buffers[1][0] != 0 {
+        // tap health (cheap check)
+        if tapSilent, dry.buffers[0][0] != 0 || dry.buffers[1][0] != 0 {
             tapSilent = false
             QBLog.log("insert: tap is live (first non-silent cycle)")
             DispatchQueue.main.async { [weak self] in self?.onStateChange?() }
         }
 
+        // 2) render the 4 chains in dependency order
+        var outL: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
+        var outR: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
+        var silent = [false, false, false, false]
+        for i in renderOrder {
+            let p = pairs[i]
+            switch p.source {
+            case .off:
+                silent[i] = true
+            case .systemMix:
+                outL[i] = dry.buffers[0]; outR[i] = dry.buffers[1]
+            default:
+                break
+            }
+            if !silent[i], let j = p.source.copyIndex, j != i {
+                outL[i] = silent[j] ? nil : outL[j]
+                outR[i] = silent[j] ? nil : outR[j]
+                silent[i] = silent[j]
+            }
+            // plugin chain (in 512-frame chunks — the renderOffline path;
+            // see instantiatePlugin for why manual mode at all)
+            if !silent[i], let effect = p.effect, !p.bypass,
+               let engine = p.engine, let renderBuffer = p.renderBuffer, let proc = p.proc {
+                var offset = 0
+                var ok = true
+                while offset < frames {
+                    let n = min(512, frames - offset)
+                    chainSrcL = outL[i]; chainSrcR = outR[i]
+                    chainOffset = offset; chainFrames = n
+                    if let st = try? engine.renderOffline(AVAudioFrameCount(n), to: renderBuffer),
+                       st == .success, renderBuffer.frameLength == AVAudioFrameCount(n),
+                       let cl = renderBuffer.floatChannelData?[0],
+                       let cr = renderBuffer.floatChannelData?[1] {
+                        memcpy(proc.buffers[0] + offset, cl, n * 4)
+                        memcpy(proc.buffers[1] + offset, cr, n * 4)
+                    } else {
+                        ok = false
+                        break
+                    }
+                    offset += n
+                }
+                if ok {
+                    outL[i] = proc.buffers[0]
+                    outR[i] = proc.buffers[1]
+                } else {
+                    sourceRenderErr += 1
+                    if sourceRenderErr <= 3 || sourceRenderErr % 512 == 0 {
+                        QBLog.log("insert: pair \(i) render failed — dry")
+                    }
+                }
+            }
+        }
+
+        // 3) write the Quartet's channels: pair i → channels 2i, 2i+1
+        let outList = UnsafeMutableAudioBufferListPointer(out)
+        if outList.count >= 8 {
+            for i in 0..<4 {
+                if silent[i] || outL[i] == nil {
+                    Self.clear(outList[i * 2], frames)
+                    Self.clear(outList[i * 2 + 1], frames)
+                } else {
+                    Self.copyMono(into: outList, at: i * 2, from: outL[i]!, frames)
+                    Self.copyMono(into: outList, at: i * 2 + 1, from: outR[i]!, frames)
+                }
+            }
+        } else if outList.count == 1, let interleaved = outList[0].mData?.assumingMemoryBound(to: Float.self) {
+            for f in 0..<frames {
+                for i in 0..<4 {
+                    interleaved[f * 8 + i * 2] = silent[i] ? 0 : (outL[i]?[f] ?? 0)
+                    interleaved[f * 8 + i * 2 + 1] = silent[i] ? 0 : (outR[i]?[f] ?? 0)
+                }
+            }
+        }
+
+        // 4) throttled diagnostics
+        cycleCount += 1
+        let now = mach_absolute_time()
+        if lastLogTime == 0 { lastLogTime = now }
         if cycleCount < 3 || now - lastLogTime > logIntervalTicks {
             lastLogTime = now
             var dryPeak: Float = 0
             for f in 0..<frames { let v = abs(dry.buffers[0][f]); if v > dryPeak { dryPeak = v } }
-            var procPeak: Float = 0
-            for f in 0..<frames { let v = abs(procL[f]); if v > procPeak { procPeak = v } }
-            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) dryPeak=\(dryPeak) procPeak=\(procPeak) pulls=\(sourcePulls - lastLoggedPulls) \(pluginBypass ? "[bypassed]" : "")")
+            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) dryPeak=\(dryPeak) pulls=\(sourcePulls - lastLoggedPulls)")
             lastLoggedPulls = sourcePulls
-        }
-        // 3) write the Quartet's output channels:
-        //    1‑2 = processed, 3‑4 = dry, 5‑8 = silence
-        let outList = UnsafeMutableAudioBufferListPointer(out)
-        if outList.count >= 8 {
-            // non-interleaved: one buffer per channel
-            Self.copyStereo(into: outList, base: 0, l: procL, r: procR, frames: frames)
-            Self.copyStereo(into: outList, base: 2, l: dry.buffers[0], r: dry.buffers[1], frames: frames)
-            Self.clear(outList[4], frames); Self.clear(outList[5], frames)
-            Self.clear(outList[6], frames); Self.clear(outList[7], frames)
-        } else if outList.count == 1, let interleaved = outList[0].mData?.assumingMemoryBound(to: Float.self) {
-            // interleaved 8ch fallback
-            for f in 0..<frames {
-                interleaved[f * 8 + 0] = procL[f]
-                interleaved[f * 8 + 1] = procR[f]
-                interleaved[f * 8 + 2] = dry.buffers[0][f]
-                interleaved[f * 8 + 3] = dry.buffers[1][f]
-                interleaved[f * 8 + 4] = 0; interleaved[f * 8 + 5] = 0
-                interleaved[f * 8 + 6] = 0; interleaved[f * 8 + 7] = 0
-            }
         }
         return noErr
     }
+
+    private var sourceRenderErr = 0
 
     // MARK: - Plugin management
 
@@ -400,43 +546,7 @@ final class InsertServer: NSObject {
         return out.sorted { $0.0 < $1.0 }
     }
 
-    /// Pick the outs 1‑2 plugin (nil = dry).
-    func setPlugin(_ desc: AudioComponentDescription?) {
-        let wasRunning = running
-        if running { stop() }
-        if let desc {
-            do {
-                try instantiatePlugin(desc)
-                pluginName = Self.name(for: desc)
-                UserDefaults.standard.set(Self.descKey(desc), forKey: "insertPluginDesc")
-                QBLog.log("insert: plugin set to \(pluginName ?? "?")")
-            } catch {
-                QBLog.log("insert: plugin instantiate failed — \(error.localizedDescription)")
-                pluginName = nil
-                UserDefaults.standard.removeObject(forKey: "insertPluginDesc")
-            }
-        } else {
-            pluginName = nil
-            UserDefaults.standard.removeObject(forKey: "insertPluginDesc")
-        }
-        if wasRunning { start() }
-        onStateChange?()
-    }
-
-    func setBypass(_ on: Bool) {
-        pluginBypass = on
-        UserDefaults.standard.set(on, forKey: "insertPluginBypass")
-        effect?.bypass = on
-        QBLog.log("insert: bypass \(on ? "on" : "off")")
-        onStateChange?()
-    }
-
-    static func name(for desc: AudioComponentDescription) -> String {
-        let key = descKey(desc)
-        return listPlugins().first { descKey($0.desc) == key }?.name ?? "AU Effect"
-    }
-
-    /// Four-char-code from a 4-character string ("aufx" → 'aufx').
+    /// Four-char-code from a 4-character string ("aufx").
     static func fourCC(_ s: String) -> UInt32 {
         s.utf8.reduce(0) { ($0 << 8) | UInt32($1) }
     }
@@ -449,40 +559,83 @@ final class InsertServer: NSObject {
         return "\(s(d.componentType)).\(s(d.componentSubType)).\(s(d.componentManufacturer))"
     }
 
-    private func instantiatePlugin(_ desc: AudioComponentDescription) throws {
-        if let old = effect, let oldDesc = pluginDesc {
-            Self.savePluginState(desc: oldDesc, effect: old)
-        }
-        if let engine { engine.stop() }
-        engine = nil
-        sourceNode = nil
-        effect = nil
+    static func name(for desc: AudioComponentDescription) -> String {
+        let key = descKey(desc)
+        return listPlugins().first { descKey($0.desc) == key }?.name ?? "AU Effect"
+    }
 
+    /// Set a pair's plugin (nil = dry). Rebuilds that pair's chain.
+    func setPlugin(_ i: Int, _ desc: AudioComponentDescription?) {
+        if let d = pairs[i].desc, let e = pairs[i].effect {
+            Self.savePluginState(i: i, desc: d, effect: e)
+        }
+        pairs[i].engine?.stop()
+        pairs[i].engine = nil; pairs[i].srcNode = nil
+        pairs[i].effect = nil; pairs[i].renderBuffer = nil; pairs[i].proc = nil
+        pairs[i].pluginName = nil; pairs[i].desc = nil; pairs[i].viewInfo = nil
+
+        if let desc {
+            do {
+                try instantiatePlugin(i, desc)
+                UserDefaults.standard.set(Self.descKey(desc), forKey: Self.pluginKey(i))
+                QBLog.log("insert: pair \(i) plugin set to \(pairs[i].pluginName ?? "?")")
+            } catch {
+                QBLog.log("insert: pair \(i) plugin instantiate failed — \(error.localizedDescription)")
+                UserDefaults.standard.removeObject(forKey: Self.pluginKey(i))
+            }
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.pluginKey(i))
+        }
+        onStateChange?()
+    }
+
+    /// Set a pair's routing source.
+    func setSource(_ i: Int, _ source: PairSource) {
+        pairs[i].source = source
+        saveSource(i)
+        recomputeRenderOrder()
+        QBLog.log("insert: pair \(i) source → \(source.label)")
+        onStateChange?()
+    }
+
+    func setBypass(_ i: Int, _ on: Bool) {
+        pairs[i].bypass = on
+        UserDefaults.standard.set(on, forKey: Self.bypassKey(i))
+        pairs[i].effect?.bypass = on
+        QBLog.log("insert: pair \(i) bypass \(on ? "on" : "off")")
+        onStateChange?()
+    }
+
+    func pluginName(_ i: Int) -> String? { pairs[i].pluginName }
+    func source(_ i: Int) -> PairSource { pairs[i].source }
+    func bypass(_ i: Int) -> Bool { pairs[i].bypass }
+
+    private func instantiatePlugin(_ i: Int, _ desc: AudioComponentDescription) throws {
         let effect = AVAudioUnitEffect(audioComponentDescription: desc)
 
         let engine = AVAudioEngine()
         let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                 sampleRate: sampleRate, channels: 2, interleaved: false)!
         let src = AVAudioSourceNode(format: fmt) { [weak self] _, _, frames, abl in
-            guard let self, let dry = self.dry else {
+            guard let self, let l = self.chainSrcL, let r = self.chainSrcR else {
                 Self.fillZero(abl, Int(frames))
                 return noErr
             }
             self.sourcePulls += 1
-            let n = min(Int(frames), self.chunkFrames)
-            let off = self.chunkOffset
+            let n = min(Int(frames), self.chainFrames)
+            let off = self.chainOffset
             let list = UnsafeMutableAudioBufferListPointer(abl)
             if list.count >= 2 {
-                if let l = list[0].mData?.assumingMemoryBound(to: Float.self) {
-                    l.update(from: dry.buffers[0] + off, count: n)
+                if let bl = list[0].mData?.assumingMemoryBound(to: Float.self) {
+                    bl.update(from: l + off, count: n)
                 }
-                if let r = list[1].mData?.assumingMemoryBound(to: Float.self) {
-                    r.update(from: dry.buffers[1] + off, count: n)
+                if let br = list[1].mData?.assumingMemoryBound(to: Float.self) {
+                    br.update(from: r + off, count: n)
                 }
             } else if list.count == 1, let il = list[0].mData?.assumingMemoryBound(to: Float.self) {
                 for f in 0..<n {
-                    il[f * 2] = dry.buffers[0][off + f]
-                    il[f * 2 + 1] = dry.buffers[1][off + f]
+                    il[f * 2] = l[off + f]
+                    il[f * 2 + 1] = r[off + f]
                 }
             }
             return noErr
@@ -498,44 +651,27 @@ final class InsertServer: NSObject {
         engine.prepare()
         try engine.start()
 
-        effect.bypass = pluginBypass
+        effect.bypass = pairs[i].bypass
 
-        procBufL = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
-        procBufR = UnsafeMutablePointer<Float>.allocate(capacity: 4096)
-        procBufL?.initialize(repeating: 0, count: 4096)
-        procBufR?.initialize(repeating: 0, count: 4096)
+        let proc = StereoABL(frames: 4096)
+        pairs[i].engine = engine
+        pairs[i].srcNode = src
+        pairs[i].effect = effect
+        pairs[i].desc = desc
+        pairs[i].pluginName = Self.name(for: desc)
+        pairs[i].proc = proc
+        pairs[i].renderBuffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 512)
 
-        self.engine = engine
-        self.sourceNode = src
-        self.effect = effect
-        self.pluginDesc = desc
-        self.pluginName = Self.name(for: desc)
-        self.renderBuffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 512)
-
-        // prefetch the custom-view info asynchronously — the CocoaUI
-        // property get can wedge (JUCE/AU threading), so it must never
-        // block build() or the menu. Runs on its own thread; a
-        // watchdog logs if it never completes.
-        prefetchViewInfoAsync(unit: effect.audioUnit)
-
-        // quick sanity render (main thread, before IO starts)
-        if let renderBuffer, let st = try? engine.renderOffline(512, to: renderBuffer) {
-            QBLog.log("insert: plugin sanity render \(st == .success ? "ok (\(renderBuffer.frameLength) frames)" : "failed")")
+        // sanity render (main thread, before IO)
+        if let rb = pairs[i].renderBuffer, let st = try? engine.renderOffline(512, to: rb) {
+            QBLog.log("insert: pair \(i) sanity render \(st == .success ? "ok" : "failed")")
         }
+
+        // prefetch the custom-view info asynchronously (see showPluginUI)
+        prefetchViewInfo(i, unit: effect.audioUnit)
     }
 
-    private static func fillZero(_ abl: UnsafeMutablePointer<AudioBufferList>, _ frames: Int) {
-        let list = UnsafeMutableAudioBufferListPointer(abl)
-        for b in 0..<list.count {
-            if let d = list[b].mData { memset(d, 0, frames * 4) }
-        }
-    }
-
-    private static func pluginStateKey(_ d: AudioComponentDescription) -> String {
-        "insertPluginState." + descKey(d)
-    }
-
-    private static func savePluginState(desc: AudioComponentDescription, effect: AVAudioUnitEffect) {
+    private static func savePluginState(i: Int, desc: AudioComponentDescription, effect: AVAudioUnitEffect) {
         let unit = effect.audioUnit
         var state: CFMutableDictionary?
         var size = UInt32(MemoryLayout<CFDictionary?>.size)
@@ -544,44 +680,49 @@ final class InsertServer: NSObject {
               let state else { return }
         if let data = try? NSKeyedArchiver.archivedData(withRootObject: state as NSDictionary,
                                                         requiringSecureCoding: false) {
-            UserDefaults.standard.set(data, forKey: pluginStateKey(desc))
+            UserDefaults.standard.set(data, forKey: pluginStateKey(desc, i))
         }
     }
 
     // MARK: - Plugin UI
 
-    /// Prefetched plugin view info (bundle URL + view class names).
-    /// NOTE: the CocoaUI property get must NEVER happen while our IO
-    /// cycle renders the AU (it deadlocks on JUCE plugins — ARC X hangs
-    /// the main thread, live-tested Oct 2026). So we fetch once at
-    /// plugin load, before the device starts, and cache it here.
-    private var pluginViewInfo: (bundleURL: URL, classNames: [String])?
+    /// Prefetched plugin view info per pair. The CocoaUI property get must
+    /// NEVER run from the menu action while our IO cycle renders the AU
+    /// (it deadlocks/blocks on some plugins), so we fetch it once async at
+    /// plugin load and cache it.
+    private func prefetchViewInfo(_ i: Int, unit: AudioUnit) {
+        pairs[i].viewPrefetchState = 1
+        Thread.detachNewThread { [weak self] in
+            guard let self else { return }
+            self.pairs[i].viewInfo = Self.readCocoaUIInfo(unit: unit)
+            self.pairs[i].viewPrefetchState = 2
+            DispatchQueue.main.async { self.onStateChange?() }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 4) { [weak self] in
+            if self?.pairs[i].viewPrefetchState == 1 {
+                QBLog.log("insert: pair \(i) view prefetch still stuck after 4 s — generic UI if used")
+            }
+        }
+    }
 
-    /// Fetch the custom-view info — plugin load time only, NOT from the
-    /// menu action (deadlock, see pluginViewInfo).
-    private func prefetchViewInfo(unit: AudioUnit) {
+    /// Read kAudioUnitProperty_CocoaUI (raw: Swift mis-imports the struct).
+    /// Returns (bundle URL, view class names) or nil.
+    /// NOTE: the class field is usually a CFArray — but some plugins (IK
+    /// Multimedia, ARC X) return a single CFString. Type-check first:
+    /// CFArray calls on a CFString throw an ObjC exception Swift can't
+    /// catch → crash (live-tested).
+    static func readCocoaUIInfo(unit: AudioUnit) -> (bundleURL: URL, classNames: [String])? {
         let raw = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
         raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
         defer { raw.deallocate() }
         var size = UInt32(16)
         guard AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
-                                    kAudioUnitScope_Global, 0, raw, &size) == noErr else {
-            QBLog.log("insert: no custom view (CocoaUI get failed at load)")
-            pluginViewInfo = nil
-            return
-        }
+                                   kAudioUnitScope_Global, 0, raw, &size) == noErr else { return nil }
         let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        guard let bundlePtr, let classArrayPtr else {
-            pluginViewInfo = nil
-            return
-        }
+        let classFieldPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        guard let bundlePtr, let classFieldPtr else { return nil }
         let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
-        // The class field is USUALLY a CFArray of class names — but some
-        // plugins (IK Multimedia: ARC X) return a single CFString instead.
-        // Type-check before touching it: CFArray calls on a CFString throw
-        // an ObjC exception Swift can't catch (crash, live-tested).
-        let classObj: AnyObject = Unmanaged<AnyObject>.fromOpaque(classArrayPtr).takeUnretainedValue()
+        let classObj: AnyObject = Unmanaged<AnyObject>.fromOpaque(classFieldPtr).takeUnretainedValue()
         var classNames: [String] = []
         if CFGetTypeID(classObj) == CFArrayGetTypeID() {
             let classArray = classObj as! CFArray
@@ -593,107 +734,69 @@ final class InsertServer: NSObject {
         } else if CFGetTypeID(classObj) == CFStringGetTypeID() {
             classNames.append(classObj as! String)
         } else {
-            QBLog.log("insert: CocoaUI class field has unexpected type \(CFGetTypeID(classObj))")
+            return nil
         }
-        pluginViewInfo = (bundleURL, classNames)
-        QBLog.log("insert: custom view prefetched (class \(classNames.first ?? "?"))")
+        guard !classNames.isEmpty else { return nil }
+        return (bundleURL, classNames)
     }
 
-    /// Async wrapper: run prefetchViewInfo on its own thread with a
-    /// watchdog — the AU's CocoaUI getter may block (JUCE threading),
-    /// and that must never stall build(), the menu, or the app.
-    private func prefetchViewInfoAsync(unit: AudioUnit) {
-        viewPrefetchState = .running
-        Thread.detachNewThread { [weak self] in
-            guard let self else { return }
-            self.prefetchViewInfo(unit: unit)
-            self.viewPrefetchState = .done
-            DispatchQueue.main.async { self.onStateChange?() }
-        }
-        // watchdog: log if it never completes (stuck in the get)
-        DispatchQueue.global().asyncAfter(deadline: .now() + 4) { [weak self] in
-            if self?.viewPrefetchState == .running {
-                QBLog.log("insert: view prefetch still stuck after 4 s — plugin's CocoaUI get blocks; using generic UI")
-            }
-        }
-    }
-
-    private enum ViewPrefetchState { case idle, running, done }
-    private var viewPrefetchState: ViewPrefetchState = .idle
-
-    func showPluginUI() {
-        QBLog.log("insert: showPluginUI called, effect=\(effect != nil)")
-        guard let effect else { return }
+    /// Show pair i's plugin editor: its custom JUCE/AUv2 view via the
+    /// prefetched info, else the generic parameter view.
+    func showPluginUI(_ i: Int) {
+        guard let effect = pairs[i].effect else { return }
         let unit = effect.audioUnit
 
         var view: NSView?
-
-        // 1) the plugin's custom view — from the prefetched info only
-        //    (no AudioUnitGetProperty here; it deadlocks under render).
-        view = Self.makeCustomView(unit: unit, info: pluginViewInfo, log: { QBLog.log($0) })
-        QBLog.log("insert: custom view = \(view != nil)")
-
-        // 2) fallback: generic parameter view (always available)
+        view = Self.makeCustomView(unit: unit, info: pairs[i].viewInfo, log: { QBLog.log($0) })
         if view == nil {
-            QBLog.log("insert: trying generic view…")
-            view = Self.makeGenericView(for: effect, log: { QBLog.log($0) })
-            QBLog.log("insert: generic view = \(view != nil)")
+            view = Self.makeGenericView(i: i, effect: effect, log: { QBLog.log($0) })
         }
-
         guard let view else {
             let alert = NSAlert()
-            alert.messageText = "\(pluginName ?? "The plugin") exposes no editable view."
+            alert.messageText = "\(pairs[i].pluginName ?? "The plugin") exposes no editable view."
             alert.runModal()
             return
         }
-        viewWindow?.close()
+        viewWindow[i]?.close()
         var frame = view.bounds
         if frame.isEmpty { frame = NSRect(x: 0, y: 0, width: 900, height: 620) }
         let window = NSWindow(contentRect: frame,
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)
-        window.title = pluginName ?? "AU Plugin"
+        window.title = "\(Self.pairNames[i]) — \(pairs[i].pluginName ?? "AU Plugin")"
         window.contentView = view
         window.center()
         window.makeKeyAndOrderFront(nil)
-        // menubar apps need this to bring their windows forward
         NSApp.activate(ignoringOtherApps: true)
-        viewWindow = window
+        viewWindow[i] = window
     }
 
-    /// The plugin's custom Cocoa UI: resolve the (often dynamically
-    /// registered) JUCE view class from PREFETCHED info — no property
-    /// gets here (they deadlock under active rendering) — then drive
-    /// the AUv2 view protocol.
+    private var viewWindow: [Int: NSWindow] = [:]
+
+    /// The plugin's custom Cocoa UI from PREFETCHED info (no property
+    /// gets here — they deadlock under active rendering), driving the
+    /// AUv2 uiViewForAudioUnit:withSize: protocol.
     private static func makeCustomView(unit: AudioUnit,
                                         info: (bundleURL: URL, classNames: [String])?,
                                         log: (String) -> Void) -> NSView? {
-        guard let info, let className = info.classNames.first else {
-            log("insert: no prefetched custom view — generic UI")
-            return nil
-        }
-        let bundleURL = info.bundleURL
-        log("insert: CocoaUI class=\(className) bundle=\(bundleURL.lastPathComponent)")
+        guard let info, let className = info.classNames.first else { return nil }
+        log("insert: CocoaUI class=\(className) bundle=\(info.bundleURL.lastPathComponent)")
 
-        // JUCE registers its view class at runtime in-process; if the
-        // class isn't registered yet, loading the plugin's view bundle
-        // registers it — then retry both lookups.
         var cls: AnyClass? = NSClassFromString(className)
         if cls == nil, let c = className.cString(using: .utf8),
            let o = objc_getClass(c) as? AnyClass {
             cls = o
         }
-        if cls == nil, let bundle = Bundle(url: bundleURL) {
+        if cls == nil, let bundle = Bundle(url: info.bundleURL) {
             _ = bundle.load()
             cls = NSClassFromString(className)
             if cls == nil, let c = className.cString(using: .utf8),
                let o = objc_getClass(c) as? AnyClass {
                 cls = o
             }
-            log("insert: view class after bundle load = \(cls != nil)")
         }
         guard let cls else {
-            log("insert: custom view class not registered in-process — generic UI")
+            log("insert: custom view class unresolvable — generic UI")
             return nil
         }
 
@@ -709,7 +812,6 @@ final class InsertServer: NSObject {
                 return v
             }
         }
-        // plain NSView subclass (non-JUCE AUv2 views)
         if let v = instance as? NSView, !v.subviews.isEmpty {
             log("insert: custom view direct")
             return v
@@ -717,36 +819,27 @@ final class InsertServer: NSObject {
         return nil
     }
 
-
     /// Generic parameter UI from the AU's parameter tree (always works).
-    private static func makeGenericView(for effect: AVAudioUnitEffect, log: (String) -> Void) -> NSView? {
+    private static func makeGenericView(i: Int, effect: AVAudioUnitEffect,
+                                       log: (String) -> Void) -> NSView? {
         let au = effect.auAudioUnit
-        guard let tree = au.parameterTree else {
-            log("insert: generic view unavailable (no parameter tree)")
-            return nil
-        }
+        guard let tree = au.parameterTree else { return nil }
         let params = tree.allParameters
-        InsertServer.shared.genericParams = params
-        log("insert: generic view, \(params.count) parameters")
+        log("insert: pair \(i) generic view, \(params.count) parameters")
+        genericParams[i] = params
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 24 + params.count * 48))
-        for (i, param) in params.enumerated() {
-            let y = CGFloat(params.count - 1 - i) * 48
+        for (n, param) in params.enumerated() {
+            let y = CGFloat(params.count - 1 - n) * 48
             let label = NSTextField(labelWithString: param.identifier ?? "param")
             label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
             label.frame = NSRect(x: 16, y: y + 26, width: 428, height: 14)
-            let value = NSTextField(labelWithString: Self.fmt(param.value, unit: param.unit))
-            value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            value.alignment = .right
-            value.frame = NSRect(x: 16, y: y + 26, width: 428, height: 14)
-
             let slider = NSSlider(value: Double(param.value), minValue: Double(param.minValue),
-                                  maxValue: Double(param.maxValue), target: nil,
-                                  action: nil)
+                                  maxValue: Double(param.maxValue), target: nil, action: nil)
             slider.frame = NSRect(x: 16, y: y, width: 428, height: 20)
             slider.target = InsertServer.shared
             slider.action = #selector(InsertServer.shared.sliderChanged(_:))
-            slider.identifier = NSUserInterfaceItemIdentifier("param:\(i)")
+            slider.identifier = NSUserInterfaceItemIdentifier("pair:\(i):param:\(n)")
             content.addSubview(label)
             content.addSubview(slider)
         }
@@ -754,31 +847,22 @@ final class InsertServer: NSObject {
         return content
     }
 
-    /// Generic-view parameter list (identifier → AUParameter).
-    private var genericParams: [AUParameter] = []
+    private static var genericParams: [Int: [AUParameter]] = [:]
 
     /// Generic-view slider action: apply the new value to the parameter.
     @objc func sliderChanged(_ sender: NSSlider) {
-        guard let id = sender.identifier?.rawValue, id.hasPrefix("param:"),
-              let idx = Int(id.dropFirst(6)), genericParams.indices.contains(idx) else { return }
-        genericParams[idx].value = Float(sender.doubleValue)
-    }
-
-    private static func fmt(_ v: Float, unit: AudioUnitParameterUnit) -> String {
-        switch unit {
-        case .percent: return String(format: "%.0f%%", v)
-        case .decibels: return String(format: "%.1f dB", v)
-        case .hertz: return String(format: "%.0f Hz", v)
-        case .seconds: return String(format: "%.3f s", v)
-        default: return String(format: "%.2f", v)
-        }
+        guard let id = sender.identifier?.rawValue else { return }
+        let parts = id.split(separator: ":").map(String.init)
+        guard parts.count == 4, parts[0] == "pair",
+              let i = Int(parts[1]), let n = Int(parts[3]),
+              let params = Self.genericParams[i], params.indices.contains(n) else { return }
+        params[n].value = Float(sender.doubleValue)
     }
 
     // MARK: - CoreAudio helpers
 
     private enum InsertError: LocalizedError {
         case other(String)
-
         var errorDescription: String? {
             if case .other(let m) = self { return m }
             return nil
@@ -809,8 +893,7 @@ final class InsertServer: NSObject {
         return r
     }
 
-    /// Our own process object id — the tap excludes it, so our processed
-    /// output isn't re-captured (feedback) and isn't muted.
+    /// Our own process object id — the tap excludes it.
     private static func ownProcessObjectID() throws -> AudioObjectID {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
                                               mScope: kAudioObjectPropertyScopeGlobal,
@@ -824,39 +907,26 @@ final class InsertServer: NSObject {
         return obj
     }
 
-    /// Frames in the first buffer of a list (float32).
-    private static func frames(of abl: UnsafeMutablePointer<AudioBufferList>) -> Int {
+    /// Frames in the first buffer of a list (float32, interleaved-aware).
+    static func frames(of abl: UnsafeMutablePointer<AudioBufferList>) -> Int {
         let list = UnsafeMutableAudioBufferListPointer(abl)
         guard let b = list.first else { return 0 }
         let ch = max(1, Int(b.mNumberChannels))
         return Int(b.mDataByteSize) / 4 / ch
     }
 
-    /// Detailed layout + peak logging (throttled) for debugging.
-    private static func describe(_ abl: UnsafeMutablePointer<AudioBufferList>) -> String {
+    private static func fillZero(_ abl: UnsafeMutablePointer<AudioBufferList>, _ frames: Int) {
         let list = UnsafeMutableAudioBufferListPointer(abl)
-        return list.map { b in
-            let ch = b.mNumberChannels
-            let frames = b.mDataByteSize / 4 / max(1, ch)
-            var peak: Float = 0
-            if let d = b.mData?.assumingMemoryBound(to: Float.self) {
-                for i in stride(from: 0, to: Int(b.mDataByteSize) / 4, by: max(1, Int(ch))) {
-                    let v = abs(d[i])
-                    if v > peak { peak = v }
-                }
-            }
-            return "\(ch)ch/\(frames)f peak=\(peak)"
-        }.joined(separator: " | ")
+        for b in 0..<list.count {
+            if let d = list[b].mData { memset(d, 0, frames * 4) }
+        }
     }
 
-    private static func copyStereo(into list: UnsafeMutableAudioBufferListPointer, base: Int,
-                                    l: UnsafeMutablePointer<Float>, r: UnsafeMutablePointer<Float>,
-                                    frames: Int) {
-        guard list.count > base + 1,
-              let dl = list[base].mData?.assumingMemoryBound(to: Float.self),
-              let dr = list[base + 1].mData?.assumingMemoryBound(to: Float.self) else { return }
-        dl.update(from: l, count: frames)
-        dr.update(from: r, count: frames)
+    private static func copyMono(into list: UnsafeMutableAudioBufferListPointer, at index: Int,
+                                 from src: UnsafeMutablePointer<Float>, _ frames: Int) {
+        guard list.count > index,
+              let dst = list[index].mData?.assumingMemoryBound(to: Float.self) else { return }
+        dst.update(from: src, count: frames)
     }
 
     private static func clear(_ b: AudioBuffer, _ frames: Int) {
@@ -865,11 +935,9 @@ final class InsertServer: NSObject {
 }
 
 /// A non-interleaved stereo AudioBufferList with its own storage.
-private final class StereoABL {
+final class StereoABL {
     let pointer: UnsafeMutablePointer<AudioBufferList>
     var buffers: [UnsafeMutablePointer<Float>] = []
-
-    var list: UnsafeMutablePointer<AudioBufferList> { pointer }
 
     init(frames: Int) {
         let size = MemoryLayout<AudioBufferList>.offset(of: \AudioBufferList.mBuffers)! + 2 * MemoryLayout<AudioBuffer>.stride
@@ -880,7 +948,7 @@ private final class StereoABL {
             let p = UnsafeMutablePointer<Float>.allocate(capacity: frames)
             p.initialize(repeating: 0, count: frames)
             buffers.append(p)
-            let bp = UnsafeMutableRawPointer(pointer) + MemoryLayout<AudioBuffer>.stride * c
+            let bp = raw + MemoryLayout<AudioBuffer>.stride * c
             let ab = bp.assumingMemoryBound(to: AudioBuffer.self)
             ab.pointee.mNumberChannels = 1
             ab.pointee.mDataByteSize = UInt32(frames * 4)
