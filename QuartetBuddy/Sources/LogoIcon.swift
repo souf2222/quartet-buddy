@@ -11,8 +11,8 @@ import AppKit
 enum LogoIcon {
 
     /// Fixed canvas: matches the logo's aspect ratio at iconHeight.
-    static let iconHeight: CGFloat = 16
-    static let canvasSize = NSSize(width: 20, height: 16)
+    static let iconHeight: CGFloat = 18
+    static let canvasSize = NSSize(width: 20, height: 18)
 
     private static var baseCache: NSImage?
     private static var cache: [String: NSImage] = [:]
@@ -68,7 +68,7 @@ enum LogoIcon {
     }
 
     private static func headphoneSymbol() -> NSImage? {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        let cfg = NSImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
         return NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones")?
             .withSymbolConfiguration(cfg)
     }

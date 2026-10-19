@@ -1,33 +1,27 @@
 import AppKit
-import CoreAudio
 
-/// The "Outputs & Plug-ins" window: one row per stereo output pair
-/// (source / plug-in / enabled), with a details pane for the selected
-/// pair (route, mirror point, editor, signal flow).
+/// The "Outputs & Plug-ins" window: one column per stereo output pair —
+/// name, source, mirror point, plug-in, enabled, editor, and a vertical
+/// signal flow. Rows align across columns via NSGridView.
 ///
 /// Deliberately plain AppKit: native pop-up buttons, checkboxes,
-/// secondary text. State lives in InsertServer; this window only
-/// reads it and calls its setters.
-final class OutputsWindowController: NSObject, NSWindowDelegate {
+/// secondary text. State lives in InsertServer; this window only reads
+/// it and calls its setters.
+final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
 
     private var window: NSWindow?
-    private var selectedPair = 0
     private var suppressActions = false
 
-    // row controls per pair
+    // per-pair controls (index = pair)
+    private var nameFields: [NSTextField] = []
     private var sourcePopups: [NSPopUpButton] = []
+    private var mirrorPopups: [NSPopUpButton] = []
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
     private var editorButtons: [NSButton] = []
+    private var flowFields: [NSTextField] = []
 
-    // detail controls
-    private var detailTitle: NSTextField!
-    private var detailRoute: NSTextField!
-    private var mirrorLabel: NSTextField!
-    private var mirrorPopup: NSPopUpButton!
-    private var flowField: NSTextField!
-    private var editorButton: NSButton!
-    private var statusField: NSTextField!
+    private static let nameKey: (Int) -> String = { "insertPair.\($0).name" }
 
     func show() {
         if window == nil { build() }
@@ -36,17 +30,24 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Current custom name for a pair ("" when unset).
+    static func savedName(_ i: Int) -> String {
+        UserDefaults.standard.string(forKey: nameKey(i)) ?? ""
+    }
+
     func refresh() {
         guard window != nil else { return }
         suppressActions = true
         defer { suppressActions = false }
         let server = InsertServer.shared
-
-        // header sensitivity: nothing to route without the Quartet
         let live = server.running
 
         for i in 0..<4 {
-            // sources
+            if nameFields[i].stringValue != Self.savedName(i) {
+                nameFields[i].stringValue = Self.savedName(i)
+            }
+
+            // SOURCE
             let srcPopup = sourcePopups[i]
             srcPopup.removeAllItems()
             for src in InsertServer.sourceOptions(i) {
@@ -54,10 +55,25 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
                 srcPopup.lastItem?.representedObject = src.rawValue
             }
             srcPopup.selectItem(at: srcPopup.indexOfItem(withObjectValue: server.source(i).rawValue)
-                .getOrElse { srcPopup.indexOfItem(withTitle: InsertServer.sourceLabel(.systemMix, for: i)) })
-            srcPopup.isEnabled = live && i > 0
+                .getOrElse { 0 })
+            srcPopup.isEnabled = live
 
-            // plug-ins
+            // MIRROR TAP — only meaningful when the source is a mirror
+            let mirrored = server.source(i).copyIndex != nil && server.source(i) != .off
+            let mirrorPopup = mirrorPopups[i]
+            mirrorPopup.removeAllItems()
+            if mirrored {
+                mirrorPopup.addItem(withTitle: "Before Plug-in")
+                mirrorPopup.addItem(withTitle: "After Plug-in")
+                mirrorPopup.selectItem(at: server.mirrorPre(i) ? 0 : 1)
+                mirrorPopup.isEnabled = live
+            } else {
+                mirrorPopup.addItem(withTitle: "—")
+                mirrorPopup.selectItem(at: 0)
+                mirrorPopup.isEnabled = false
+            }
+
+            // PLUG-IN
             let plugPopup = pluginPopups[i]
             plugPopup.removeAllItems()
             plugPopup.addItem(withTitle: "None")
@@ -70,162 +86,147 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
             plugPopup.selectItem(at: plugPopup.indexOfItem(withObjectValue: key).getOrElse { 0 })
             plugPopup.isEnabled = live
 
-            enabledChecks[i].state = server.enabled(i) && !server.bypassAll ? .on : .off
+            enabledChecks[i].state = (server.enabled(i) && !server.bypassAll) ? .on : .off
             enabledChecks[i].isEnabled = live && server.pluginName(i) != nil
 
             editorButtons[i].isEnabled = server.pluginName(i) != nil
-        }
 
-        // details
-        let i = selectedPair
-        detailTitle.stringValue = InsertServer.pairNames[i]
-        detailRoute.stringValue = server.routeSummary(i)
-        flowField.stringValue = server.flowLine(i)
-
-        let mirrored = server.source(i).copyIndex != nil && server.source(i) != .off && i != server.source(i).copyIndex
-        mirrorLabel.isHidden = !mirrored
-        mirrorPopup.isHidden = !mirrored
-        if mirrored {
-            mirrorPopup.selectItem(at: server.mirrorPre(i) ? 0 : 1)
+            // SIGNAL FLOW (vertical: source ↓ …plug-ins… ↓ destination)
+            flowFields[i].stringValue = Self.flowParts(i).joined(separator: "\n↓\n")
         }
-        mirrorPopup.isEnabled = live
+    }
 
-        let hasPlugin = server.pluginName(i) != nil
-        editorButton.isEnabled = hasPlugin && !server.running || hasPlugin && server.running
-        editorButton.isHidden = !hasPlugin
-        statusField.stringValue = live ? "" : "Quartet not connected — routing is inactive."
-        if server.running && server.tapSilent {
-            statusField.stringValue = "⚠️ Tap silent — allow Quartet Buddy in System Settings → Privacy → System Audio Recording."
+    /// The flow for pair i: its source's playback pair, any plug-ins in
+    /// the path (source's, when mirroring AFTER it; its own when
+    /// enabled), then the destination.
+    private static func flowParts(_ i: Int) -> [String] {
+        let server = InsertServer.shared
+        guard let src = server.routes[i].src else {
+            return ["Silence", "Out \(2 * i + 1)–\(2 * i + 2)"]
         }
+        var parts: [String] = ["Playback \(2 * src + 1)–\(2 * src + 2)"]
+        if server.routes[i].post {
+            // mirroring AFTER the source's plug-in: that plug-in is in
+            // the path before this pair's
+            let srcPlugin = server.pluginName(src).map(InsertServer.shortName) ?? nil
+            if let srcPlugin { parts.append("\(srcPlugin)") }
+        }
+        if let pl = server.pluginName(i), server.enabled(i), !server.bypassAll {
+            parts.append(InsertServer.shortName(pl))
+        }
+        parts.append("Out \(2 * i + 1)–\(2 * i + 2)")
+        return parts
     }
 
     // MARK: - build
 
     private func build() {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
-        content.addSubview(stack)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 880, height: 600))
+        let grid = NSGridView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.columnSpacing = 20
+        grid.rowSpacing = 8
+        content.addSubview(grid)
 
-        // table header
-        let header = makeGridRow(output: "Output", source: "Audio Source",
-                                 plugin: "Plug-in", enabled: "Enabled", bold: true)
-        stack.addArrangedSubview(header)
+        // 1) column headers: Out 1‑2 … Out 7‑8
+        grid.addRow(with: (0..<4).map { headerField(InsertServer.pairNames[$0]) })
 
-        // rows
+        // 2) custom names (editable)
+        grid.addRow(with: (0..<4).map { i in
+            let f = NSTextField()
+            f.placeholderString = "Name…"
+            f.font = .systemFont(ofSize: 11)
+            f.tag = 500 + i
+            f.delegate = self
+            nameFields.append(f)
+            return f
+        })
+
+        // 3) SOURCE
+        grid.addRow(with: (0..<4).map { _ in sectionField("SOURCE") })
+        grid.addRow(with: (0..<4).map { i in
+            let p = NSPopUpButton()
+            p.target = self
+            p.action = #selector(sourceChanged(_:))
+            p.tag = 100 + i
+            sourcePopups.append(p)
+            return p
+        })
+
+        // 4) MIRROR TAP
+        grid.addRow(with: (0..<4).map { _ in sectionField("MIRROR TAP") })
+        grid.addRow(with: (0..<4).map { i in
+            let p = NSPopUpButton()
+            p.target = self
+            p.action = #selector(mirrorChanged(_:))
+            p.tag = 200 + i
+            mirrorPopups.append(p)
+            return p
+        })
+
+        // 5) PLUG-IN
+        grid.addRow(with: (0..<4).map { _ in sectionField("PLUG-IN") })
+        grid.addRow(with: (0..<4).map { i in
+            let p = NSPopUpButton()
+            p.target = self
+            p.action = #selector(pluginChanged(_:))
+            p.tag = 300 + i
+            pluginPopups.append(p)
+            return p
+        })
+
+        // 6) ENABLED
+        grid.addRow(with: (0..<4).map { i in
+            let c = NSButton(checkboxWithTitle: "Enabled", target: self,
+                             action: #selector(enabledChanged(_:)))
+            c.tag = 400 + i
+            enabledChecks.append(c)
+            return c
+        })
+
+        // 7) editors
+        grid.addRow(with: (0..<4).map { i in
+            let b = NSButton(title: "Open Editor…", target: self,
+                             action: #selector(rowEditorOpened(_:)))
+            b.tag = 450 + i
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 11)
+            editorButtons.append(b)
+            return b
+        })
+
+        // 8) SIGNAL FLOW
+        grid.addRow(with: (0..<4).map { _ in sectionField("SIGNAL FLOW") })
+        grid.addRow(with: (0..<4).map { i in
+            let f = NSTextField(labelWithString: "")
+            f.alignment = .center
+            f.font = .systemFont(ofSize: 11)
+            f.textColor = .secondaryLabelColor
+            f.lineBreakMode = .byWordWrapping
+            f.maximumNumberOfLines = 6
+            flowFields.append(f)
+            return f
+        })
+
+        // column widths (NSGridView sizes to content; pin the popups)
         for i in 0..<4 {
-            let outLabel = secondaryTextField(InsertServer.pairNames[i], bold: true)
-            let srcPopup = NSPopUpButton()
-            srcPopup.translatesAutoresizingMaskIntoConstraints = false
-            srcPopup.action = #selector(sourceChanged(_:))
-            srcPopup.target = self
-            srcPopup.tag = 100 + i
-            sourcePopups.append(srcPopup)
-
-            let plugPopup = NSPopUpButton()
-            plugPopup.translatesAutoresizingMaskIntoConstraints = false
-            plugPopup.action = #selector(pluginChanged(_:))
-            plugPopup.target = self
-            plugPopup.tag = 200 + i
-            pluginPopups.append(plugPopup)
-
-            let check = NSButton(checkboxWithTitle: "", target: self, action: #selector(enabledChanged(_:)))
-            check.tag = 300 + i
-            enabledChecks.append(check)
-
-            let editor = NSButton(title: "Open Editor…", target: self,
-                                   action: #selector(rowEditorOpened(_:)))
-            editor.tag = 400 + i
-            editor.bezelStyle = .rounded
-            editor.controlSize = .small
-            editor.font = .systemFont(ofSize: 11)
-            editorButtons.append(editor)
-
-            let row = NSStackView(views: [outLabel, srcPopup, plugPopup, check, editor])
-            row.orientation = .horizontal
-            row.spacing = 12
-            row.translatesAutoresizingMaskIntoConstraints = false
-            // fixed column widths so the rows align
-            NSLayoutConstraint.activate([
-                outLabel.widthAnchor.constraint(equalToConstant: 70),
-                srcPopup.widthAnchor.constraint(equalToConstant: 170),
-                plugPopup.widthAnchor.constraint(equalToConstant: 190),
-                check.widthAnchor.constraint(equalToConstant: 64),
-                editor.widthAnchor.constraint(equalToConstant: 110),
-            ])
-            stack.addArrangedSubview(row)
+            for rowIdx in [3, 5, 7] {   // source, mirror, plug-in popup rows
+                if let cellView = grid.cell(atColumnIndex: i, rowIndex: rowIdx).contentView {
+                    cellView.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
+                }
+            }
+            if let nameCell = grid.cell(atColumnIndex: i, rowIndex: 1).contentView {
+                nameCell.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
+            }
         }
 
-        stack.addArrangedSubview(makeSeparator())
-
-        // details pane
-        let detailBox = NSBox()
-        detailBox.boxType = .custom
-        detailBox.borderType = .noBorder
-        detailBox.title = ""
-        detailBox.translatesAutoresizingMaskIntoConstraints = false
-        let dstack = NSStackView()
-        dstack.orientation = .vertical
-        dstack.alignment = .leading
-        dstack.spacing = 8
-        dstack.translatesAutoresizingMaskIntoConstraints = false
-        detailBox.contentView = dstack
-
-        detailTitle = NSTextField(labelWithString: "Out 1‑2")
-        detailTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        dstack.addArrangedSubview(detailTitle)
-
-        detailRoute = secondaryTextField("")
-        dstack.addArrangedSubview(detailRoute)
-
-        // mirror point row
-        let mirrorRow = NSStackView(views: [])
-        mirrorRow.orientation = .horizontal
-        mirrorRow.spacing = 8
-        mirrorLabel = secondaryTextField("Mirror Signal")
-        mirrorPopup = NSPopUpButton()
-        mirrorPopup.translatesAutoresizingMaskIntoConstraints = false
-        mirrorPopup.addItem(withTitle: "Before Source Plug-in")
-        mirrorPopup.addItem(withTitle: "After Source Plug-in")
-        mirrorPopup.action = #selector(mirrorChanged(_:))
-        mirrorPopup.target = self
-        mirrorRow.addArrangedSubview(mirrorLabel)
-        mirrorRow.addArrangedSubview(mirrorPopup)
-        dstack.addArrangedSubview(mirrorRow)
-
-        // editor + status row
-        let actionRow = NSStackView(views: [])
-        actionRow.orientation = .horizontal
-        actionRow.spacing = 8
-        editorButton = NSButton(title: "Open Editor…", target: self, action: #selector(openEditor(_:)))
-        actionRow.addArrangedSubview(editorButton)
-        statusField = secondaryTextField("")
-        statusField.lineBreakMode = .byWordWrapping
-        statusField.maximumNumberOfLines = 2
-        actionRow.addArrangedSubview(statusField)
-        dstack.addArrangedSubview(actionRow)
-
-        // signal flow
-        dstack.addArrangedSubview(secondaryTextField("Signal Flow", bold: true))
-        flowField = secondaryTextField("")
-        flowField.lineBreakMode = .byWordWrapping
-        flowField.maximumNumberOfLines = 2
-        dstack.addArrangedSubview(flowField)
-
-        stack.addArrangedSubview(detailBox)
-
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            detailBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            statusField.widthAnchor.constraint(equalToConstant: 240),
-            flowField.widthAnchor.constraint(equalTo: detailBox.widthAnchor),
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            grid.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -24),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
+            grid.widthAnchor.constraint(lessThanOrEqualToConstant: 840),
         ])
 
         let w = NSWindow(contentRect: content.bounds,
@@ -240,104 +241,87 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // kept alive; nothing to do (views are ours, plugins' views stay
-        // owned by InsertServer's editor windows)
+        // kept alive; nothing to do
+    }
+
+    // MARK: - name editing
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField,
+              field.tag >= 500, field.tag < 504, !suppressActions else { return }
+        let i = field.tag - 500
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        if name.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.nameKey(i))
+        } else {
+            UserDefaults.standard.set(name, forKey: Self.nameKey(i))
+        }
+        QBLog.log("insert: pair \(i) named '\(name)'")
+        refresh()
     }
 
     // MARK: - helpers
 
-    private func makeGridRow(output: String, source: String, plugin: String,
-                              enabled: String, bold: Bool) -> NSStackView {
-        let views = [secondaryTextField(output, bold: bold),
-                    secondaryTextField(source, bold: bold),
-                    secondaryTextField(plugin, bold: bold),
-                    secondaryTextField(enabled, bold: bold),
-                    secondaryTextField("Editor", bold: bold)]
-        let row = NSStackView(views: views)
-        row.orientation = .horizontal
-        row.spacing = 12
-        NSLayoutConstraint.activate([
-            views[0].widthAnchor.constraint(equalToConstant: 70),
-            views[1].widthAnchor.constraint(equalToConstant: 170),
-            views[2].widthAnchor.constraint(equalToConstant: 190),
-            views[3].widthAnchor.constraint(equalToConstant: 64),
-            views[4].widthAnchor.constraint(equalToConstant: 110),
-        ])
-        return row
-    }
-
-    private func secondaryTextField(_ s: String, bold: Bool = false) -> NSTextField {
+    private func headerField(_ s: String) -> NSTextField {
         let f = NSTextField(labelWithString: s)
-        f.font = .systemFont(ofSize: f.font == nil ? 12 : 12, weight: bold ? .semibold : .regular)
-        f.textColor = bold ? nil : .secondaryLabelColor
+        f.font = .systemFont(ofSize: 13, weight: .semibold)
         return f
     }
-
-    private func makeSeparator() -> NSView {
-        let line = NSBox()
-        line.boxType = .separator
-        return line
+    private func sectionField(_ s: String) -> NSTextField {
+        let f = NSTextField(labelWithString: s)
+        f.font = .systemFont(ofSize: 10, weight: .semibold)
+        f.textColor = .secondaryLabelColor
+        return f
     }
 
     // MARK: - actions
 
-    // Row selection: each control sets selectedPair from its tag.
-
     @objc private func sourceChanged(_ sender: NSPopUpButton) {
-        selectedPair = sender.tag - 100
+        let i = sender.tag - 100
         guard !suppressActions, let raw = sender.selectedItem?.representedObject as? String,
               let src = InsertServer.PairSource(rawValue: raw) else { return refresh() }
-        InsertServer.shared.setSource(selectedPair, src)
-        refresh()
-    }
-
-    @objc private func pluginChanged(_ sender: NSPopUpButton) {
-        selectedPair = sender.tag - 200
-        guard !suppressActions, let key = sender.selectedItem?.representedObject as? String else { return refresh() }
-        let desc = key.isEmpty ? nil
-            : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
-        InsertServer.shared.setPlugin(selectedPair, desc)
-        refresh()
-    }
-
-    @objc private func enabledChanged(_ sender: NSButton) {
-        selectedPair = sender.tag - 300
-        guard !suppressActions else { return refresh() }
-        InsertServer.shared.setEnabled(selectedPair, sender.state == .on)
+        InsertServer.shared.setSource(i, src)
         refresh()
     }
 
     @objc private func mirrorChanged(_ sender: NSPopUpButton) {
-        guard !suppressActions else { return }
-        InsertServer.shared.setMirrorPre(selectedPair, sender.indexOfSelectedItem == 0)
+        let i = sender.tag - 200
+        guard !suppressActions, sender.indexOfSelectedItem >= 0 else { return }
+        InsertServer.shared.setMirrorPre(i, sender.indexOfSelectedItem == 0)
         refresh()
     }
 
-    @objc private func openEditor(_ sender: NSButton) {
-        InsertServer.shared.showPluginUI(selectedPair)
+    @objc private func pluginChanged(_ sender: NSPopUpButton) {
+        let i = sender.tag - 300
+        guard !suppressActions, let key = sender.selectedItem?.representedObject as? String else { return refresh() }
+        let desc = key.isEmpty ? nil
+            : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
+        InsertServer.shared.setPlugin(i, desc)
+        refresh()
     }
 
-    /// Per-row "Open Editor…" button (tag = 400 + pair).
+    @objc private func enabledChanged(_ sender: NSButton) {
+        let i = sender.tag - 400
+        guard !suppressActions else { return refresh() }
+        InsertServer.shared.setEnabled(i, sender.state == .on)
+        refresh()
+    }
+
     @objc private func rowEditorOpened(_ sender: NSButton) {
-        selectedPair = sender.tag - 400
-        InsertServer.shared.showPluginUI(selectedPair)
-        refresh()
+        InsertServer.shared.showPluginUI(sender.tag - 450)
     }
 }
 
 private extension NSPopUpButton {
-    /// Index of the item whose representedObject == value, or fallback.
+    /// Index of the item whose representedObject == value, or nil.
     func indexOfItem(withObjectValue value: String) -> Int? {
-        for (i, item) in enumerateItems() where item.representedObject as? String == value {
+        for (i, item) in itemArray.enumerated() where item.representedObject as? String == value {
             return i
         }
         return nil
     }
-    func enumerateItems() -> [(Int, NSMenuItem)] {
-        itemArray.enumerated().map { ($0.offset, $0.element) }
-    }
 }
 
-extension Optional where Wrapped == Int {
+private extension Optional where Wrapped == Int {
     func getOrElse(_ f: () -> Int) -> Int { self ?? f() }
 }
