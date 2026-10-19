@@ -1,6 +1,8 @@
 import Foundation
 import CoreAudio
+import ObjectiveC
 import AudioToolbox
+import AudioUnit
 import AVFAudio
 import CoreAudioKit
 import AppKit
@@ -22,12 +24,17 @@ import AppKit
 ///
 /// The system default output stays "Quartet", so the volume-keys / fader /
 /// mute bindings in OSVolumeMirror are unaffected.
-final class InsertServer {
+final class InsertServer: NSObject {
 
     static let shared = InsertServer()
 
     /// Fired on the main thread whenever state changed (menu refresh).
     var onStateChange: (() -> Void)?
+
+    /// True when the tap has never delivered a non-silent cycle while the
+    /// insert is running — the signature of macOS denying the System Audio
+    /// Recording permission (it silences taps instead of failing them).
+    private(set) var tapSilent = true
 
     private(set) var running = false
     private(set) var pluginName: String?
@@ -59,8 +66,45 @@ final class InsertServer {
     /// `dry`). Audio-thread only — no locking.
     private var chunkOffset = 0
     private var chunkFrames = 0
+    /// Source-node pull counter (diagnostics).
+    private var sourcePulls = 0
+    private var lastLoggedPulls = 0
+    /// Time-based log throttle state (audio thread).
+    private var lastLogTime: UInt64 = 0
+    private let logIntervalTicks: UInt64 = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return 5_000_000_000 * UInt64(info.numer) / UInt64(info.denom)   // ~5 s
+    }()
 
-    // MARK: - Lifecycle
+    // MARK: - Buffer size (latency)
+
+    /// Supported IO slice sizes (frames @ 48 kHz → ms).
+    static let bufferChoices: [(frames: Int, label: String)] = [
+        (32, "32 — 0.7 ms"),
+        (64, "64 — 1.3 ms"),
+        (128, "128 — 2.7 ms"),
+        (256, "256 — 5.3 ms"),
+        (512, "512 — 10.7 ms"),
+    ]
+
+    /// Default when never configured: 32 (lowest latency).
+    private static let defaultBufferFrames = 32
+
+    static func savedBufferFrames() -> Int {
+        let v = UserDefaults.standard.integer(forKey: "insertBufferFrames")
+        return bufferChoices.contains { $0.frames == v } ? v : defaultBufferFrames
+    }
+
+    /// Change the IO slice: restarts the insert with the new size.
+    func setBufferFrames(_ frames: Int) {
+        UserDefaults.standard.set(frames, forKey: "insertBufferFrames")
+        if running {
+            stop()
+            start()
+        }
+        onStateChange?()
+    }
 
     func setRunning(_ on: Bool) {
         if on { start() } else { stop() }
@@ -71,7 +115,7 @@ final class InsertServer {
         do {
             try build()
             running = true
-            QBLog.log("insert: running (\(pluginName ?? "no plugin"), \(Int(sampleRate)) Hz)")
+            QBLog.log("insert: running (\(pluginName ?? "no plugin"), \(Int(sampleRate)) Hz, buffer \(Self.savedBufferFrames()) frames)")
         } catch {
             QBLog.log("insert: start failed — \(error.localizedDescription)")
             teardown()
@@ -92,6 +136,7 @@ final class InsertServer {
         guard #available(macOS 14.2, *) else {
             throw InsertError.other("needs macOS 14.2+ for Core Audio taps")
         }
+        tapSilent = true
         guard let quartet = OSVolumeMirror.scanForQuartet() else {
             throw InsertError.other("Quartet not found in Core Audio")
         }
@@ -127,14 +172,24 @@ final class InsertServer {
         guard agg != 0 else { throw InsertError.other("aggregate id 0") }
         aggregateID = agg
 
-        // a sane IO slice: plugins reject giant buffers, and latency
-        // improves too (Quartet default is 4096!)
+        // Latency: the IO slice drives the insert's round-trip delay
+        // (32 frames = 0.67 ms @ 48 kHz). Persisted; defaults to 32.
+        let requested = Self.savedBufferFrames()
         var bufAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
                                                   mScope: kAudioDevicePropertyScopeOutput,
                                                   mElement: kAudioObjectPropertyElementMain)
-        var bufFrames = UInt32(512)
-        AudioObjectSetPropertyData(agg, &bufAddr, 0, nil,
-                                   UInt32(MemoryLayout<UInt32>.size), &bufFrames)
+        var bufFrames = UInt32(requested)
+        let bufErr = AudioObjectSetPropertyData(agg, &bufAddr, 0, nil,
+                                                 UInt32(MemoryLayout<UInt32>.size), &bufFrames)
+        // read back what the HAL actually granted (safety offsets may
+        // clamp it — the Quartet is USB)
+        var granted = UInt32(0)
+        var gSize = UInt32(MemoryLayout<UInt32>.size)
+        if AudioObjectGetPropertyData(agg, &bufAddr, 0, nil, &gSize, &granted) == noErr, granted != requested {
+            QBLog.log("insert: buffer \(requested) not granted — HAL gave \(granted)")
+        } else if bufErr != noErr {
+            QBLog.log("insert: buffer size set err \(bufErr)")
+        }
 
         // 3) dry buffer + plugin (if it fails, don't leave the system silent)
         dry = StereoABL(frames: 4096)
@@ -233,12 +288,8 @@ final class InsertServer {
             for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
         }
         cycleCount += 1
-        if cycleCount < 3 || cycleCount % 8192 == 0 {
-            let inDesc = inInputData.map { Self.describe(UnsafeMutablePointer(mutating: $0)) } ?? "no input"
-            var dryPeak: Float = 0
-            for f in 0..<frames { let v = abs(dry.buffers[0][f]); if v > dryPeak { dryPeak = v } }
-            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) in[\(inDesc)] dryPeak=\(dryPeak)")
-        }
+        let now = mach_absolute_time()
+        if lastLogTime == 0 { lastLogTime = now }
 
         // 2) outs 1‑2: plugin chain via AVAudioEngine manual rendering
         //    (offline + renderOffline — the block API returns -50 on
@@ -276,6 +327,25 @@ final class InsertServer {
                 procL = dry.buffers[0]   // graceful dry fallback
                 procR = dry.buffers[1]
             }
+        }
+
+        // tap health: sustained exact silence = capture denied/muted.
+        // Cheap check every cycle; the full log only on the throttle.
+        if !tapSilent { /* already known-live */ }
+        else if dry.buffers[0][0] != 0 || dry.buffers[1][0] != 0 {
+            tapSilent = false
+            QBLog.log("insert: tap is live (first non-silent cycle)")
+            DispatchQueue.main.async { [weak self] in self?.onStateChange?() }
+        }
+
+        if cycleCount < 3 || now - lastLogTime > logIntervalTicks {
+            lastLogTime = now
+            var dryPeak: Float = 0
+            for f in 0..<frames { let v = abs(dry.buffers[0][f]); if v > dryPeak { dryPeak = v } }
+            var procPeak: Float = 0
+            for f in 0..<frames { let v = abs(procL[f]); if v > procPeak { procPeak = v } }
+            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) dryPeak=\(dryPeak) procPeak=\(procPeak) pulls=\(sourcePulls - lastLoggedPulls) \(pluginBypass ? "[bypassed]" : "")")
+            lastLoggedPulls = sourcePulls
         }
         // 3) write the Quartet's output channels:
         //    1‑2 = processed, 3‑4 = dry, 5‑8 = silence
@@ -388,6 +458,7 @@ final class InsertServer {
                 Self.fillZero(abl, Int(frames))
                 return noErr
             }
+            self.sourcePulls += 1
             let n = min(Int(frames), self.chunkFrames)
             let off = self.chunkOffset
             let list = UnsafeMutableAudioBufferListPointer(abl)
@@ -464,56 +535,33 @@ final class InsertServer {
     // MARK: - Plugin UI
 
     func showPluginUI() {
-        guard let unit = effect?.audioUnit else { return }
+        guard let effect else { return }
+        let unit = effect.audioUnit
 
-        // kAudioUnitProperty_CocoaUI returns AudioUnitCocoaViewInfo
-        // { CFURLRef bundle; CFArrayRef classNames; } — Swift mis-imports
-        // the array field, so read it raw.
-        let infoSize = 16
-        let raw = UnsafeMutableRawPointer.allocate(byteCount: infoSize, alignment: 8)
-        raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
-        defer { raw.deallocate() }
-        var size = UInt32(infoSize)
-        let err = AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
-                                       kAudioUnitScope_Global, 0, raw, &size)
-        guard err == noErr else {
-            QBLog.log("insert: no Cocoa UI (err \(err)) — plugin has no view")
+        var view: NSView?
+
+        // 1) the plugin's custom view (kAudioUnitProperty_CocoaUI).
+        //    The struct is read raw (Swift mis-imports the class array),
+        //    and JUCE view classes are registered at runtime — try both
+        //    NSClassFromString and the ObjC runtime, then the AUv2
+        //    uiViewForAudioUnit:withSize: protocol.
+        view = Self.makeCustomView(unit: unit, log: { QBLog.log($0) })
+
+        // 2) fallback: generic parameter view (always available)
+        if view == nil {
+            view = Self.makeGenericView(for: effect, log: { QBLog.log($0) })
+        }
+
+        guard let view else {
             let alert = NSAlert()
-            alert.messageText = "\(pluginName ?? "The plugin") exposes no graphical editor."
+            alert.messageText = "\(pluginName ?? "The plugin") exposes no editable view."
             alert.runModal()
             return
         }
-        let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
-        guard let bundlePtr, let classArrayPtr else {
-            QBLog.log("insert: Cocoa UI fields empty")
-            return
-        }
-        let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
-        let classNamesArr = Unmanaged<CFArray>.fromOpaque(classArrayPtr).takeUnretainedValue()
-        let classCount = CFArrayGetCount(classNamesArr)
-        var classNames: [String] = []
-        for i in 0..<classCount {
-            if let s = CFArrayGetValueAtIndex(classNamesArr, i) {
-                let str = Unmanaged<CFString>.fromOpaque(s).takeUnretainedValue() as String
-                classNames.append(str)
-            }
-        }
-        QBLog.log("insert: CocoaUI bundle=\(bundleURL.path) classes=\(classNames)")
-
-        guard let bundle = Bundle(url: bundleURL), bundle.load(),
-              let className = classNames.first,
-              let cls = NSClassFromString(className) as? NSView.Type else {
-            QBLog.log("insert: view class unresolved (\(classNames))")
-            let alert = NSAlert()
-            alert.messageText = "Couldn't load the plugin's editor view."
-            alert.informativeText = "Classes: \(classNames.joined(separator: ", "))"
-            alert.runModal()
-            return
-        }
-        let view = cls.init(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
         viewWindow?.close()
-        let window = NSWindow(contentRect: view.bounds,
+        var frame = view.bounds
+        if frame.isEmpty { frame = NSRect(x: 0, y: 0, width: 900, height: 620) }
+        let window = NSWindow(contentRect: frame,
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)
         window.title = pluginName ?? "AU Plugin"
@@ -523,6 +571,117 @@ final class InsertServer {
         // menubar apps need this to bring their windows forward
         NSApp.activate(ignoringOtherApps: true)
         viewWindow = window
+    }
+
+    /// The plugin's custom Cocoa UI: resolve the (often dynamically
+    /// registered) JUCE view class, then drive the AUv2 view protocol.
+    private static func makeCustomView(unit: AudioUnit, log: (String) -> Void) -> NSView? {
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
+        raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
+        defer { raw.deallocate() }
+        var size = UInt32(16)
+        guard AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
+                                   kAudioUnitScope_Global, 0, raw, &size) == noErr else { return nil }
+        let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        guard let bundlePtr, let classArrayPtr else { return nil }
+        let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
+        let classArray = Unmanaged<CFArray>.fromOpaque(classArrayPtr).takeUnretainedValue()
+        var classNames: [String] = []
+        for i in 0..<CFArrayGetCount(classArray) {
+            if let p = CFArrayGetValueAtIndex(classArray, i) {
+                classNames.append(Unmanaged<CFString>.fromOpaque(p).takeUnretainedValue() as String)
+            }
+        }
+        guard let className = classNames.first else { return nil }
+        log("insert: CocoaUI class=\(className) bundle=\(bundleURL.lastPathComponent)")
+
+        // JUCE registers its view class at runtime in-process; try both lookups
+        var cls: AnyClass? = NSClassFromString(className)
+        if cls == nil, let c = className.cString(using: .utf8),
+           let o = objc_getClass(c) as? AnyClass {
+            cls = o
+            log("insert: NSClassFromString miss, objc_getClass=\(true)")
+        }
+        guard let cls else {
+            log("insert: custom view class not registered in-process — falling back to generic UI")
+            return nil
+        }
+
+        let instance: NSObject = (cls as! NSObject.Type).init()
+        let sel = sel_registerName("uiViewForAudioUnit:withSize:")
+        if class_getInstanceMethod(cls, sel) != nil {
+            // -(NSView*)uiViewForAudioUnit:(AudioUnit)withSize:(NSSize)
+            typealias Fn = @convention(c) (NSObject, Selector, UnsafeMutableRawPointer, CGSize) -> AnyObject?
+            let imp = method_getImplementation(class_getInstanceMethod(cls, sel)!)
+            let fn = unsafeBitCast(imp, to: Fn.self)
+            if let v = fn(instance, sel, UnsafeMutableRawPointer(unit), CGSize(width: 1000, height: 650)) as? NSView {
+                log("insert: custom view via uiViewForAudioUnit ok (\(v))")
+                return v
+            }
+        }
+        // plain NSView subclass (non-JUCE AUv2 views)
+        if let v = instance as? NSView, !v.subviews.isEmpty {
+            log("insert: custom view direct (\(v))")
+            return v
+        }
+        return nil
+    }
+
+    /// Generic parameter UI from the AU's parameter tree (always works).
+    private static func makeGenericView(for effect: AVAudioUnitEffect, log: (String) -> Void) -> NSView? {
+        let au = effect.auAudioUnit
+        guard let tree = au.parameterTree else {
+            log("insert: generic view unavailable (no parameter tree)")
+            return nil
+        }
+        let params = tree.allParameters
+        InsertServer.shared.genericParams = params
+        log("insert: generic view, \(params.count) parameters")
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 24 + params.count * 48))
+        for (i, param) in params.enumerated() {
+            let y = CGFloat(params.count - 1 - i) * 48
+            let label = NSTextField(labelWithString: param.identifier ?? "param")
+            label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            label.frame = NSRect(x: 16, y: y + 26, width: 428, height: 14)
+            let value = NSTextField(labelWithString: Self.fmt(param.value, unit: param.unit))
+            value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            value.alignment = .right
+            value.frame = NSRect(x: 16, y: y + 26, width: 428, height: 14)
+
+            let slider = NSSlider(value: Double(param.value), minValue: Double(param.minValue),
+                                  maxValue: Double(param.maxValue), target: nil,
+                                  action: nil)
+            slider.frame = NSRect(x: 16, y: y, width: 428, height: 20)
+            slider.target = InsertServer.shared
+            slider.action = #selector(InsertServer.shared.sliderChanged(_:))
+            slider.identifier = NSUserInterfaceItemIdentifier("param:\(i)")
+            content.addSubview(label)
+            content.addSubview(slider)
+        }
+        content.autoresizingMask = [.width, .height]
+        return content
+    }
+
+    /// Generic-view parameter list (identifier → AUParameter).
+    private var genericParams: [AUParameter] = []
+
+    /// Generic-view slider action: apply the new value to the parameter.
+    @objc func sliderChanged(_ sender: NSSlider) {
+        guard let id = sender.identifier?.rawValue, id.hasPrefix("param:"),
+              let idx = Int(id.dropFirst(6)), genericParams.indices.contains(idx) else { return }
+        genericParams[idx].value = Float(sender.doubleValue)
+    }
+
+    private static func fmt(_ v: Float, unit: AudioUnitParameterUnit) -> String {
+        switch unit {
+        case .percent: return String(format: "%.0f%%", v)
+        case .decibels: return String(format: "%.1f dB", v)
+        case .hertz: return String(format: "%.0f Hz", v)
+        case .seconds: return String(format: "%.3f s", v)
+        default: return String(format: "%.2f", v)
+        }
     }
 
     // MARK: - CoreAudio helpers

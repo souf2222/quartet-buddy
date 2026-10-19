@@ -438,10 +438,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(withTitle: "Open Plugin UI…",
                          action: #selector(openInsertUI(_:)), keyEquivalent: "")
         }
+        // latency (buffer size)
+        let bufItem = menu.addItem(withTitle: "Latency", action: nil, keyEquivalent: "")
+        bufItem.submenu = NSMenu()
+        let current = InsertServer.savedBufferFrames()
+        for choice in InsertServer.bufferChoices {
+            let item = bufItem.submenu!.addItem(withTitle: choice.label,
+                                                action: #selector(pickInsertBuffer(_:)), keyEquivalent: "")
+            item.representedObject = choice.frames
+            item.state = choice.frames == current ? .on : .off
+        }
         if server.running {
-            let info = menu.addItem(withTitle: "Outs 1‑2 → plugin · 3‑4 → dry",
-                                    action: nil, keyEquivalent: "")
-            info.isEnabled = false
+            if server.tapSilent {
+                menu.addItem(withTitle: "⚠️ Tap silent — allow Quartet Buddy in",
+                             action: nil, keyEquivalent: "").isEnabled = false
+                let fix = menu.addItem(withTitle: "System Settings → Privacy → System Audio Recording",
+                                       action: #selector(openPrivacySettings(_:)), keyEquivalent: "")
+                fix.isEnabled = true
+            } else {
+                let info = menu.addItem(withTitle: "Outs 1‑2 → plugin · 3‑4 → dry",
+                                        action: nil, keyEquivalent: "")
+                info.isEnabled = false
+            }
         }
 
         menu.addItem(.separator())
@@ -674,6 +692,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openInsertUI(_ sender: NSMenuItem) {
         InsertServer.shared.showPluginUI()
+    }
+
+    @objc private func pickInsertBuffer(_ sender: NSMenuItem) {
+        guard let frames = sender.representedObject as? Int else { return }
+        InsertServer.shared.setBufferFrames(frames)
+    }
+
+    @objc private func openPrivacySettings(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SystemAudioRecording")!)
     }
 
     @objc private func openLog(_ sender: NSMenuItem) {
