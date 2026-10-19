@@ -56,6 +56,7 @@ swiftc -O \
     "$SRC/LogoIcon.swift" \
     "$SRC/QuartetPresence.swift" \
     "$SRC/OSVolumeMirror.swift" \
+    "$SRC/InsertServer.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \
     -o "$BUNDLE/Contents/MacOS/$APPNAME"

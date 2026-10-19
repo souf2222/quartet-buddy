@@ -125,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupGlue()
         setupOSSlider()
         setupMIDI()
+        setupInsert()
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
@@ -140,6 +141,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the fader may have moved while unplugged (touchscreen,
                 // Control 2) — pull a fresh tree so slider + menu are truth
                 self?.glue.requestTree()
+                // the AU insert follows the (re)connected Quartet
+                if UserDefaults.standard.bool(forKey: "insertEnabled") {
+                    InsertServer.shared.start()
+                }
+            } else {
+                // the insert's aggregate is dead without the Quartet
+                InsertServer.shared.stop()
             }
             self?.refreshMenu()
         }
@@ -285,6 +293,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - AU insert
+
+    /// Restore the insert (and its plugin) on launch if it was enabled.
+    private func setupInsert() {
+        let server = InsertServer.shared
+        server.onStateChange = { [weak self] in self?.refreshMenu() }
+        if UserDefaults.standard.bool(forKey: "insertEnabled") {
+            server.start()
+        }
+    }
+
     // MARK: - Menu
 
     private func setupMenu() {
@@ -392,7 +411,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // warnings (only when something needs attention)
+        // AU insert section
+        let server = InsertServer.shared
+        menu.addItem(sectionHeader("AU Insert"))
+        let insertItem = menu.addItem(withTitle: server.running ? "Insert On" : "Insert Off",
+                                      action: #selector(toggleInsert(_:)), keyEquivalent: "")
+        insertItem.state = server.running ? .on : .off
+
+        let plugItem = menu.addItem(withTitle: "Outs 1‑2 Plugin", action: nil, keyEquivalent: "")
+        plugItem.submenu = NSMenu()
+        let none = plugItem.submenu!.addItem(withTitle: "None (dry)",
+                                              action: #selector(pickInsertPlugin(_:)), keyEquivalent: "")
+        none.representedObject = ""
+        none.state = server.pluginName == nil ? .on : .off
+        for (name, desc) in InsertServer.listPlugins() {
+            let item = plugItem.submenu!.addItem(withTitle: name,
+                                                 action: #selector(pickInsertPlugin(_:)), keyEquivalent: "")
+            item.representedObject = InsertServer.descKey(desc)
+            item.state = server.pluginName != nil && InsertServer.descKey(desc) == UserDefaults.standard.string(forKey: "insertPluginDesc") ? .on : .off
+        }
+
+        if server.pluginName != nil {
+            let bypass = menu.addItem(withTitle: "Bypass Plugin",
+                                       action: #selector(toggleInsertBypass(_:)), keyEquivalent: "")
+            bypass.state = server.pluginBypass ? .on : .off
+            menu.addItem(withTitle: "Open Plugin UI…",
+                         action: #selector(openInsertUI(_:)), keyEquivalent: "")
+        }
+        if server.running {
+            let info = menu.addItem(withTitle: "Outs 1‑2 → plugin · 3‑4 → dry",
+                                    action: nil, keyEquivalent: "")
+            info.isEnabled = false
+        }
+
+        menu.addItem(.separator())
         if glue.state != .connected {
             menu.addItem(withTitle: "Reconnect to ApogeeGlue",
                          action: #selector(reconnect(_:)), keyEquivalent: "")
@@ -599,6 +651,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func testDown(_ sender: NSMenuItem) {
         QBLog.log("test: volume -1 dB")
         adjustGain(by: -1.0)
+    }
+
+    // MARK: AU insert
+
+    @objc private func toggleInsert(_ sender: NSMenuItem) {
+        let on = !InsertServer.shared.running
+        UserDefaults.standard.set(on, forKey: "insertEnabled")
+        InsertServer.shared.setRunning(on)
+    }
+
+    @objc private func pickInsertPlugin(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        let desc = key.isEmpty ? nil
+            : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
+        InsertServer.shared.setPlugin(desc)
+    }
+
+    @objc private func toggleInsertBypass(_ sender: NSMenuItem) {
+        InsertServer.shared.setBypass(!InsertServer.shared.pluginBypass)
+    }
+
+    @objc private func openInsertUI(_ sender: NSMenuItem) {
+        InsertServer.shared.showPluginUI()
     }
 
     @objc private func openLog(_ sender: NSMenuItem) {
