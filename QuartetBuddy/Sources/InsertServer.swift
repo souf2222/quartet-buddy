@@ -320,6 +320,9 @@ final class InsertServer: NSObject {
             pairs[i].pluginName = nil
             pairs[i].viewInfo = nil
         }
+        // editor windows hold views owned by the (now disposed) AUs — close
+        viewWindow.values.forEach { $0.close() }
+        viewWindow = [:]
         dry = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -559,6 +562,9 @@ final class InsertServer: NSObject {
         pairs[i].engine = nil; pairs[i].srcNode = nil
         pairs[i].effect = nil; pairs[i].renderBuffer = nil; pairs[i].proc = nil
         pairs[i].pluginName = nil; pairs[i].desc = nil; pairs[i].viewInfo = nil
+        // the old view belongs to the disposed AU — drop the window
+        viewWindow[i]?.close()
+        viewWindow[i] = nil
 
         if let desc {
             do {
@@ -729,7 +735,20 @@ final class InsertServer: NSObject {
 
     /// Show pair i's plugin editor: its custom JUCE/AUv2 view via the
     /// prefetched info, else the generic parameter view.
+    ///
+    /// If the window already exists for this pair (same plugin), it is
+    /// simply re-fronted — plugins' `uiViewForAudioUnit:` implementations
+    /// are often not safe to call repeatedly (JUCE views in particular
+    /// can crash on a second request while the first view is alive —
+    /// live-tested SIGSEGV), so we create the view exactly once per
+    /// plugin instance and keep it.
     func showPluginUI(_ i: Int) {
+        if let w = viewWindow[i] {
+            // existing editor: just bring it back
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         guard let effect = pairs[i].effect else { return }
         let unit = effect.audioUnit
 
@@ -744,7 +763,6 @@ final class InsertServer: NSObject {
             alert.runModal()
             return
         }
-        viewWindow[i]?.close()
         var frame = view.bounds
         if frame.isEmpty { frame = NSRect(x: 0, y: 0, width: 900, height: 620) }
         let window = NSWindow(contentRect: frame,
@@ -756,6 +774,7 @@ final class InsertServer: NSObject {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         viewWindow[i] = window
+        QBLog.log("insert: pair \(i) editor window created")
     }
 
     private var viewWindow: [Int: NSWindow] = [:]
