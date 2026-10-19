@@ -449,6 +449,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // quick access: Out 1‑2's plugin editor, right at the top
+        if let mainPlugin = server.pluginName(0) {
+            let ui = menu.addItem(withTitle: "Open \(mainPlugin)…",
+                                  action: #selector(openMainPluginUI(_:)), keyEquivalent: "")
+            ui.tag = 0
+        }
+
         // one submenu per stereo pair: source routing + plugin + controls
         for i in 0..<4 {
             let pairTitle = "\(InsertServer.pairNames[i]) — \(server.statusLine(i))"
@@ -746,6 +753,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openPairUI(_ sender: NSMenuItem) {
         InsertServer.shared.showPluginUI(sender.tag)
+    }
+
+    /// Quick access: Out 1‑2 (Main) plugin editor.
+    @objc private func openMainPluginUI(_ sender: NSMenuItem) {
+        InsertServer.shared.showPluginUI(0)
     }
 
     @objc private func pickInsertBuffer(_ sender: NSMenuItem) {
