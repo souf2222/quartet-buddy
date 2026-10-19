@@ -50,6 +50,7 @@ swiftc -O \
     "$SRC/AppDelegate.swift" \
     "$SRC/GlueProtocol.swift" \
     "$SRC/GlueClient.swift" \
+    "$SRC/PathIdSetup.swift" \
     "$SRC/DefaultDeviceMonitor.swift" \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \

@@ -70,6 +70,12 @@ itself automatically on the next launch.
   whenever the app launches or the Quartet (re)connects.
 - **AU insert:** *Start Plug-in Insert* in the menubar menu turns the insert
   (and its routing window) on and is remembered across launches.
+- **New Quartet:** plug it in and the **Setup wizard opens by itself** (or
+  menubar → *Setup New Quartet…*). Path-ids are hashed per device serial, so
+  each physical Quartet needs its ids captured once: follow 5 steps (move the
+  Main Out fader, the HP fader, toggle each mute, toggle dim) — the wizard
+  listens to the glue stream, captures each id live and saves it to
+  preferences. No code change, no Terminal needed.
 - **Talkback:** *Turn Talkback On* to test, then record the *Talkback Hotkey*
   and/or *MIDI Button → Learn…* (press a button on your keyboard)
 - **MIDI mode:** *Toggle* (press = on/off) or *Momentary* (hold to talk)
@@ -139,13 +145,11 @@ QuartetBuddy/build.sh        build + sign + bundle
 ## Notes & limitations
 
 - Path-ids in `PathIds` are a hash of the property path **including the
-  device serial** — every physical Quartet has its own table. The app
-  auto-selects the table by the serial found in the glue tree. Captured
-  so far: `quartet1528B15CEE547FA` (the original unit) and
-  `quartet15819153CE0E077`. For a *different* Quartet, run
-  `tools/watch_ids.py`, wiggle the controls in Apogee Control 2, and add
-  the captured ids to the `bySerial` table. The debug log tells you when
-  an unknown serial shows up.
+  device serial** — every physical Quartet has its own table. Two units are
+  captured in code (`quartet1528B15CEE547FA`, `quartet15819153CE0E077`);
+  any **other** Quartet auto-opens the built-in **setup wizard**
+  (*Setup New Quartet…*) — 5 guided steps, ids captured from the live glue
+  stream and saved to preferences. No rebuild needed.
 - An Apogee software update could change the protocol; the app shows the
   offline state and the debug log tells you where it broke. The protocol
   notes contain everything needed to re-crack it.

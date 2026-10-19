@@ -12,30 +12,43 @@ import ServiceManagement
 // on every unit.
 //
 // The app picks the table by the serial found in the glue tree (see
-// AppDelegate.setupGlue). For a NEW Quartet: connect it, run
-// tools/watch_ids.py, wiggle the controls, and add the captured ids here.
+// AppDelegate.setupGlue). For a NEW Quartet, run the built-in wizard
+// (menubar → "Setup New Quartet…"): it captures the ids live and stores
+// them in preferences — no code change needed.
 enum PathIds {
-    struct DeviceTable {
-        let hwout0Gain: [UInt8]   // Main Out fader (double)
-        let hwout1Gain: [UInt8]   // Headphones fader (double)
-        let hwout0Mute: [UInt8]   // Main Out mute (bool)
-        let hwout1Mute: [UInt8]   // Headphones mute (bool)
-        let hwout0Dim: [UInt8]    // Main Out dim (bool)
+    struct DeviceTable: Codable {
+        var hwout0Gain: [UInt8]   // Main Out fader (double)
+        var hwout1Gain: [UInt8]   // Headphones fader (double)
+        var hwout0Mute: [UInt8]   // Main Out mute (bool)
+        var hwout1Mute: [UInt8]   // Headphones mute (bool)
+        var hwout0Dim: [UInt8]    // Main Out dim (bool)
+
+        /// Debug-friendly form: `1f1d4c1d`-style hex.
+        func hex(_ id: [UInt8]) -> String { id.map { String(format: "%02x", $0) }.joined() }
+        var summary: String {
+            "gain0=\(hex(hwout0Gain)) gain1=\(hex(hwout1Gain)) mute0=\(hex(hwout0Mute)) " +
+            "mute1=\(hex(hwout1Mute)) dim0=\(hex(hwout0Dim))"
+        }
     }
 
     /// App-scoped — identical on every device.
     static let talkbackOn: [UInt8] = [0x8f, 0x0a, 0x6a, 0x00]
 
     /// The original captured unit (the table this project was built on).
-    private static let defaultTable = DeviceTable(
+    /// Also the fallback while a new unit is not set up yet: reads still
+    /// work (the tree layout is identical on every Quartet), but its
+    /// WRITE ids hit nothing on other units — hence the setup wizard.
+    static let defaultTable = DeviceTable(
         hwout0Gain: [0xc5, 0xa2, 0xbd, 0xb5],
         hwout1Gain: [0x64, 0x7b, 0x72, 0xb7],
         hwout0Mute: [0x5f, 0xa9, 0xc0, 0xb5],
         hwout1Mute: [0xfe, 0x81, 0x75, 0xb7],
         hwout0Dim:  [0x82, 0x2c, 0x69, 0x37])
 
-    /// Per-serial tables — every known Quartet.
-    private static let bySerial: [String: DeviceTable] = [
+    /// Built-in per-serial tables — the units captured during development.
+    /// Wizard captures land in UserDefaults (see `savedTables`) and are
+    /// merged over these, so end users never need to touch code.
+    private static let builtIn: [String: DeviceTable] = [
         "quartet1528B15CEE547FA": defaultTable,
         "quartet15819153CE0E077": DeviceTable(
             hwout0Gain: [0x1f, 0x1d, 0x4c, 0x1d],
@@ -45,9 +58,28 @@ enum PathIds {
             hwout0Dim:  [0xe8, 0xfe, 0x54, 0x8d]),
     ]
 
-    /// The table for the connected Quartet. Serial-keyed; falls back to
-    /// the default table for unknown units (reads still work — the tree
-    /// layout is identical — but writes need the right table).
+    private static let storeKey = "pathIdTables"
+
+    /// Wizard-captured tables, persisted in UserDefaults
+    /// (serial → table). These survive rebuilds and relaunches.
+    private static var savedTables: [String: DeviceTable] {
+        guard let data = UserDefaults.standard.data(forKey: storeKey),
+              let tables = try? JSONDecoder().decode([String: DeviceTable].self, from: data)
+        else { return [:] }
+        return tables
+    }
+
+    static func table(for serial: String) -> DeviceTable? {
+        savedTables[serial] ?? builtIn[serial]
+    }
+
+    /// True when the connected serial has a usable id table (built-in or
+    /// wizard-captured). False → writes go nowhere; run the setup wizard.
+    static var isKnownSerial: Bool {
+        activeSerial.map { table(for: $0) != nil } ?? false
+    }
+
+    /// The table for the connected Quartet.
     private(set) static var active = defaultTable
 
     /// The connected device's serial (from the tree), for the log.
@@ -58,16 +90,28 @@ enum PathIds {
     static func select(serial: String?) {
         guard serial != activeSerial else { return }
         activeSerial = serial
-        if let serial, let table = bySerial[serial] {
+        if let serial, let table = table(for: serial) {
             active = table
             QBLog.log("path-ids: known serial \(serial)")
         } else if let serial {
             active = defaultTable
-            QBLog.log("path-ids: UNKNOWN serial \(serial) — using the default table; " +
-                      "capture this unit's ids with tools/watch_ids.py and add them")
+            QBLog.log("path-ids: UNKNOWN serial \(serial) — writes are dead until " +
+                      "this unit is set up (menubar → Setup New Quartet…)")
         } else {
             active = defaultTable
         }
+    }
+
+    /// Store a wizard-captured table for `serial` and make it active.
+    static func adopt(table: DeviceTable, for serial: String) {
+        var all = savedTables
+        all[serial] = table
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storeKey)
+        }
+        activeSerial = nil   // force a fresh pick below
+        select(serial: serial)
+        QBLog.log("path-ids: adopted wizard table for \(serial): \(table.summary)")
     }
 }
 
@@ -152,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// loop — an out-of-range write that took the whole unit down (dark
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
+        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
         guard Self.isValidDB(db) else {
@@ -173,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quartet's hardware mute. One-way by design — see OSVolumeMirror's
     /// header for why the app never writes the OS mute.
     private func osMuteChanged(to m: Bool) {
+        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }
         let target = selectedOutput
@@ -260,6 +306,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The device node's type is its serial — path-ids are hashed
             // per-serial, so pick this unit's id table before anything else.
             PathIds.select(serial: GlueClient.quartetSerial(in: tree))
+            // A Quartet we have no table for: prompt the setup wizard
+            // (once per serial — the menu keeps a manual entry too).
+            if PathIds.activeSerial != nil, !PathIds.isKnownSerial,
+               self.promptedSetupSerial != PathIds.activeSerial {
+                self.promptedSetupSerial = PathIds.activeSerial
+                QBLog.log("setup: unknown Quartet — opening the setup wizard")
+                PathIdSetupController.shared.begin()
+            }
             if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
@@ -279,6 +333,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
+            // the setup wizard listens to the same stream (capture steps)
+            PathIdSetupController.shared.handle(event)
             switch event.id {
             case PathIds.active.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
@@ -314,6 +370,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - macOS audio controls bridge
+
+    /// Serial we already auto-prompted the setup wizard for (this launch).
+    private var promptedSetupSerial: String?
 
     /// Wire the macOS → Quartet halves of the volume + mute bindings. The
     /// volume keys and F10 are never intercepted — macOS drives its own
@@ -505,11 +564,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Outputs & Plug-ins…", action: #selector(openOutputs(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
 
+        // per-Quartet setup wizard (path-ids are serial-hashed — a new
+        // unit needs its ids captured once)
+        menu.addItem(withTitle: "Setup New Quartet…", action: #selector(openPathIdSetup(_:)), keyEquivalent: "")
+
         // warnings (only when something needs attention)
         if glue.state != .connected {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Reconnect to ApogeeGlue",
                           action: #selector(reconnect(_:)), keyEquivalent: "")
+        }
+        if !PathIds.isKnownSerial, quartetPresence.isConnected {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "⚠️ Unknown Quartet — volume/mute keys are dead",
+                          action: nil, keyEquivalent: "").isEnabled = false
+            menu.addItem(withTitle: "Run “Setup New Quartet…” to fix this",
+                          action: #selector(openPathIdSetup(_:)), keyEquivalent: "")
         }
         if server.running && server.tapSilent {
             menu.addItem(.separator())
@@ -723,6 +793,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings(_ sender: NSMenuItem) {
         settingsWindow.show()
+    }
+
+    /// Per-Quartet setup: capture this unit's path-ids live (see
+    /// PathIdSetupController). Also auto-opens once for an unknown serial.
+    @objc private func openPathIdSetup(_ sender: NSMenuItem) {
+        PathIdSetupController.shared.begin()
     }
 
     /// Wire the Settings window's callbacks to this delegate's plumbing.
