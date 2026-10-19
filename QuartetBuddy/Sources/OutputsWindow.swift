@@ -234,7 +234,10 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
 
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            // 52pt top inset: the window has no visible title bar — the
+            // close/minimize buttons float over the blurred background,
+            // so the grid must clear the traffic-light zone
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 52),
             grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
@@ -248,6 +251,10 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         w.appearance = NSAppearance(named: .darkAqua)
         w.isOpaque = false
         w.backgroundColor = .clear
+        w.styleMask.insert(.fullSizeContentView)   // content under the buttons
+        w.titlebarAppearsTransparent = true        // one uniform surface
+        w.titleVisibility = .hidden                // no title text
+        w.isMovableByWindowBackground = true       // drag anywhere (blur = background)
         w.contentView = content
         w.delegate = self
         window = w
@@ -259,7 +266,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         guard let w = window, grid != nil else { return }
         contentLayout()
         let fit = grid.fittingSize
-        let size = NSSize(width: fit.width + 48, height: fit.height + 40)
+        let size = NSSize(width: fit.width + 48, height: fit.height + 72)
         if abs(w.contentView?.frame.size.width ?? 0 - size.width) > 1 ||
            abs(w.contentView?.frame.size.height ?? 0 - size.height) > 1 {
             w.setContentSize(size)
