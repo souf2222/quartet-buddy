@@ -11,6 +11,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private var window: NSWindow?
     private var suppressActions = false
+    private var grid: NSGridView!
 
     // per-pair controls (index = pair)
     private var nameFields: [NSTextField] = []
@@ -39,7 +40,10 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     func refresh() {
         guard window != nil else { return }
         suppressActions = true
-        defer { suppressActions = false }
+        defer {
+            suppressActions = false
+            refit()
+        }
         let server = InsertServer.shared
         let live = server.running
 
@@ -104,11 +108,27 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     // MARK: - build
 
     private func build() {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 880, height: 600))
-        let grid = NSGridView()
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        self.grid = NSGridView()
+        let grid = self.grid!
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.columnSpacing = 20
         grid.rowSpacing = 8
+
+        // dark, translucent (blurred behind-window) background
+        let blur = NSVisualEffectView()
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.material = .underWindowBackground
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        content.addSubview(blur, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: content.topAnchor),
+            blur.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            blur.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
+
         content.addSubview(grid)
 
         // 1) column headers: Out 1‑2 … Out 7‑8
@@ -204,24 +224,20 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             return f
         })
 
-        // column widths (NSGridView sizes to content; pin the popups)
+        // fixed column widths so the window fits its content exactly
         for i in 0..<4 {
-            for rowIdx in [3, 6, 10, 11] {   // source, plug-in, slider, dB rows
+            for rowIdx in [1, 3, 6, 10, 11] {   // name, source, plug-in, slider, dB rows
                 if let cellView = grid.cell(atColumnIndex: i, rowIndex: rowIdx).contentView {
-                    cellView.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
+                    cellView.widthAnchor.constraint(equalToConstant: 170).isActive = true
                 }
-            }
-            if let nameCell = grid.cell(atColumnIndex: i, rowIndex: 1).contentView {
-                nameCell.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
             }
         }
 
         NSLayoutConstraint.activate([
             grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
             grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            grid.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -24),
-            grid.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -20),
-            grid.widthAnchor.constraint(lessThanOrEqualToConstant: 840),
+            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            grid.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
         ])
 
         let w = NSWindow(contentRect: content.bounds,
@@ -229,10 +245,30 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                          backing: .buffered, defer: false)
         w.title = "Outputs & Plug-ins"
         w.isReleasedWhenClosed = false
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.isOpaque = false
+        w.backgroundColor = .clear
         w.contentView = content
         w.delegate = self
-        w.center()
         window = w
+        refit()
+    }
+
+    /// Size the window to exactly fit the grid (+ edges), keep centered.
+    private func refit() {
+        guard let w = window, grid != nil else { return }
+        contentLayout()
+        let fit = grid.fittingSize
+        let size = NSSize(width: fit.width + 48, height: fit.height + 40)
+        if abs(w.contentView?.frame.size.width ?? 0 - size.width) > 1 ||
+           abs(w.contentView?.frame.size.height ?? 0 - size.height) > 1 {
+            w.setContentSize(size)
+            w.center()
+        }
+    }
+
+    private func contentLayout() {
+        window?.contentView?.layoutSubtreeIfNeeded()
     }
 
     func windowWillClose(_ notification: Notification) {
