@@ -27,19 +27,26 @@ private aggregate device (master: Quartet, taps: [tap])
 
 ## Routing model
 
-**Out 1‑2 *is* the dry system mix.** Its source is fixed; its plugin
-(e.g. ARC X) processes the raw mix. No other pair can be a "raw system
-mix" — they listen to *Out 1‑2* instead.
+The Quartet presents **one 8-channel stream** to macOS = 4 stereo pairs.
+The tap captures the **full 8 channels**; each pair i's *own* system
+audio is channels (2i, 2i+1) — i.e. whatever apps send to that pair
+(a DAW addressing "Out 3‑4" lands exactly there).
 
-Each other pair (3‑4 / 5‑6 / 7‑8) picks a **Source**:
+Each pair picks a **Source**:
 
-- **Out X‑Y** — that pair's signal **pre-plugin** (before its plugin
-  runs). Since Out 1‑2's pre-plugin signal *is* the dry system mix,
-  "Out 1‑2" as a source = plain dry mix.
+- **No routing** (default) — the pair passes through *its own* system
+  channels (pair i ← channels 2i, 2i+1). A DAW outputting to Out 3‑4
+  comes out of Out 3‑4, plugin and all.
+- **Out X‑Y** — that pair's channels **pre-plugin** (the raw system
+  audio of pair X‑Y). Cross-pair copies resolve to the *raw* channels,
+  never another pair's processed output.
 - **Off (silent)** — the pair outputs silence.
 
-So the classic setup (speakers corrected, headphones plain) is:
-Out 1‑2 → System mix → ARC X; Out 3‑4 → Source: Out 1‑2 (no plugin).
+Routing cycles (A copies B, B copies A) resolve to Off, detected and
+logged on the main thread — never in the audio thread. Resolution
+(`resolveInputs`) runs main-side; in the IO cycle every pair's input is
+just a slice of the deinterleaved tap, so the 4 plugin engines render
+fully independently.
 
 Routing cycles (A copies B, B copies A) resolve to Off, detected and
 logged on the main thread — never in the audio thread. Chains are

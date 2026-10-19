@@ -106,7 +106,9 @@ final class InsertServer: NSObject {
     private var aggregateID = AudioObjectID(0)
     private var ioProcID: AudioDeviceIOProcID?
     private var sampleRate: Double = 48000
-    private var dry: StereoABL?
+    /// The tapped system stream, deinterleaved: 8 mono channels =
+    /// 4 stereo pairs (pair i = channels 2i, 2i+1).
+    private var sys: StereoABL!
 
 
     // MARK: - Audio-thread state
@@ -287,7 +289,7 @@ final class InsertServer: NSObject {
         }
 
         // 3) dry buffer + one engine per pair
-        dry = StereoABL(frames: 4096)
+        sys = StereoABL(frames: 4096, channels: 8)
         for i in 0..<4 {
             if let key = UserDefaults.standard.string(forKey: Self.pluginKey(i)),
                let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
@@ -332,7 +334,7 @@ final class InsertServer: NSObject {
         viewWindow.values.forEach { $0.close() }
         viewWindow = [:]
         hiddenViews = [:]
-        dry = nil
+        sys = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = 0
@@ -345,43 +347,39 @@ final class InsertServer: NSObject {
 
     // MARK: - Input resolution (main-side)
 
-    /// Resolved per-pair inputs: true = hears the dry system mix
-    /// (directly or via copy chain), false = off/silent. Copies are
-    /// PRE-plugin (Out 1‑2 IS the dry mix), so plugins never depend on
-    /// each other — no render order needed. Cycles resolve to off.
-    private var inputIsDry = [true, true, true, true]
+    /// Resolved per-pair input pair: pair i's input = channels (2j, 2j+1)
+    /// of the tapped system stream, where j = inputPair[i] (nil = off).
+    ///
+    /// The tap captures the Quartet's FULL 8-channel stream — 4 stereo
+    /// pairs. "No routing" (pair hears itself, j == i) = pass-through:
+    /// whatever apps (e.g. a DAW) send to pair i's channels reaches pair
+    /// i. Copies are PRE-plugin (raw system channels of pair j).
+    /// Cycles resolve to off, never in the audio thread.
+    private var inputPair: [Int?] = [0, 1, 2, 3]
 
     private func resolveInputs() {
-        func resolve(_ i: Int, _ stack: Set<Int>) -> Bool {
+        func resolve(_ i: Int, _ stack: Set<Int>) -> Int? {
             switch pairs[i].source {
-            case .systemMix: return true
-            case .off: return false
+            case .systemMix: return i          // "No routing" = own channels
+            case .off: return nil
             default: break
             }
-            guard let j = pairs[i].source.copyIndex else { return false }
-            // self-copy ("Out i" ← Out i) is valid: every pair's PRE-plugin
-            // input is the dry mix, so hearing itself = hearing the mix
-            if j == i { return true }
+            guard let j = pairs[i].source.copyIndex else { return nil }
+            if j == i { return i }
             guard !stack.contains(j) else {
                 QBLog.log("insert: routing cycle at pair \(i) — Off")
-                return false
+                return nil
             }
             return resolve(j, stack.union([i]))
         }
-        inputIsDry = (0..<4).map { i in resolve(i, [i]) }
+        inputPair = (0..<4).map { i in resolve(i, [i]) }
     }
 
-    /// Menu summary, e.g. "Out 3‑4 → Out 1‑2 → ARC X" /
-    /// "Out 1‑2 → No routing → no plugin".
+    /// Menu summary, e.g. "No routing → ARC X" / "Out 1‑2 → no plugin".
     func statusLine(_ i: Int) -> String {
         let p = pairs[i]
-        if p.source == .off { return "Off" }
-        let srcLabel: String
-        if let j = p.source.copyIndex, j != i {
-            srcLabel = PairSource.copy(j).label   // listening to another pair
-        } else {
-            srcLabel = "No routing"                // self/mix — nothing exotic
-        }
+        guard let j = inputPair[i] else { return "Off" }
+        let srcLabel = (j == i) ? "No routing" : PairSource.copy(j).label
         let plugin = p.pluginName.map(Self.shortName) ?? "no plugin"
         return "\(srcLabel) → \(plugin)"
     }
@@ -402,11 +400,13 @@ final class InsertServer: NSObject {
     /// the Quartet's 8 output channels. Audio thread: no allocation.
     private func cycle(_ inInputData: UnsafePointer<AudioBufferList>?,
                        _ outOutputData: UnsafeMutablePointer<AudioBufferList>?) -> OSStatus {
-        guard let out = outOutputData, let dry else { return noErr }
+        guard let out = outOutputData, sys != nil else { return noErr }
         let frames = Self.frames(of: out)
         guard frames > 0, frames <= 4096 else { return noErr }
 
-        // 1) the tapped system mix → dry stereo
+        // 1) the tapped FULL 8-channel system stream → 4 stereo pairs.
+        //    Pair i's own channels = (2i, 2i+1): whatever apps send to
+        //    pair i (DAW addressing Out 3‑4, etc.) lives here.
         if let inp = inInputData {
             let inList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inp))
             var tap: AudioBuffer?
@@ -421,40 +421,42 @@ final class InsertServer: NSObject {
                 let ch = max(1, Int(tap.mNumberChannels))
                 let n = min(frames, Int(tap.mDataByteSize) / 4 / ch)
                 if ch == 2 {
-                    dry.buffers[0].update(from: d, count: n)
-                    dry.buffers[1].update(from: d + 1, count: n)
+                    // stereo mixdown tap: pairs 1‑3 have no own channels —
+                    // all pairs hear the mix (legacy behavior)
+                    sys.buffers[0].update(from: d, count: n)
+                    sys.buffers[1].update(from: d + 1, count: n)
+                    for c in 2..<8 { sys.buffers[c].update(from: d + (c % 2), count: n) }
                 } else {
                     for f in 0..<n {
-                        dry.buffers[0][f] = d[f * ch]
-                        dry.buffers[1][f] = d[f * ch + 1]
+                        for c in 0..<8 { sys.buffers[c][f] = d[f * ch + c] }
                     }
                 }
                 if n < frames {
-                    for c in 0..<2 { for f in n..<frames { dry.buffers[c][f] = 0 } }
+                    for c in 0..<8 { for f in n..<frames { sys.buffers[c][f] = 0 } }
                 }
             } else {
-                for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
+                for c in 0..<8 { for f in 0..<frames { sys.buffers[c][f] = 0 } }
             }
         } else {
-            for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
+            for c in 0..<8 { for f in 0..<frames { sys.buffers[c][f] = 0 } }
         }
 
         // tap health (cheap check)
-        if tapSilent, dry.buffers[0][0] != 0 || dry.buffers[1][0] != 0 {
+        if tapSilent, sys.buffers[0][0] != 0 || sys.buffers[1][0] != 0 {
             tapSilent = false
             QBLog.log("insert: tap is live (first non-silent cycle)")
             DispatchQueue.main.async { [weak self] in self?.onStateChange?() }
         }
 
-        // 2) render the 4 chains — copies are PRE-plugin (Out 1‑2 IS the
-        //    dry mix), so every pair's input is the dry mix (or silence);
-        //    no inter-pair render dependencies.
+        // 2) render the 4 chains — each pair's input = its resolved pair's
+        //    channels (pre-plugin), or silence when off/cycle.
         var outL: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         var outR: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         for i in 0..<4 {
             let p = pairs[i]
-            guard inputIsDry[i] else { continue }   // off / cycle → silent
-            outL[i] = dry.buffers[0]; outR[i] = dry.buffers[1]
+            guard let src = inputPair[i] else { continue }   // off / cycle → silent
+            outL[i] = sys.buffers[src * 2]
+            outR[i] = sys.buffers[src * 2 + 1]
             // plugin chain (in 512-frame chunks — the renderOffline path;
             // see instantiatePlugin for why manual mode at all)
             if let effect = p.effect, !p.bypass,
@@ -517,7 +519,7 @@ final class InsertServer: NSObject {
         if cycleCount < 3 || now - lastLogTime > logIntervalTicks {
             lastLogTime = now
             var dryPeak: Float = 0
-            for f in 0..<frames { let v = abs(dry.buffers[0][f]); if v > dryPeak { dryPeak = v } }
+            for f in 0..<frames { let v = abs(sys.buffers[0][f]); if v > dryPeak { dryPeak = v } }
             QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) dryPeak=\(dryPeak) pulls=\(sourcePulls - lastLoggedPulls)")
             lastLoggedPulls = sourcePulls
         }
@@ -981,17 +983,19 @@ final class InsertServer: NSObject {
     }
 }
 
-/// A non-interleaved stereo AudioBufferList with its own storage.
+/// A non-interleaved AudioBufferList with its own storage.
 final class StereoABL {
     let pointer: UnsafeMutablePointer<AudioBufferList>
     var buffers: [UnsafeMutablePointer<Float>] = []
+    let channels: Int
 
-    init(frames: Int) {
-        let size = MemoryLayout<AudioBufferList>.offset(of: \AudioBufferList.mBuffers)! + 2 * MemoryLayout<AudioBuffer>.stride
+    init(frames: Int, channels: Int = 2) {
+        self.channels = channels
+        let size = MemoryLayout<AudioBufferList>.offset(of: \AudioBufferList.mBuffers)! + channels * MemoryLayout<AudioBuffer>.stride
         let raw = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
         pointer = raw.assumingMemoryBound(to: AudioBufferList.self)
-        pointer.pointee.mNumberBuffers = 2
-        for c in 0..<2 {
+        pointer.pointee.mNumberBuffers = UInt32(channels)
+        for c in 0..<channels {
             let p = UnsafeMutablePointer<Float>.allocate(capacity: frames)
             p.initialize(repeating: 0, count: frames)
             buffers.append(p)
