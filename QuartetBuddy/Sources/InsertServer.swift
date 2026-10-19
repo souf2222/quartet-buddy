@@ -57,7 +57,7 @@ final class InsertServer: NSObject {
 
         var label: String {
             switch self {
-            case .systemMix: return "System mix"
+            case .systemMix: return "No routing"
             case .off: return "Off (silent)"
             case .copy0: return "Out 1‑2"
             case .copy1: return "Out 3‑4"
@@ -165,27 +165,23 @@ final class InsertServer: NSObject {
     private func loadPairs() {
         pairs = (0..<4).map { i in
             var p = Pair()
-            // Default: every pair listens to itself pre-plugin — which IS
-            // the dry system mix (Out 1‑2's source is fixed; copies are
-            // pre-plugin). Menu shows "Out i → Out i → plugin".
-            p.source = i == 0 ? .systemMix : PairSource.copy(i)
-            if i > 0 {
-                if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
-                   let src = PairSource(rawValue: s) {
-                    // older defaults ("system mix" or copy-of-1‑2 on pairs
-                    // 2‑4) mean the same signal; keep user's saved choice
-                    p.source = src == .systemMix ? .copy0 : src
-                }
+            // Default (v5): "No routing" everywhere — every pair just gets
+            // the dry mix (copies are pre-plugin, so all inputs are the
+            // same mix anyway; routing only matters cross-pair).
+            p.source = .systemMix
+            if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
+               let src = PairSource(rawValue: s) {
+                // v4 self-copies ("copy:i" on pair i) mean the same as no
+                // routing — normalize them away
+                p.source = (src.copyIndex == i) ? .systemMix : src
             }
-            // one-time migration to the self-listening defaults (v4).
-            // NOTE: writes the new defaults directly — `pairs` is mid-rebuild.
-            if !UserDefaults.standard.bool(forKey: "insertRouting.v4") {
-                UserDefaults.standard.set(true, forKey: "insertRouting.v4")
-                if i > 0 {
-                    p.source = PairSource.copy(i)
-                    UserDefaults.standard.set(PairSource.copy(i).rawValue,
-                                               forKey: Self.sourceKey(i))
-                }
+            // one-time migration to v5 defaults ("insertRouting.v4" is the
+            // v4 flag; self-copies above already normalize). Written
+            // directly — `pairs` is mid-rebuild.
+            if !UserDefaults.standard.bool(forKey: "insertRouting.v5") {
+                UserDefaults.standard.set(true, forKey: "insertRouting.v5")
+                if i > 0 { p.source = .systemMix }
+                UserDefaults.standard.set(p.source.rawValue, forKey: Self.sourceKey(i))
             }
             p.bypass = UserDefaults.standard.bool(forKey: Self.bypassKey(i))
             // migrate the v1 single-plugin settings to pair 0
@@ -375,16 +371,17 @@ final class InsertServer: NSObject {
         inputIsDry = (0..<4).map { i in resolve(i, [i]) }
     }
 
-    /// Menu summary, e.g. "Out 1‑2 → ARC X" / "Out 3‑4 → no plugin".
-    /// Plugin names are shown short (company stripped) here; the full
-    /// names stay in the plugin picker lists.
+    /// Menu summary, e.g. "Out 3‑4 → Out 1‑2 → ARC X" /
+    /// "Out 1‑2 → No routing → no plugin".
     func statusLine(_ i: Int) -> String {
         let p = pairs[i]
         if p.source == .off { return "Off" }
-        // source label = the pair it listens to (pre-plugin); pair 0's
-        // fixed source and self-copies label as the pair itself
-        let j = p.source.copyIndex ?? i
-        let srcLabel = PairSource.copy(j).label
+        let srcLabel: String
+        if let j = p.source.copyIndex, j != i {
+            srcLabel = PairSource.copy(j).label   // listening to another pair
+        } else {
+            srcLabel = "No routing"                // self/mix — nothing exotic
+        }
         let plugin = p.pluginName.map(Self.shortName) ?? "no plugin"
         return "\(srcLabel) → \(plugin)"
     }

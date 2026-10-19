@@ -458,7 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // one submenu per stereo pair: source routing + plugin + controls
         for i in 0..<4 {
-            let pairTitle = "\(InsertServer.pairNames[i]) — \(server.statusLine(i))"
+            let pairTitle = "\(InsertServer.pairNames[i]) → \(server.statusLine(i))"
             let pairItem = menu.addItem(withTitle: pairTitle, action: nil, keyEquivalent: "")
             pairItem.submenu = NSMenu()
 
@@ -473,10 +473,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
                 srcItem.submenu = NSMenu()
                 let currentSrc = server.source(i)
-                // self first ("Out i" = this pair pre-plugin = the dry mix),
-                // then the other pairs, then Off
-                let srcOptions: [InsertServer.PairSource] =
-                    [InsertServer.PairSource.copy(i)]
+                // No routing (= the dry mix directly) first, then the
+                // other pairs, then Off
+                let srcOptions: [InsertServer.PairSource] = [.systemMix]
                     + [0, 1, 2, 3].filter { $0 != i }.map { InsertServer.PairSource.copy($0) }
                     + [.off]
                 for src in srcOptions {
