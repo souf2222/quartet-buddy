@@ -427,10 +427,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // talkback + global plug-in bypass
+        // talkback + AU insert + global plug-in bypass
         let tbTitle = talkbackOn ? "Stop Talkback" : "Start Talkback"
         let tbItem = menu.addItem(withTitle: tbTitle, action: #selector(talkbackNow(_:)), keyEquivalent: "")
         applyKeyEquivalent(tbItem, combo: talkbackHotKeys.current)
+        let insertTitle = server.running ? "Stop Plug-in Insert" : "Start Plug-in Insert"
+        let insertItem = menu.addItem(withTitle: insertTitle,
+                                      action: #selector(toggleInsert(_:)), keyEquivalent: "")
+        insertItem.state = server.running ? .on : .off
         let bypassItem = menu.addItem(withTitle: "Bypass All Plug-ins",
                                        action: #selector(toggleBypassAll(_:)), keyEquivalent: "")
         bypassItem.state = server.bypassAll ? .on : .off
@@ -692,6 +696,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Insert shortcuts
+
+    /// Start/stop the AU insert and persist the choice — the ONLY writer of
+    /// "insertEnabled" (launch + Quartet (re)connect read it back). Restored
+    /// from the pre-redesign menu; losing it left no way to start the insert
+    /// (routing stayed greyed out on machines that never had the old build).
+    @objc private func toggleInsert(_ sender: NSMenuItem) {
+        let on = !InsertServer.shared.running
+        UserDefaults.standard.set(on, forKey: "insertEnabled")
+        InsertServer.shared.setRunning(on)
+    }
 
     @objc private func toggleBypassAll(_ sender: NSMenuItem) {
         InsertServer.shared.setBypassAll(!InsertServer.shared.bypassAll)

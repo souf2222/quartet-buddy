@@ -68,6 +68,8 @@ itself automatically on the next launch.
 - **Volume target:** *Volume Target →* Main Out / Headphones (or record a
   switch hotkey) — what the macOS slider binding controls. Resets to Main Out
   whenever the app launches or the Quartet (re)connects.
+- **AU insert:** *Start Plug-in Insert* in the menubar menu turns the insert
+  (and its routing window) on and is remembered across launches.
 - **Talkback:** *Turn Talkback On* to test, then record the *Talkback Hotkey*
   and/or *MIDI Button → Learn…* (press a button on your keyboard)
 - **MIDI mode:** *Toggle* (press = on/off) or *Momentary* (hold to talk)
