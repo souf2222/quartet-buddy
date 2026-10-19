@@ -59,10 +59,10 @@ final class InsertServer: NSObject {
             switch self {
             case .systemMix: return "System mix"
             case .off: return "Off (silent)"
-            case .copy0: return "Out 1‑2 (dry mix)"
-            case .copy1: return "Out 3‑4 (pre‑plugin)"
-            case .copy2: return "Out 5‑6 (pre‑plugin)"
-            case .copy3: return "Out 7‑8 (pre‑plugin)"
+            case .copy0: return "Out 1‑2"
+            case .copy1: return "Out 3‑4"
+            case .copy2: return "Out 5‑6"
+            case .copy3: return "Out 7‑8"
             }
         }
 
