@@ -4,22 +4,79 @@ import Carbon.HIToolbox
 import ServiceManagement
 
 // Path-ids captured from live traffic (see docs/protocol-notes.md).
-// They are deterministic per device — same values Apogee's own apps use.
+// They are a deterministic hash of the property path INCLUDING the device
+// serial — Apogee's own apps use the same values — so each physical
+// Quartet has its OWN id table (verified live: two units side by side
+// needed different ids for every device-scoped property). App-scoped
+// properties (talkback, under Apps/Apogee Talkback helper) are identical
+// on every unit.
+//
+// The app picks the table by the serial found in the glue tree (see
+// AppDelegate.setupGlue). For a NEW Quartet: connect it, run
+// tools/watch_ids.py, wiggle the controls, and add the captured ids here.
 enum PathIds {
-    static let hwout0Gain: [UInt8] = [0xc5, 0xa2, 0xbd, 0xb5]
-    static let hwout1Gain: [UInt8] = [0x64, 0x7b, 0x72, 0xb7]
-    static let hwout0Mute: [UInt8] = [0x5f, 0xa9, 0xc0, 0xb5]
-    static let hwout1Mute: [UInt8] = [0xfe, 0x81, 0x75, 0xb7]
-    static let hwout0Dim:  [UInt8] = [0x82, 0x2c, 0x69, 0x37]
+    struct DeviceTable {
+        let hwout0Gain: [UInt8]   // Main Out fader (double)
+        let hwout1Gain: [UInt8]   // Headphones fader (double)
+        let hwout0Mute: [UInt8]   // Main Out mute (bool)
+        let hwout1Mute: [UInt8]   // Headphones mute (bool)
+        let hwout0Dim: [UInt8]    // Main Out dim (bool)
+    }
+
+    /// App-scoped — identical on every device.
     static let talkbackOn: [UInt8] = [0x8f, 0x0a, 0x6a, 0x00]
+
+    /// The original captured unit (the table this project was built on).
+    private static let defaultTable = DeviceTable(
+        hwout0Gain: [0xc5, 0xa2, 0xbd, 0xb5],
+        hwout1Gain: [0x64, 0x7b, 0x72, 0xb7],
+        hwout0Mute: [0x5f, 0xa9, 0xc0, 0xb5],
+        hwout1Mute: [0xfe, 0x81, 0x75, 0xb7],
+        hwout0Dim:  [0x82, 0x2c, 0x69, 0x37])
+
+    /// Per-serial tables — every known Quartet.
+    private static let bySerial: [String: DeviceTable] = [
+        "quartet1528B15CEE547FA": defaultTable,
+        "quartet15819153CE0E077": DeviceTable(
+            hwout0Gain: [0x1f, 0x1d, 0x4c, 0x1d],
+            hwout1Gain: [0xbe, 0xf5, 0x00, 0x1f],
+            hwout0Mute: [0xb9, 0x23, 0x4f, 0x1d],
+            hwout1Mute: [0x58, 0xfc, 0x03, 0x1f],
+            hwout0Dim:  [0xe8, 0xfe, 0x54, 0x8d]),
+    ]
+
+    /// The table for the connected Quartet. Serial-keyed; falls back to
+    /// the default table for unknown units (reads still work — the tree
+    /// layout is identical — but writes need the right table).
+    private(set) static var active = defaultTable
+
+    /// The connected device's serial (from the tree), for the log.
+    private(set) static var activeSerial: String?
+
+    /// Pick the id table for the connected Quartet's serial.
+    /// Called from the tree handler on every tree (connect + reconnect).
+    static func select(serial: String?) {
+        guard serial != activeSerial else { return }
+        activeSerial = serial
+        if let serial, let table = bySerial[serial] {
+            active = table
+            QBLog.log("path-ids: known serial \(serial)")
+        } else if let serial {
+            active = defaultTable
+            QBLog.log("path-ids: UNKNOWN serial \(serial) — using the default table; " +
+                      "capture this unit's ids with tools/watch_ids.py and add them")
+        } else {
+            active = defaultTable
+        }
+    }
 }
 
 enum OutputTarget: String, CaseIterable, Codable {
     case mainOut = "Main Out"
     case headphones = "Headphones"
 
-    var gainId: [UInt8] { self == .mainOut ? PathIds.hwout0Gain : PathIds.hwout1Gain }
-    var muteId: [UInt8] { self == .mainOut ? PathIds.hwout0Mute : PathIds.hwout1Mute }
+    var gainId: [UInt8] { self == .mainOut ? PathIds.active.hwout0Gain : PathIds.active.hwout1Gain }
+    var muteId: [UInt8] { self == .mainOut ? PathIds.active.hwout0Mute : PathIds.active.hwout1Mute }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -200,6 +257,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         glue.onTree = { [weak self] tree in
             guard let self else { return }
+            // The device node's type is its serial — path-ids are hashed
+            // per-serial, so pick this unit's id table before anything else.
+            PathIds.select(serial: GlueClient.quartetSerial(in: tree))
             if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
@@ -220,17 +280,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
             switch event.id {
-            case PathIds.hwout0Gain where event.tag == 4:
+            case PathIds.active.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
                 self.syncMacSlider()
-            case PathIds.hwout1Gain where event.tag == 4:
+            case PathIds.active.hwout1Gain where event.tag == 4:
                 self.gain[.headphones] = event.value.readDouble()
                 self.syncMacSlider()
-            case PathIds.hwout0Mute where event.tag == 3:
+            case PathIds.active.hwout0Mute where event.tag == 3:
                 self.muted[.mainOut] = event.value.first == 1
-            case PathIds.hwout1Mute where event.tag == 3:
+            case PathIds.active.hwout1Mute where event.tag == 3:
                 self.muted[.headphones] = event.value.first == 1
-            case PathIds.hwout0Dim where event.tag == 3:
+            case PathIds.active.hwout0Dim where event.tag == 3:
                 self.speakerDim = event.value.first == 1
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
@@ -647,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleDim(_ sender: NSMenuItem) {
         let new = !speakerDim
         QBLog.log("dim: speakers \(new ? "on" : "off")")
-        glue.setBool(id: PathIds.hwout0Dim, new)
+        glue.setBool(id: PathIds.active.hwout0Dim, new)
         speakerDim = new
         refreshMenu()
     }

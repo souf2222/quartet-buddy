@@ -138,9 +138,14 @@ QuartetBuddy/build.sh        build + sign + bundle
 
 ## Notes & limitations
 
-- The path-ids in `PathIds` were captured from live traffic for this device
-  (`quartet1528B15CEE547FA`). They are deterministic, but if you use a
-  *different* Quartet, run `tools/watch_ids.py` and update the table.
+- Path-ids in `PathIds` are a hash of the property path **including the
+  device serial** — every physical Quartet has its own table. The app
+  auto-selects the table by the serial found in the glue tree. Captured
+  so far: `quartet1528B15CEE547FA` (the original unit) and
+  `quartet15819153CE0E077`. For a *different* Quartet, run
+  `tools/watch_ids.py`, wiggle the controls in Apogee Control 2, and add
+  the captured ids to the `bySerial` table. The debug log tells you when
+  an unknown serial shows up.
 - An Apogee software update could change the protocol; the app shows the
   offline state and the debug log tells you where it broke. The protocol
   notes contain everything needed to re-crack it.

@@ -265,6 +265,17 @@ extension GlueClient {
         return nil
     }
 
+    /// The connected Quartet's serial: the device node's `type` (e.g.
+    /// "quartet1528B15CEE547FA"). Path-ids are hashed per-serial, so the
+    /// serial selects the PathIds table — see PathIds.select.
+    static func quartetSerial(in node: [String: Any]) -> String? {
+        if let t = node["type"] as? String, t.hasPrefix("quartet") { return t }
+        for c in node["children"] as? [[String: Any]] ?? [] {
+            if let r = quartetSerial(in: c) { return r }
+        }
+        return nil
+    }
+
     static func doubleProp(_ node: [String: Any]?, _ name: String) -> Double? {
         (node?["props"] as? [String: Any])?[name] as? Double
     }

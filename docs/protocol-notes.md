@@ -153,16 +153,28 @@ root
 
 ## Known path-ids (setProperty descriptors)
 
-Captured from live traffic (id = the 4 bytes after the var-tag):
+**The id is a hash of the property path INCLUDING the device serial** — every
+physical Quartet gets different ids for its device-scoped properties (live-
+verified with two units). App-scoped properties (`Apps/Apogee Talkback
+helper/Talkback.talkbackOn`) hash identically on every unit. The app keeps a
+per-serial table (`PathIds.bySerial`, selected from the tree's serial node).
 
-| id (LE bytes) | property |
-|---|---|
-| `c5 a2 bd b5` | dev/…/hwout/hwout0.gain (Main Out fader, double) |
-| (watching) | hwout1.gain, mutes, talkbackOn — see watch_ids.py |
+| id (LE bytes) | serial | property |
+|---|---|---|
+| `c5 a2 bd b5` | 528B… | hwout0.gain (Main Out fader, double) |
+| `1f 1d 4c 1d` | 1581… | hwout0.gain |
+| `64 7b 72 b7` | 528B… | hwout1.gain |
+| `be f5 00 1f` | 1581… | hwout1.gain |
+| `5f a9 c0 b5` | 528B… | hwout0.mute |
+| `b9 23 4f 1d` | 1581… | hwout0.mute |
+| `fe 81 75 b7` | 528B… | hwout1.mute |
+| `58 fc 03 1f` | 1581… | hwout1.mute |
+| `82 2c 69 37` | 528B… | hwout0.dim |
+| `e8 fe 54 8d` | 1581… | hwout0.dim (also toggled by talkback auto-dim) |
+| `8f 0a 6a 00` | (any) | Talkback.talkbackOn — app-scoped, identical everywhere |
 
-The id appears to be a deterministic hash of the property path (computed
-identically by Glue and the official clients; not yet identified — but not
-needed: we capture ids from live traffic).
+Capture a new unit's ids with `tools/watch_ids.py` (wiggle each control in
+Apogee Control 2 / on the touchscreen and read the (id, tag, value) stream).
 
 ## Notes
 
