@@ -15,7 +15,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     // per-pair controls (index = pair)
     private var nameFields: [NSTextField] = []
     private var sourcePopups: [NSPopUpButton] = []
-    private var mirrorPopups: [NSPopUpButton] = []
+    private var includeChecks: [NSButton] = []
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
     private var editorButtons: [NSButton] = []
@@ -57,19 +57,15 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                 .getOrElse { 0 })
             srcPopup.isEnabled = live
 
-            // MIRROR TAP — only meaningful when the source is a mirror
+            // Include source plug-in — only offered when the source is
+            // a mirror. Checked = mirror AFTER the source's plug-in
+            // (destination inherits its processing); unchecked = before.
             let mirrored = server.source(i).copyIndex != nil && server.source(i) != .off
-            let mirrorPopup = mirrorPopups[i]
-            mirrorPopup.removeAllItems()
+            let include = includeChecks[i]
+            include.isHidden = !mirrored
             if mirrored {
-                mirrorPopup.addItem(withTitle: "Before Plug-in")
-                mirrorPopup.addItem(withTitle: "After Plug-in")
-                mirrorPopup.selectItem(at: server.mirrorPre(i) ? 0 : 1)
-                mirrorPopup.isEnabled = live
-            } else {
-                mirrorPopup.addItem(withTitle: "—")
-                mirrorPopup.selectItem(at: 0)
-                mirrorPopup.isEnabled = false
+                include.state = server.mirrorPre(i) ? .off : .on
+                include.isEnabled = live
             }
 
             // PLUG-IN
@@ -127,15 +123,15 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             return p
         })
 
-        // 4) MIRROR TAP
-        grid.addRow(with: (0..<4).map { _ in sectionField("MIRROR TAP") })
+        // 4) Include source plug-in (mirrored sources only; hidden
+        //    otherwise — the grid keeps the row so columns stay aligned)
         grid.addRow(with: (0..<4).map { i in
-            let p = NSPopUpButton()
-            p.target = self
-            p.action = #selector(mirrorChanged(_:))
-            p.tag = 200 + i
-            mirrorPopups.append(p)
-            return p
+            let c = NSButton(checkboxWithTitle: "Include source plug-in", target: self,
+                             action: #selector(includeChanged(_:)))
+            c.tag = 200 + i
+            c.font = .systemFont(ofSize: 11)
+            includeChecks.append(c)
+            return c
         })
 
         // 5) PLUG-IN
@@ -172,7 +168,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
         // column widths (NSGridView sizes to content; pin the popups)
         for i in 0..<4 {
-            for rowIdx in [3, 5, 7] {   // source, mirror, plug-in popup rows
+            for rowIdx in [3, 6] {   // source, plug-in popup rows
                 if let cellView = grid.cell(atColumnIndex: i, rowIndex: rowIdx).contentView {
                     cellView.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
                 }
@@ -245,10 +241,12 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         refresh()
     }
 
-    @objc private func mirrorChanged(_ sender: NSPopUpButton) {
+    /// "Include source plug-in" — checked = mirror AFTER the source's
+    /// plug-in; unchecked = before (raw playback channels).
+    @objc private func includeChanged(_ sender: NSButton) {
         let i = sender.tag - 200
-        guard !suppressActions, sender.indexOfSelectedItem >= 0 else { return }
-        InsertServer.shared.setMirrorPre(i, sender.indexOfSelectedItem == 0)
+        guard !suppressActions else { return refresh() }
+        InsertServer.shared.setMirrorPre(i, sender.state == .off)
         refresh()
     }
 
