@@ -473,8 +473,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let srcItem = pairItem.submenu!.addItem(withTitle: "Source", action: nil, keyEquivalent: "")
                 srcItem.submenu = NSMenu()
                 let currentSrc = server.source(i)
+                // self first ("Out i" = this pair pre-plugin = the dry mix),
+                // then the other pairs, then Off
                 let srcOptions: [InsertServer.PairSource] =
-                    [0, 1, 2, 3].filter { $0 != i }.map { InsertServer.PairSource.copy($0) } + [.off]
+                    [InsertServer.PairSource.copy(i)]
+                    + [0, 1, 2, 3].filter { $0 != i }.map { InsertServer.PairSource.copy($0) }
+                    + [.off]
                 for src in srcOptions {
                     let item = srcItem.submenu!.addItem(withTitle: src.label,
                                                         action: #selector(pickPairSource(_:)), keyEquivalent: "")

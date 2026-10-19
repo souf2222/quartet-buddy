@@ -165,14 +165,26 @@ final class InsertServer: NSObject {
     private func loadPairs() {
         pairs = (0..<4).map { i in
             var p = Pair()
-            // Out 1‑2 IS the dry system mix (fixed source, pre-plugin).
-            // Other pairs default to hearing that mix.
-            p.source = i == 0 ? .systemMix : .copy0
+            // Default: every pair listens to itself pre-plugin — which IS
+            // the dry system mix (Out 1‑2's source is fixed; copies are
+            // pre-plugin). Menu shows "Out i → Out i → plugin".
+            p.source = i == 0 ? .systemMix : PairSource.copy(i)
             if i > 0 {
                 if let s = UserDefaults.standard.string(forKey: Self.sourceKey(i)),
                    let src = PairSource(rawValue: s) {
-                    // v2→v3: "system mix" on pairs 1‑3 == "copy of Out 1‑2"
+                    // older defaults ("system mix" or copy-of-1‑2 on pairs
+                    // 2‑4) mean the same signal; keep user's saved choice
                     p.source = src == .systemMix ? .copy0 : src
+                }
+            }
+            // one-time migration to the self-listening defaults (v4).
+            // NOTE: writes the new defaults directly — `pairs` is mid-rebuild.
+            if !UserDefaults.standard.bool(forKey: "insertRouting.v4") {
+                UserDefaults.standard.set(true, forKey: "insertRouting.v4")
+                if i > 0 {
+                    p.source = PairSource.copy(i)
+                    UserDefaults.standard.set(PairSource.copy(i).rawValue,
+                                               forKey: Self.sourceKey(i))
                 }
             }
             p.bypass = UserDefaults.standard.bool(forKey: Self.bypassKey(i))
@@ -351,7 +363,10 @@ final class InsertServer: NSObject {
             default: break
             }
             guard let j = pairs[i].source.copyIndex else { return false }
-            guard j != i, !stack.contains(j) else {
+            // self-copy ("Out i" ← Out i) is valid: every pair's PRE-plugin
+            // input is the dry mix, so hearing itself = hearing the mix
+            if j == i { return true }
+            guard !stack.contains(j) else {
                 QBLog.log("insert: routing cycle at pair \(i) — Off")
                 return false
             }
@@ -360,18 +375,16 @@ final class InsertServer: NSObject {
         inputIsDry = (0..<4).map { i in resolve(i, [i]) }
     }
 
-    /// Menu summary, e.g. "System mix → ARC X" / "Out 1‑2 → no plugin".
+    /// Menu summary, e.g. "Out 1‑2 → ARC X" / "Out 3‑4 → no plugin".
     /// Plugin names are shown short (company stripped) here; the full
     /// names stay in the plugin picker lists.
     func statusLine(_ i: Int) -> String {
         let p = pairs[i]
         if p.source == .off { return "Off" }
-        let srcLabel: String
-        if let j = p.source.copyIndex, j != i {
-            srcLabel = PairSource.copy(j).label
-        } else {
-            srcLabel = "System mix"
-        }
+        // source label = the pair it listens to (pre-plugin); pair 0's
+        // fixed source and self-copies label as the pair itself
+        let j = p.source.copyIndex ?? i
+        let srcLabel = PairSource.copy(j).label
         let plugin = p.pluginName.map(Self.shortName) ?? "no plugin"
         return "\(srcLabel) → \(plugin)"
     }
