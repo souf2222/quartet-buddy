@@ -357,6 +357,8 @@ final class InsertServer: NSObject {
     }
 
     /// Menu summary, e.g. "System mix → ARC X" / "Out 1‑2 → dry".
+    /// Plugin names are shown short (company stripped) here; the full
+    /// names stay in the plugin picker lists.
     func statusLine(_ i: Int) -> String {
         let p = pairs[i]
         if p.source == .off { return "Off" }
@@ -366,7 +368,14 @@ final class InsertServer: NSObject {
         } else {
             srcLabel = "System mix"
         }
-        return "\(srcLabel) → \(p.pluginName ?? "dry")"
+        let plugin = p.pluginName.map(Self.shortName) ?? "dry"
+        return "\(srcLabel) → \(plugin)"
+    }
+
+    /// "IK Multimedia: ARC X" → "ARC X" (unchanged when no company).
+    static func shortName(_ name: String) -> String {
+        if let r = name.range(of: ": ") { return String(name[r.upperBound...]) }
+        return name
     }
 
     private func statusSummary() -> String {
@@ -741,7 +750,7 @@ final class InsertServer: NSObject {
         let window = NSWindow(contentRect: frame,
                                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                backing: .buffered, defer: false)
-        window.title = "\(Self.pairNames[i]) — \(pairs[i].pluginName ?? "AU Plugin")"
+        window.title = "\(Self.pairNames[i]) — \(pairs[i].pluginName.map(Self.shortName) ?? "AU Plugin")"
         window.contentView = view
         window.center()
         window.makeKeyAndOrderFront(nil)

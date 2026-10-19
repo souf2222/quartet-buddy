@@ -423,6 +423,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let server = InsertServer.shared
         menu.addItem(sectionHeader("AU Insert"))
 
+        // quick access: Out 1‑2's plugin editor, right under the header
+        if let mainPlugin = server.pluginName(0) {
+            let ui = menu.addItem(withTitle: "Open \(InsertServer.shortName(mainPlugin))…",
+                                  action: #selector(openMainPluginUI(_:)), keyEquivalent: "")
+            ui.tag = 0
+        }
+
         // master toggle — title shows live state
         let insertItem = menu.addItem(
             withTitle: server.running ? "Insert On" : "Insert Off",
@@ -448,13 +455,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-
-        // quick access: Out 1‑2's plugin editor, right at the top
-        if let mainPlugin = server.pluginName(0) {
-            let ui = menu.addItem(withTitle: "Open \(mainPlugin)…",
-                                  action: #selector(openMainPluginUI(_:)), keyEquivalent: "")
-            ui.tag = 0
-        }
 
         // one submenu per stereo pair: source routing + plugin + controls
         for i in 0..<4 {
