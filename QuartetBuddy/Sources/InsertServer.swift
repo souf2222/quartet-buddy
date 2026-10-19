@@ -41,8 +41,8 @@ final class InsertServer: NSObject {
     // MARK: - The 4 stereo pairs
 
     static let pairNames = [
-        "Out 1‑2 · Main",
-        "Out 3‑4 · Headphones",
+        "Out 1‑2",
+        "Out 3‑4",
         "Out 5‑6",
         "Out 7‑8",
     ]
