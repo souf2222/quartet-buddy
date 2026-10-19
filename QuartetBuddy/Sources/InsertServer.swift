@@ -2,6 +2,7 @@ import Foundation
 import CoreAudio
 import AudioToolbox
 import AVFAudio
+import CoreAudioKit
 import AppKit
 
 /// The AU insert engine: real-time plugin processing on the Quartet's outputs.
@@ -195,19 +196,48 @@ final class InsertServer {
         let frames = Self.frames(of: out)
         guard frames > 0, frames <= 4096, let dry else { return noErr }
 
-        // 1) the tapped system mix → dry stereo
+        // 1) the tapped system mix → dry stereo.
+        //    The aggregate input carries TWO streams: the Quartet's own
+        //    12ch input stream + our 8ch tap (copy of Quartet stream 0).
+        //    Find the 8ch tap buffer; the system's stereo mix sits on its
+        //    channels 1‑2 (device stereo pair [1,2] → stream ch 0,1).
         if let inp = inInputData {
             let inList = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inp))
-            let n = min(frames, Int(inList.first?.mDataByteSize ?? 0) / 4)
-            let l = inList.count > 0 ? inList[0].mData?.assumingMemoryBound(to: Float.self) : nil
-            let r = inList.count > 1 ? inList[1].mData?.assumingMemoryBound(to: Float.self) : l
-            if let l { dry.buffers[0].update(from: l, count: n) }
-            if let r { dry.buffers[1].update(from: r, count: n) }
-            if n < frames {
-                for ch in 0..<2 { for f in n..<frames { dry.buffers[ch][f] = 0 } }
+            var tap: AudioBuffer?
+            if inList.count == 1, inList[0].mNumberChannels == 2 {
+                tap = inList[0]   // future stereo-mixdown tap: interleaved stereo
+            } else {
+                for b in inList where b.mNumberChannels == 8 || b.mNumberChannels == 2 {
+                    tap = b; break
+                }
+            }
+            if let tap, let d = tap.mData?.assumingMemoryBound(to: Float.self) {
+                let ch = max(1, Int(tap.mNumberChannels))
+                let n = min(frames, Int(tap.mDataByteSize) / 4 / ch)
+                if ch == 2 {
+                    dry.buffers[0].update(from: d, count: n)
+                    dry.buffers[1].update(from: d + 1, count: n)
+                } else {
+                    for f in 0..<n {
+                        dry.buffers[0][f] = d[f * ch]
+                        dry.buffers[1][f] = d[f * ch + 1]
+                    }
+                }
+                if n < frames {
+                    for c in 0..<2 { for f in n..<frames { dry.buffers[c][f] = 0 } }
+                }
+            } else {
+                for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
             }
         } else {
-            for ch in 0..<2 { for f in 0..<frames { dry.buffers[ch][f] = 0 } }
+            for c in 0..<2 { for f in 0..<frames { dry.buffers[c][f] = 0 } }
+        }
+        cycleCount += 1
+        if cycleCount < 3 || cycleCount % 8192 == 0 {
+            let inDesc = inInputData.map { Self.describe(UnsafeMutablePointer(mutating: $0)) } ?? "no input"
+            var dryPeak: Float = 0
+            for f in 0..<frames { let v = abs(dry.buffers[0][f]); if v > dryPeak { dryPeak = v } }
+            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) in[\(inDesc)] dryPeak=\(dryPeak)")
         }
 
         // 2) outs 1‑2: plugin chain via AVAudioEngine manual rendering
@@ -247,11 +277,6 @@ final class InsertServer {
                 procR = dry.buffers[1]
             }
         }
-        if cycleCount < 3 {
-            cycleCount += 1
-            QBLog.log("insert: cycle #\(cycleCount) frames=\(frames) outBuffers=\(UnsafeMutableAudioBufferListPointer(out).count)")
-        }
-
         // 3) write the Quartet's output channels:
         //    1‑2 = processed, 3‑4 = dry, 5‑8 = silence
         let outList = UnsafeMutableAudioBufferListPointer(out)
@@ -436,41 +461,66 @@ final class InsertServer {
         }
     }
 
-    // MARK: - Plugin UI (AUv2 Cocoa view)
+    // MARK: - Plugin UI
 
     func showPluginUI() {
         guard let unit = effect?.audioUnit else { return }
-        let infoPtr = UnsafeMutablePointer<AudioUnitCocoaViewInfo>.allocate(capacity: 1)
-        infoPtr.initialize(to: AudioUnitCocoaViewInfo(
-            mCocoaAUViewBundleLocation: Unmanaged.fromOpaque(UnsafeMutableRawPointer(bitPattern: 1)!),
-            mCocoaAUViewClass: Unmanaged.fromOpaque(UnsafeMutableRawPointer(bitPattern: 1)!)))
-        defer { infoPtr.deallocate() }
-        var size = UInt32(MemoryLayout<AudioUnitCocoaViewInfo>.size)
-        guard AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
-                                   kAudioUnitScope_Global, 0, infoPtr, &size) == noErr else {
-            QBLog.log("insert: plugin has no Cocoa view")
+
+        // kAudioUnitProperty_CocoaUI returns AudioUnitCocoaViewInfo
+        // { CFURLRef bundle; CFArrayRef classNames; } — Swift mis-imports
+        // the array field, so read it raw.
+        let infoSize = 16
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: infoSize, alignment: 8)
+        raw.initializeMemory(as: UInt64.self, repeating: 0, count: 2)
+        defer { raw.deallocate() }
+        var size = UInt32(infoSize)
+        let err = AudioUnitGetProperty(unit, kAudioUnitProperty_CocoaUI,
+                                       kAudioUnitScope_Global, 0, raw, &size)
+        guard err == noErr else {
+            QBLog.log("insert: no Cocoa UI (err \(err)) — plugin has no view")
+            let alert = NSAlert()
+            alert.messageText = "\(pluginName ?? "The plugin") exposes no graphical editor."
+            alert.runModal()
             return
         }
-        let info = infoPtr.pointee
-        guard let bundleURL = info.mCocoaAUViewBundleLocation.takeUnretainedValue() as URL?,
-              let className = (info.mCocoaAUViewClass.takeUnretainedValue() as? [String])?.first,
-              let bundle = Bundle(url: bundleURL) else {
-            QBLog.log("insert: plugin has no Cocoa view (parse)")
+        let bundlePtr = raw.assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        let classArrayPtr = (raw + 8).assumingMemoryBound(to: UnsafeRawPointer?.self)[0]
+        guard let bundlePtr, let classArrayPtr else {
+            QBLog.log("insert: Cocoa UI fields empty")
             return
         }
-        guard let cls = bundle.classNamed(className as String) as? NSView.Type else {
-            QBLog.log("insert: view class \(className) not found")
+        let bundleURL = Unmanaged<CFURL>.fromOpaque(bundlePtr).takeUnretainedValue() as URL
+        let classNamesArr = Unmanaged<CFArray>.fromOpaque(classArrayPtr).takeUnretainedValue()
+        let classCount = CFArrayGetCount(classNamesArr)
+        var classNames: [String] = []
+        for i in 0..<classCount {
+            if let s = CFArrayGetValueAtIndex(classNamesArr, i) {
+                let str = Unmanaged<CFString>.fromOpaque(s).takeUnretainedValue() as String
+                classNames.append(str)
+            }
+        }
+        QBLog.log("insert: CocoaUI bundle=\(bundleURL.path) classes=\(classNames)")
+
+        guard let bundle = Bundle(url: bundleURL), bundle.load(),
+              let className = classNames.first,
+              let cls = NSClassFromString(className) as? NSView.Type else {
+            QBLog.log("insert: view class unresolved (\(classNames))")
+            let alert = NSAlert()
+            alert.messageText = "Couldn't load the plugin's editor view."
+            alert.informativeText = "Classes: \(classNames.joined(separator: ", "))"
+            alert.runModal()
             return
         }
-        let view = cls.init(frame: NSRect(x: 0, y: 0, width: 420, height: 480))
+        let view = cls.init(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
         viewWindow?.close()
         let window = NSWindow(contentRect: view.bounds,
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false)
+                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                               backing: .buffered, defer: false)
         window.title = pluginName ?? "AU Plugin"
         window.contentView = view
         window.center()
         window.makeKeyAndOrderFront(nil)
+        // menubar apps need this to bring their windows forward
         NSApp.activate(ignoringOtherApps: true)
         viewWindow = window
     }
@@ -525,11 +575,29 @@ final class InsertServer {
         return obj
     }
 
-    /// Frames in the first buffer of an output list (float32, 1 channel).
+    /// Frames in the first buffer of a list (float32).
     private static func frames(of abl: UnsafeMutablePointer<AudioBufferList>) -> Int {
         let list = UnsafeMutableAudioBufferListPointer(abl)
         guard let b = list.first else { return 0 }
-        return Int(b.mDataByteSize) / 4
+        let ch = max(1, Int(b.mNumberChannels))
+        return Int(b.mDataByteSize) / 4 / ch
+    }
+
+    /// Detailed layout + peak logging (throttled) for debugging.
+    private static func describe(_ abl: UnsafeMutablePointer<AudioBufferList>) -> String {
+        let list = UnsafeMutableAudioBufferListPointer(abl)
+        return list.map { b in
+            let ch = b.mNumberChannels
+            let frames = b.mDataByteSize / 4 / max(1, ch)
+            var peak: Float = 0
+            if let d = b.mData?.assumingMemoryBound(to: Float.self) {
+                for i in stride(from: 0, to: Int(b.mDataByteSize) / 4, by: max(1, Int(ch))) {
+                    let v = abs(d[i])
+                    if v > peak { peak = v }
+                }
+            }
+            return "\(ch)ch/\(frames)f peak=\(peak)"
+        }.joined(separator: " | ")
     }
 
     private static func copyStereo(into list: UnsafeMutableAudioBufferListPointer, base: Int,

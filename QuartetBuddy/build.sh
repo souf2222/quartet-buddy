@@ -39,6 +39,8 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Quartet Buddy captures the system audio bound for the Quartet to run your chosen AU plugin (e.g. room correction) on its outputs. Nothing is recorded or stored; audio is processed locally in real time.</string>
 </dict>
 </plist>
 PLIST
