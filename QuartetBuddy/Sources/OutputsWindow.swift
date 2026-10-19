@@ -19,6 +19,8 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
     private var editorButtons: [NSButton] = []
+    private var levelSliders: [NSSlider] = []
+    private var levelFields: [NSTextField] = []
 
     private static let nameKey: (Int) -> String = { "insertPair.\($0).name" }
 
@@ -85,6 +87,17 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             enabledChecks[i].isEnabled = live && server.pluginName(i) != nil
 
             editorButtons[i].isEnabled = server.pluginName(i) != nil
+
+            // LEVEL — slider + editable dB field, live state from server
+            let trim = server.trim(i)
+            if levelSliders[i].doubleValue != trim {
+                levelSliders[i].doubleValue = trim
+            }
+            let text = String(format: "%+.1f dB", trim)
+            if levelFields[i].stringValue != text {
+                levelFields[i].stringValue = text
+            }
+            levelFields[i].textColor = trim > 0.01 ? .systemRed : .secondaryLabelColor
         }
     }
 
@@ -166,9 +179,34 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             return b
         })
 
+        // 8) LEVEL — input trim (slider + editable dB field)
+        grid.addRow(with: (0..<4).map { _ in sectionField("Level") })
+        grid.addRow(with: (0..<4).map { i in
+            let sl = NSSlider(value: 0, minValue: -64, maxValue: 6, target: self,
+                              action: #selector(levelSlid(_:)))
+            sl.tag = 700 + i
+            sl.isContinuous = true
+            // double-click the knob → reset to 0 dB
+            let dbl = NSClickGestureRecognizer(target: self, action: #selector(levelReset(_:)))
+            dbl.numberOfClicksRequired = 2
+            sl.addGestureRecognizer(dbl)
+            levelSliders.append(sl)
+            return sl
+        })
+        grid.addRow(with: (0..<4).map { i in
+            let f = NSTextField()
+            f.placeholderString = "0.0 dB"
+            f.alignment = .center
+            f.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            f.tag = 750 + i
+            f.delegate = self
+            levelFields.append(f)
+            return f
+        })
+
         // column widths (NSGridView sizes to content; pin the popups)
         for i in 0..<4 {
-            for rowIdx in [3, 6] {   // source, plug-in popup rows
+            for rowIdx in [3, 6, 10, 11] {   // source, plug-in, slider, dB rows
                 if let cellView = grid.cell(atColumnIndex: i, rowIndex: rowIdx).contentView {
                     cellView.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
                 }
@@ -204,17 +242,31 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     // MARK: - name editing
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField,
-              field.tag >= 500, field.tag < 504, !suppressActions else { return }
-        let i = field.tag - 500
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        if name.isEmpty {
-            UserDefaults.standard.removeObject(forKey: Self.nameKey(i))
-        } else {
-            UserDefaults.standard.set(name, forKey: Self.nameKey(i))
+        guard let field = obj.object as? NSTextField, !suppressActions else { return }
+        if field.tag >= 500, field.tag < 504 {
+            // custom output name
+            let i = field.tag - 500
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.nameKey(i))
+            } else {
+                UserDefaults.standard.set(name, forKey: Self.nameKey(i))
+            }
+            QBLog.log("insert: pair \(i) named '\(name)'")
+            refresh()
+        } else if field.tag >= 750, field.tag < 754 {
+            // Level dB field — parse ("−6", "-6 dB", "+3.5 dB", …)
+            let i = field.tag - 750
+            var t = field.stringValue
+                .replacingOccurrences(of: "dB", with: "")
+                .replacingOccurrences(of: "\u{2212}", with: "-")
+                .trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("+") { t.removeFirst() }
+            if let db = Double(t) {
+                InsertServer.shared.setTrim(i, db)
+            }
+            refresh()
         }
-        QBLog.log("insert: pair \(i) named '\(name)'")
-        refresh()
     }
 
     // MARK: - helpers
@@ -268,6 +320,29 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc private func rowEditorOpened(_ sender: NSButton) {
         InsertServer.shared.showPluginUI(sender.tag - 450)
+    }
+
+    /// Level slider (tag = 700 + pair). Soft-snaps to unity.
+    @objc private func levelSlid(_ sender: NSSlider) {
+        let i = sender.tag - 700
+        var v = sender.doubleValue
+        if abs(v) < 0.5 { v = 0 }   // snap near unity
+        // quiet: the audio path updates live; a full window refresh on
+        // every drag tick would rebuild all plug-in popups (slow)
+        InsertServer.shared.setTrim(i, v, notify: false)
+        suppressActions = true
+        let text = String(format: "%+.1f dB", min(6.0, max(-64.0, v)))
+        levelFields[i].stringValue = text
+        levelFields[i].textColor = v > 0.01 ? .systemRed : .secondaryLabelColor
+        suppressActions = false
+    }
+
+    /// Double-click the slider knob → reset to 0 dB.
+    @objc private func levelReset(_ g: NSClickGestureRecognizer) {
+        guard let sl = g.view as? NSSlider else { return }
+        let i = sl.tag - 700
+        InsertServer.shared.setTrim(i, 0)
+        refresh()
     }
 }
 

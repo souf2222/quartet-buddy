@@ -89,6 +89,10 @@ final class InsertServer: NSObject {
         /// For mirrored sources: copy BEFORE the source pair's plug-in
         /// (raw playback channels) or AFTER (its processed output).
         var mirrorPre = true
+        /// Input trim in dB (−64…+6, 0 = unity) — applied to the pair's
+        /// input before its plug-in chain. Routing-level: unaffected by
+        /// bypassAll.
+        var trim: Float = 0
         // runtime (main thread only)
         var engine: AVAudioEngine?
         var srcNode: AVAudioSourceNode?
@@ -96,6 +100,8 @@ final class InsertServer: NSObject {
         var renderBuffer: AVAudioPCMBuffer?
         /// this pair's rendered output storage (audio thread reads)
         var proc: StereoABL?
+        /// scaled input storage when trim != 0 dB (audio thread reads)
+        var level: StereoABL?
         var pluginName: String?
         var desc: AudioComponentDescription?
         var viewInfo: (bundleURL: URL, classNames: [String])?
@@ -166,6 +172,9 @@ final class InsertServer: NSObject {
     private static func enabledKey(_ i: Int) -> String { "insertPair.\(i).enabled" }
     private static func mirrorKey(_ i: Int) -> String { "insertPair.\(i).mirror" }
     private static let bypassAllKey = "insertBypassAll"
+    private static func trimKey(_ i: Int) -> String { "insertPair.\(i).trim" }
+    /// Linear gain factors per pair (10^(dB/20)), main-side writes.
+    private var trimFactors: [Float] = [1, 1, 1, 1]
     /// Global override: all plug-ins bypassed (per-pair state untouched).
     private(set) var bypassAll = UserDefaults.standard.bool(forKey: "insertBypassAll")
     private static func pluginStateKey(_ d: AudioComponentDescription, _ i: Int) -> String {
@@ -203,6 +212,11 @@ final class InsertServer: NSObject {
             if let m = UserDefaults.standard.string(forKey: Self.mirrorKey(i)) {
                 p.mirrorPre = (m == "before")
             }
+            // input trim (Level) — clamp to −64…+6 dB
+            let savedTrim = UserDefaults.standard.double(forKey: Self.trimKey(i))
+            if savedTrim != 0 {
+                p.trim = Float(min(6, max(-64, savedTrim)))
+            }
             // migrate the v1 single-plugin settings to pair 0
             if i == 0, UserDefaults.standard.string(forKey: Self.pluginKey(0)) == nil,
                let old = UserDefaults.standard.string(forKey: "insertPluginDesc") {
@@ -213,6 +227,7 @@ final class InsertServer: NSObject {
             }
             return p
         }
+        trimFactors = pairs.map { pow(10, $0.trim / 20) }
     }
 
     private func saveSource(_ i: Int) {
@@ -322,8 +337,9 @@ final class InsertServer: NSObject {
             QBLog.log("insert: buffer size set err \(bufErr)")
         }
 
-        // 3) dry buffer + one engine per pair
+        // 3) system buffer, per-pair level buffers + one engine per pair
         sys = StereoABL(frames: 4096, channels: 8)
+        for i in 0..<4 { pairs[i].level = StereoABL(frames: 4096) }
         for i in 0..<4 {
             if let key = UserDefaults.standard.string(forKey: Self.pluginKey(i)),
                let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
@@ -360,6 +376,7 @@ final class InsertServer: NSObject {
             pairs[i].effect = nil
             pairs[i].renderBuffer = nil
             pairs[i].proc = nil
+            pairs[i].level = nil
             pairs[i].desc = nil
             pairs[i].pluginName = nil
             pairs[i].viewInfo = nil
@@ -591,6 +608,19 @@ final class InsertServer: NSObject {
                 outL[i] = sys.buffers[src * 2]  // raw playback channels
                 outR[i] = sys.buffers[src * 2 + 1]
             }
+            // input trim (Level): scaled copy into the pair's own buffer —
+            // never in place (sys/mirror buffers are shared). Unity (0 dB)
+            // skips the copy entirely.
+            let f = trimFactors[i]
+            if f != 1.0, let lab = p.level, let l = outL[i], let r = outR[i] {
+                let labL = lab.buffers[0], labR = lab.buffers[1]
+                for fr in 0..<frames {
+                    labL[fr] = l[fr] * f
+                    labR[fr] = r[fr] * f
+                }
+                outL[i] = labL
+                outR[i] = labR
+            }
             // plugin chain (in 512-frame chunks — the renderOffline path;
             // see instantiatePlugin for why manual mode at all)
             if let effect = p.effect, p.enabled, !bypassAll,
@@ -765,6 +795,19 @@ final class InsertServer: NSObject {
         QBLog.log("insert: pair \(i) mirror \(pre ? "before" : "after") source plug-in")
         onStateChange?()
     }
+
+    /// Input trim (Level) for pair i, dB in −64…+6. Applied to the
+    /// pair's input before its plug-in; routing-level (unaffected by
+    /// Bypass All Plug-ins). Minimum = effective silence.
+    func setTrim(_ i: Int, _ db: Double, notify: Bool = true) {
+        let clamped = min(6.0, max(-64.0, db))
+        pairs[i].trim = Float(clamped)
+        UserDefaults.standard.set(clamped, forKey: Self.trimKey(i))
+        trimFactors[i] = pow(10, pairs[i].trim / 20)
+        if notify { onStateChange?() }
+    }
+
+    func trim(_ i: Int) -> Double { Double(pairs[i].trim) }
 
     func pluginName(_ i: Int) -> String? { pairs[i].pluginName }
     func source(_ i: Int) -> PairSource { pairs[i].source }
