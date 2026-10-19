@@ -41,6 +41,21 @@ final class OSVolumeMirror {
     private var listenerProc: AudioObjectPropertyListenerProc?
     private var cachedDeviceID: AudioDeviceID?
     private var lastEnforcedDB: Double?
+    /// The last OS mute state delivered upward (nil before the first read).
+    /// The listener proc fires on ANY output-property notification — volume
+    /// writes included — so without a baseline a stale OS mute would be
+    /// re-delivered as a "change" and applied to whatever output is selected
+    /// *now* (muting the just-switched-to output — observed Oct 19 2026).
+    /// See muteChanged().
+    private var lastMute: Bool?
+    /// True after a volume-target switch: the OS mute flag is stale — it
+    /// still reflects the PREVIOUS target's last F10 state (the app never
+    /// writes the OS mute; Oct 18 driver wedge). The next OS mute change
+    /// is that stale state being cleared (user's first F10 press, or
+    /// macOS auto-unmuting on a volume write), NOT a mute request for the
+    /// newly selected output. Absorb it. Observed live Oct 19 2026:
+    /// muting Main Out then switching muted the Headphones.
+    private var absorbNextMuteChange = false
     private var systemListenerProc: AudioObjectPropertyListenerProc?
     private var retryTimer: Timer?
     private var retryCount = 0
@@ -92,7 +107,15 @@ final class OSVolumeMirror {
     // MARK: - Quartet → macOS
 
     /// Copy `db` (the real fader level) onto the macOS volume slider.
+    /// RANGE-VALIDATED: a wedged driver fed a -255 dB sentinel through here
+    /// (Oct 19 2026), which then echoed into the hardware fader and crashed
+    /// the whole unit. Nothing outside the fader's -64…0 dB (+ slack) is
+    /// ever written to CoreAudio.
     func enforce(_ db: Double) {
+        guard db.isFinite, db >= -65, db <= 1 else {
+            QBLog.log(String(format: "slider sync: IGNORED bogus level %.1f dB", db))
+            return
+        }
         lastEnforcedDB = db
         guard let dev = device() else {
             QBLog.log("slider sync: no Quartet in CoreAudio yet — will retry")
@@ -159,9 +182,34 @@ final class OSVolumeMirror {
         onSliderMoved?(db)
     }
 
+    /// Volume-target switch (Main Out ↔ Headphones): arm the absorb latch.
+    /// The OS mute flag still carries the OLD target's state and cannot be
+    /// written (driver wedge, Oct 18) — the next OS mute change is stale
+    /// cleanup, never a real mute request for the newly selected output.
+    func noteTargetSwitch() {
+        absorbNextMuteChange = true
+    }
+
     private func muteChanged() {
         guard let dev = device(),
               let m = Self.readMute(from: dev) else { return }
+        // Target just switched: this change clears the previous output's
+        // stale OS mute (first F10 press, macOS volume-write auto-unmute).
+        // Applying it muted/unmuted the just-switched-to output (Oct 19).
+        if absorbNextMuteChange {
+            absorbNextMuteChange = false
+            lastMute = m
+            QBLog.log("mute sync: absorbed stale OS mute (\(m ? "on" : "off")) after target switch")
+            return
+        }
+        // Only deliver REAL changes. The listener fires on any output
+        // property notification (our own enforce() volume writes included),
+        // and the OS mute goes stale whenever the volume target switches:
+        // muting output A leaves the OS mute on, and the app never writes
+        // the OS mute (driver wedge — see header). Delivering that stale
+        // value right after a switch muted the newly selected output.
+        guard m != lastMute else { return }
+        lastMute = m
         onMuteChanged?(m)
     }
 
@@ -201,6 +249,11 @@ final class OSVolumeMirror {
             }
         }
         listenedDevice = allOK ? dev : nil
+        // Seed the dedupe baseline (see lastMute): a stale OS mute at bind
+        // time — e.g. the other output was muted before switching targets —
+        // must not be delivered as a change by the first spurious
+        // notification (any enforce() volume write fires one).
+        if allOK { lastMute = Self.readMute(from: dev) }
     }
 
     // MARK: - CoreAudio helpers

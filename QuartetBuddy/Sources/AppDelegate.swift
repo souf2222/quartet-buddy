@@ -40,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// persisted across sessions.
     var selectedOutput: OutputTarget {
         didSet {
-            syncMacSlider(force: true)   // slider follows whichever output is bound
+            osSlider.noteTargetSwitch()   // stale OS mute must not leak to the new target
+            syncMacSlider(force: true)    // slider follows whichever output is bound
             refreshMenu()
         }
     }
@@ -49,6 +50,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static let minDB: Double = -64
     static let maxDB: Double = 0
+
+    /// A plausible hardware fader level (finite, inside minDB…maxDB plus a
+    /// little driver-rounding slack). Anything else — the -255 sentinel a
+    /// wedged driver returns, NaN, etc. — must never reach the Quartet:
+    /// out-of-range gain writes crashed the whole unit (Oct 19 2026).
+    static func isValidDB(_ db: Double) -> Bool {
+        db.isFinite && db >= minDB - 1 && db <= maxDB + 1
+    }
 
     var talkbackOn = false
     var talkbackMomentary = false
@@ -61,10 +70,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Copy the selected output's real level onto the macOS volume slider —
     /// the Quartet → macOS half of the binding (see OSVolumeMirror).
+    /// RANGE-VALIDATED (see isValidDB): a wedged driver's tree/echo values
+    /// must not be pushed onto the slider and re-read back into the fader.
     private func syncMacSlider(force: Bool = false) {
         guard gainKnown else { return }
         let db = gain[selectedOutput] ?? 0
         guard force || lastSliderDB != db else { return }
+        guard Self.isValidDB(db) else {
+            QBLog.log(String(format: "slider sync: IGNORED bogus hardware level %.1f dB", db))
+            return
+        }
         lastSliderDB = db
         osSlider.enforce(db)
     }
@@ -73,9 +88,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// apply its level to the Quartet's real fader — the macOS → Quartet
     /// half of the binding. Our own enforce writes land here too and are
     /// filtered out by the value check.
+    ///
+    /// RANGE-VALIDATED: a wedged Apogee driver makes CoreAudio reads return
+    /// garbage (a -255 dB sentinel was observed live, Oct 19 2026), which
+    /// this path would otherwise echo into the hardware fader in a feedback
+    /// loop — an out-of-range write that took the whole unit down (dark
+    /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
+        guard Self.isValidDB(db) else {
+            QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
+            return
+        }
         let target = selectedOutput
         let current = gain[target] ?? 0
         guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding

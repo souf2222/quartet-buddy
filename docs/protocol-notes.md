@@ -25,6 +25,17 @@ QuartetBuddy (ours)   ─┘                                   Quartet firmware
   `kAudioHardwareUnspecifiedError` ('what') until the Quartet was
   power-cycled (live-tested incident, Oct 18 2026). `OSVolumeMirror.swift`
   never writes the OS mute.
+* **Out-of-range gain writes crash the unit** (live incident, Oct 19 2026):
+  a wedged driver made CoreAudio volume reads return **−255 dB** (a garbage
+  sentinel, not a real level). The unvalidated slider-sync path echoed it
+  into `setProperty(hwoutN.gain, −255)` → black screens, dead unit; the
+  echo then looped −255 back through tree → slider → read every second
+  (self-sustaining). Recovery = bootloader factory reset (hold controller
+  knob, power-cycle, wait for the A/B/C touchpads to blink). Since then
+  **every dB value crossing the OS↔Quartet boundary is range-validated**
+  (`AppDelegate.isValidDB`, plus a guard in `OSVolumeMirror.enforce`):
+  finite and within −64…0 dB (+1 slack) or it is logged `IGNORED bogus …`
+  and dropped. A wedged driver can only produce log noise now.
 * ApogeeGlue owns device state as a JUCE ValueTree and applies changes to hardware.
 
 ## Transport
