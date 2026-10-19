@@ -47,16 +47,14 @@ enum LogoIcon {
         let fraction: CGFloat = active ? 1.0 : 0.3
 
         if useHeadphones, let hp = headphoneSymbol() {
-            // Tint the template glyph to the menubar text color so the image
-            // can stay non-template — the animated talkback dot draws on top.
-            let r = aspectFit(hp, in: rect)
-            let appearance = NSApp?.effectiveAppearance
-                ?? NSAppearance.current
-                ?? NSAppearance(named: .aqua)!
+            // White glyph (explicit user preference — reads best against the
+            // menubar), drawn oversized to fill the canvas. Non-template so
+            // the animated talkback dot can draw on top.
+            let r = aspectFit(hp, in: rect.insetBy(dx: -1, dy: 0))
             let tint = NSImage(size: canvasSize)
             tint.lockFocus()
             hp.draw(in: r)
-            glyphColor(for: appearance).set()
+            NSColor.white.set()
             NSRect(origin: .zero, size: canvasSize).fill(using: .sourceIn)
             tint.unlockFocus()
             tint.draw(in: rect)
@@ -70,18 +68,9 @@ enum LogoIcon {
     }
 
     private static func headphoneSymbol() -> NSImage? {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        let cfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
         return NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones")?
             .withSymbolConfiguration(cfg)
-    }
-
-    /// Menubar text color for the current appearance (white on dark, black on light).
-    private static func glyphColor(for appearance: NSAppearance) -> NSColor {
-        if let match = appearance.bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight]),
-           match == .darkAqua || match == .vibrantDark {
-            return .white
-        }
-        return .black
     }
 
     private static func loadAsset() -> NSImage? {
