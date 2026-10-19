@@ -18,6 +18,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
     private var sourcePopups: [NSPopUpButton] = []
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
+    private var editorButtons: [NSButton] = []
 
     // detail controls
     private var detailTitle: NSTextField!
@@ -71,6 +72,8 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
 
             enabledChecks[i].state = server.enabled(i) && !server.bypassAll ? .on : .off
             enabledChecks[i].isEnabled = live && server.pluginName(i) != nil
+
+            editorButtons[i].isEnabled = server.pluginName(i) != nil
         }
 
         // details
@@ -99,7 +102,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
     // MARK: - build
 
     private func build() {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 680, height: 520))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -134,7 +137,15 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
             check.tag = 300 + i
             enabledChecks.append(check)
 
-            let row = NSStackView(views: [outLabel, srcPopup, plugPopup, check])
+            let editor = NSButton(title: "Open Editor…", target: self,
+                                   action: #selector(rowEditorOpened(_:)))
+            editor.tag = 400 + i
+            editor.bezelStyle = .rounded
+            editor.controlSize = .small
+            editor.font = .systemFont(ofSize: 11)
+            editorButtons.append(editor)
+
+            let row = NSStackView(views: [outLabel, srcPopup, plugPopup, check, editor])
             row.orientation = .horizontal
             row.spacing = 12
             row.translatesAutoresizingMaskIntoConstraints = false
@@ -144,6 +155,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
                 srcPopup.widthAnchor.constraint(equalToConstant: 170),
                 plugPopup.widthAnchor.constraint(equalToConstant: 190),
                 check.widthAnchor.constraint(equalToConstant: 64),
+                editor.widthAnchor.constraint(equalToConstant: 110),
             ])
             stack.addArrangedSubview(row)
         }
@@ -239,7 +251,8 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
         let views = [secondaryTextField(output, bold: bold),
                     secondaryTextField(source, bold: bold),
                     secondaryTextField(plugin, bold: bold),
-                    secondaryTextField(enabled, bold: bold)]
+                    secondaryTextField(enabled, bold: bold),
+                    secondaryTextField("Editor", bold: bold)]
         let row = NSStackView(views: views)
         row.orientation = .horizontal
         row.spacing = 12
@@ -248,6 +261,7 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
             views[1].widthAnchor.constraint(equalToConstant: 170),
             views[2].widthAnchor.constraint(equalToConstant: 190),
             views[3].widthAnchor.constraint(equalToConstant: 64),
+            views[4].widthAnchor.constraint(equalToConstant: 110),
         ])
         return row
     }
@@ -301,6 +315,13 @@ final class OutputsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func openEditor(_ sender: NSButton) {
         InsertServer.shared.showPluginUI(selectedPair)
+    }
+
+    /// Per-row "Open Editor…" button (tag = 400 + pair).
+    @objc private func rowEditorOpened(_ sender: NSButton) {
+        selectedPair = sender.tag - 400
+        InsertServer.shared.showPluginUI(selectedPair)
+        refresh()
     }
 }
 
