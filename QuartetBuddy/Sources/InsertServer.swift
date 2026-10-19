@@ -323,6 +323,7 @@ final class InsertServer: NSObject {
         // editor windows hold views owned by the (now disposed) AUs — close
         viewWindow.values.forEach { $0.close() }
         viewWindow = [:]
+        hiddenViews = [:]
         dry = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -743,7 +744,12 @@ final class InsertServer: NSObject {
     /// we must drop the reference on close or hold a zombie → SIGSEGV.
     func showPluginUI(_ i: Int) {
         if let w = viewWindow[i] {
-            // existing editor: just bring it back
+            // existing editor: reattach the view if it was detached on
+            // close (halts the plugin's render loop), then bring it back
+            if let v = hiddenViews.removeValue(forKey: w) {
+                w.contentView = v
+                QBLog.log("insert: pair \(i) editor view reattached")
+            }
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -786,11 +792,23 @@ final class InsertServer: NSObject {
     /// later "Open" re-fronts it.
     func windowWillClose(_ notification: Notification) {
         guard let w = notification.object as? NSWindow else { return }
-        if viewWindow.values.contains(where: { $0 === w }) {
-            QBLog.log("insert: editor window hidden (kept alive)")
-            DispatchQueue.main.async { w.orderOut(nil) }
+        guard viewWindow.values.contains(where: { $0 === w }) else { return }
+        // Keep the view alive (re-requesting it from the AU crashes — see
+        // showPluginUI) but halt its rendering: JUCE editors run an
+        // OpenGL render loop at ~60 fps that burns real CPU while the
+        // window is merely hidden (~20-40% live-measured). Detaching the
+        // view stops the loop; reattach on the next Open.
+        if let view = w.contentView {
+            view.removeFromSuperview()
+            hiddenViews[w] = view
         }
+        w.contentView = nil
+        QBLog.log("insert: editor window hidden (view detached, rendering halted)")
     }
+
+    /// Windows whose editor views were detached on close (kept alive —
+    /// re-requesting a view from the AU crashes; see showPluginUI).
+    private var hiddenViews: [NSWindow: NSView] = [:]
 
     /// The plugin's custom Cocoa UI from PREFETCHED info (no property
     /// gets here — they deadlock under active rendering), driving the
