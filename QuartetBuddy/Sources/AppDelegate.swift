@@ -487,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Plugin ▸ none + all installed effects
             let plugItem = pairItem.submenu!.addItem(withTitle: "Plugin", action: nil, keyEquivalent: "")
             plugItem.submenu = NSMenu()
-            let noneItem = plugItem.submenu!.addItem(withTitle: "None (dry)",
+            let noneItem = plugItem.submenu!.addItem(withTitle: "None",
                                                      action: #selector(pickPairPlugin(_:)), keyEquivalent: "")
             noneItem.tag = i
             noneItem.representedObject = ""

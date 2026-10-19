@@ -356,7 +356,7 @@ final class InsertServer: NSObject {
         inputIsDry = (0..<4).map { i in resolve(i, [i]) }
     }
 
-    /// Menu summary, e.g. "System mix → ARC X" / "Out 1‑2 → dry".
+    /// Menu summary, e.g. "System mix → ARC X" / "Out 1‑2 → no plugin".
     /// Plugin names are shown short (company stripped) here; the full
     /// names stay in the plugin picker lists.
     func statusLine(_ i: Int) -> String {
@@ -368,7 +368,7 @@ final class InsertServer: NSObject {
         } else {
             srcLabel = "System mix"
         }
-        let plugin = p.pluginName.map(Self.shortName) ?? "dry"
+        let plugin = p.pluginName.map(Self.shortName) ?? "no plugin"
         return "\(srcLabel) → \(plugin)"
     }
 
@@ -469,7 +469,7 @@ final class InsertServer: NSObject {
                 } else {
                     sourceRenderErr += 1
                     if sourceRenderErr <= 3 || sourceRenderErr % 512 == 0 {
-                        QBLog.log("insert: pair \(i) render failed — dry")
+                        QBLog.log("insert: pair \(i) render failed — bypassed this cycle")
                     }
                 }
             }
