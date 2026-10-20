@@ -276,11 +276,19 @@ extension GlueClient {
         return nil
     }
 
+    // Tree props arrive as the JUCE var types the reader decodes: doubles
+    // as Double, ints as Int32, bools as Bool. A plain `as? Int` silently
+    // fails on Int32 (and on Bool) — always nil — which made every int-ish
+    // property (mute/dim/sum/phantom/…) read as unknown from the tree and
+    // then "snap back" on the next tree poll. Go through NSNumber instead.
     static func doubleProp(_ node: [String: Any]?, _ name: String) -> Double? {
-        (node?["props"] as? [String: Any])?[name] as? Double
+        let v = (node?["props"] as? [String: Any])?[name]
+        return (v as? Double) ?? (v as? NSNumber)?.doubleValue
     }
 
     static func intProp(_ node: [String: Any]?, _ name: String) -> Int? {
-        (node?["props"] as? [String: Any])?[name] as? Int
+        guard let v = (node?["props"] as? [String: Any])?[name] else { return nil }
+        if let i = v as? Int { return i }
+        return (v as? NSNumber)?.intValue
     }
 }

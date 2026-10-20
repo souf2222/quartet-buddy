@@ -33,6 +33,9 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     var onWriteInt: (([UInt8], Int32) -> Void)?
     var onRequestTree: (() -> Void)?
     var isGlueConnected: (() -> Bool)?
+    /// The last tree the app received (seed so the window opens with real
+    /// values instead of blanks while the first poll comes in).
+    var onSeedTree: (() -> [String: Any]?)?
 
     // MARK: - state
 
@@ -71,11 +74,14 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     func show() {
         if window == nil { build() }
-        refresh()
+        // open with real values: seed from the last tree, then pull a
+        // fresh one immediately (don't wait out the first poll tick)
+        if let tree = onSeedTree?() { updateTree(tree) } else { refresh() }
         // stay above Apogee Control 2 WITHOUT activating us (that would
         // pull focus from the app the user is wiggling controls in)
         window?.orderFrontRegardless()
         startPoll()
+        onRequestTree?()
     }
 
     func refresh() {
@@ -529,8 +535,11 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         w.contentView?.layoutSubtreeIfNeeded()
         let fit = stackFittingSize()
         let size = NSSize(width: max(fit.width + 44, 420), height: fit.height + 62)
-        if abs(w.contentView?.frame.size.width ?? 0 - size.width) > 1 ||
-           abs(w.contentView?.frame.size.height ?? 0 - size.height) > 1 {
+        // compare against the ACTUAL current content size (see the operator-
+        // precedence note in OutputsWindow.refit — the naive form always
+        // re-centers the window on every refresh)
+        let cur = w.contentView?.frame.size ?? .zero
+        if abs(cur.width - size.width) > 1 || abs(cur.height - size.height) > 1 {
             w.setContentSize(size)
             w.center()
         }

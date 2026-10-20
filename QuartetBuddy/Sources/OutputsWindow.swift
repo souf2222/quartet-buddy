@@ -267,8 +267,13 @@ final class OutputsWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         contentLayout()
         let fit = grid.fittingSize
         let size = NSSize(width: fit.width + 48, height: fit.height + 72)
-        if abs(w.contentView?.frame.size.width ?? 0 - size.width) > 1 ||
-           abs(w.contentView?.frame.size.height ?? 0 - size.height) > 1 {
+        // NOTE: compare against the ACTUAL current content size — a naive
+        // `contentView?.frame.size.width ?? 0 - size.width` parses as
+        // `?? (0 - size.width)` (nil-coalescing binds looser than `-`),
+        // making the check always true and re-centering the window on
+        // every single refresh.
+        let cur = w.contentView?.frame.size ?? .zero
+        if abs(cur.width - size.width) > 1 || abs(cur.height - size.height) > 1 {
             w.setContentSize(size)
             w.center()
         }

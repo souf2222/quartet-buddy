@@ -367,6 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         glue.onTree = { [weak self] tree in
             guard let self else { return }
+            self.lastTree = tree
             // The device node's type is its serial — path-ids are hashed
             // per-serial, so pick this unit's id table before anything else.
             PathIds.select(serial: GlueClient.quartetSerial(in: tree))
@@ -441,6 +442,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Serial we already auto-prompted the setup wizard for (this launch).
     private var promptedSetupSerial: String?
+
+    /// Most recent glue tree (seeds the console window with live values
+    /// the moment it opens).
+    private var lastTree: [String: Any]?
 
     /// Wire the macOS → Quartet halves of the volume + mute bindings. The
     /// volume keys and F10 are never intercepted — macOS drives its own
@@ -876,6 +881,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         console.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
         console.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
         console.onRequestTree = { [weak self] in self?.glue.requestTree() }
+        console.onSeedTree = { [weak self] in self?.lastTree }
         console.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
