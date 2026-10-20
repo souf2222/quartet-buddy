@@ -846,6 +846,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private var statusField: NSTextField!
     private var subtitleField: NSTextField!
+    /// The scroll area's document view (top-scroll on open).
+    private var scrollDoc: NSView?
 
     private static let nameKey: (Int) -> String = { "insertPair.\($0).name" }
     /// Current custom name for a pair ("" when unset).
@@ -933,14 +935,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // fitting size otherwise, and the intrinsic size is tiny
         w.setContentSize(NSSize(width: 1200, height: 820))
         w.center()
+        // open at the TOP of the sections: the doc is NOT flipped, so its
+        // origin is the bottom — scrolling to 0 shows the bottom (status
+        // line) and leaves the Inputs header clipped at the top.
+        content.layoutSubtreeIfNeeded()
+        if let d = scrollDoc {
+            d.scroll(NSPoint(x: 0, y: d.bounds.maxY))
+        }
     }
 
     /// Title bar: title + interface subtitle on the left, toolbar on the
-    /// right ("Auto Gain All" + settings). Lightly translucent, with a
+    /// right (settings). Lightly translucent, with a
     /// subtle divider separating it from the controls.
     private func makeHeader() -> NSView {
         let header = NSView()
-        header.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false
 
         let title = NSTextField(labelWithString: "Quartet Control")
@@ -958,19 +966,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         let settings = NSButton(title: "⚙︎", target: self, action: #selector(settingsClicked(_:)))
         settings.bezelStyle = .texturedRounded
-        settings.controlSize = .small
-        settings.font = NSFont.systemFont(ofSize: 13)
+        settings.font = NSFont.systemFont(ofSize: 16)
         settings.toolTip = "Settings…"
         settings.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(settings)
-
-        let all = NSButton(title: "Auto Gain All", target: self,
-                           action: #selector(autoGainAllClicked(_:)))
-        all.bezelStyle = .rounded
-        all.controlSize = .small
-        all.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        all.translatesAutoresizingMaskIntoConstraints = false
-        header.addSubview(all)
 
         let divider = NSBox()
         divider.boxType = .separator
@@ -983,12 +982,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             subtitle.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             settings.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
-            settings.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            settings.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             // REQUIRED: close the horizontal chain (title…settings) — an
             // underconstrained header breaks the whole window's layout.
             settings.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
-            all.trailingAnchor.constraint(equalTo: settings.leadingAnchor, constant: -10),
-            all.centerYAnchor.constraint(equalTo: settings.centerYAnchor),
+            // comfortably-sized settings button (30 × 28)
+            settings.widthAnchor.constraint(equalToConstant: 30),
+            settings.heightAnchor.constraint(equalToConstant: 28),
             divider.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: header.bottomAnchor),
@@ -1007,12 +1007,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 14
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 0, bottom: 16, right: 0)
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 0, bottom: 8, right: 0)
         doc.addSubview(stack)
 
-        // INPUTS section header: title left, target/duration right.
+        // INPUTS section header: title left; Target / Duration / Auto Gain
+        // All right (the batch action lives with the settings it uses).
+        let autoGainAll = NSButton(title: "Auto Gain All", target: self,
+                                   action: #selector(autoGainAllClicked(_:)))
+        autoGainAll.bezelStyle = .rounded
+        autoGainAll.controlSize = .regular
+        autoGainAll.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        autoGainAll.toolTip = "Calibrate every Mic/Instrument input with the Target/Duration settings above"
         let inputsHeader = sectionHeader(
             title: "Inputs",
             trailingViews: [
@@ -1020,6 +1027,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                     (String(format: "%.0f dBFS peak", $0), $0) }, action: #selector(targetChanged(_:))),
                 popupLabel("Duration", items: AutoGainEngine.listenOptions.map {
                     (String(format: "%.0f s", $0), $0) }, action: #selector(timeChanged(_:))),
+                autoGainAll,
             ])
         stack.addArrangedSubview(inputsHeader)
 
@@ -1078,7 +1086,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
             doc.heightAnchor.constraint(greaterThanOrEqualTo: clip.heightAnchor),
         ])
-        doc.scroll(NSPoint(x: 0, y: 0))
+        scrollDoc = doc
         return scroll
     }
 
