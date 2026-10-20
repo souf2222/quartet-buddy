@@ -269,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
         guard !PathIdSetupController.shared.sessionActive,
-              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
+              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
         guard Self.isValidDB(db) else {
@@ -292,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// header for why the app never writes the OS mute.
     private func osMuteChanged(to m: Bool) {
         guard !PathIdSetupController.shared.sessionActive,
-              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
+              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }
         let target = selectedOutput
@@ -404,16 +404,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let on = props["talkbackOn"] as? Bool {
                 self.talkbackOn = on
             }
-            // full-state sync for the console window (inputs + monitors)
-            ConsoleWindowController.shared.updateTree(tree)
+            // full-state sync for the Quartet Control window (inputs + monitors)
+            QuartetControlController.shared.updateTree(tree)
             self.refreshMenu()
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
             // the setup wizard listens to the same stream (capture steps)
             PathIdSetupController.shared.handle(event)
-            // so does the console window (live updates + Learn mode)
-            ConsoleWindowController.shared.handle(event)
+            // so does the Quartet Control window (live updates + Learn mode)
+            QuartetControlController.shared.handle(event)
             switch event.id {
             case PathIds.active.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
@@ -566,9 +566,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.menuRefreshPending = false
             self.rebuildMenu()
-            self.outputsWindow.refresh()
             self.settingsWindow.refresh()
-            ConsoleWindowController.shared.refresh()
+            QuartetControlController.shared.refresh()
         }
     }
 
@@ -645,8 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // windows
-        menu.addItem(withTitle: "Outputs & Plug-ins…", action: #selector(openOutputs(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Quartet Console…", action: #selector(openConsole(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Quartet Control…", action: #selector(openControl(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
 
         // warnings (only when something needs attention)
@@ -858,41 +856,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Windows
 
-    private lazy var outputsWindow = OutputsWindowController()
     private lazy var settingsWindow = SettingsWindowController()
 
-    @objc private func openOutputs(_ sender: NSMenuItem) {
-        outputsWindow.show()
+    /// The single unified audio-control window ("Quartet Control").
+    @objc private func openControl(_ sender: NSMenuItem) {
+        QuartetControlController.shared.show()
     }
 
     @objc private func openSettings(_ sender: NSMenuItem) {
         settingsWindow.show()
     }
 
-    @objc private func openConsole(_ sender: NSMenuItem) {
-        ConsoleWindowController.shared.show()
-    }
-
-    /// Wire the console window's callbacks to this delegate's glue plumbing.
+    /// Wire the Quartet Control window's callbacks to this delegate's plumbing.
     private func setupConsoleWindow() {
-        let console = ConsoleWindowController.shared
-        console.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
-        console.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
-        console.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
-        console.onRequestTree = { [weak self] in self?.glue.requestTree() }
-        console.onSeedTree = { [weak self] in self?.lastTree }
-        console.isGlueConnected = { [weak self] in
+        let control = QuartetControlController.shared
+        control.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        control.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
+        control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        control.onRequestTree = { [weak self] in self?.glue.requestTree() }
+        control.onSeedTree = { [weak self] in self?.lastTree }
+        control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
+        control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
         }
-        // Auto Gain: the engine writes the preamp through the console's
-        // plumbing and reports its status in the console's status line
+        // Auto Gain: the engine writes the preamp through the control
+        // window's plumbing and reports its status in the status line
         // (failures auto-clear, the success line lingers a while).
         let engine = AutoGainEngine.shared
-        engine.writeGain = { i, v in ConsoleWindowController.shared.applyAutoGain(i, v) }
-        engine.onStatus = { _, line in ConsoleWindowController.shared.showAutoStatus(line, clearAfter: nil) }
+        engine.writeGain = { i, v in QuartetControlController.shared.applyAutoGain(i, v) }
+        engine.onStatus = { _, line in QuartetControlController.shared.showAutoStatus(line, clearAfter: nil) }
         engine.onFinished = { _, line, _ in
-            ConsoleWindowController.shared.showAutoStatus(line, clearAfter: 12)
+            QuartetControlController.shared.showAutoStatus(line, clearAfter: 12)
         }
     }
 
