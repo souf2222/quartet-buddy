@@ -48,6 +48,7 @@ no prompts.
 ## Install & first run
 
 ```bash
+git clone https://github.com/souf2222/quartet-buddy.git
 cd quartet-buddy/QuartetBuddy
 ./build.sh          # builds "Quartet Buddy.app", signs, restarts the running app
 ```
