@@ -11,12 +11,12 @@
       </appState>
       <versionTree version="50331657" boardVersion="50331648" fpgaVersion="167772160" xmosVersion="50331657" xmosSourceVersion="50331657"/>
       <hwin>
-        <hwin0 name="Analog IN 1" index="0" mixerChannel="0" channelType="0" analogRefLevel="1" softLimit="1" polarityInvert="0" group="0">
+        <hwin0 name="Analog IN 1" index="0" mixerChannel="0" channelType="0" analogRefLevel="1" softLimit="0" polarityInvert="0" group="0">
           <micSettings phantom="0">
-            <PreModelQuartet gain="16.0"/>
+            <PreModelQuartet gain="37.11249923706055"/>
           </micSettings>
           <instSettings phantom="0">
-            <PreModelQuartet gain="0.0"/>
+            <PreModelQuartet gain="0.9790624976158142"/>
           </instSettings>
         </hwin0>
         <hwin1 name="Analog IN 2" index="1" mixerChannel="1" channelType="0" analogRefLevel="1" softLimit="1" polarityInvert="0" group="0">

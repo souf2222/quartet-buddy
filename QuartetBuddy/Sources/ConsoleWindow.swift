@@ -106,7 +106,12 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             let bothIds = micId != nil && instId != nil
             gainSliders[i].isEnabled = connected && !learning && bothIds
-            let shown = st.micGain ?? st.instGain ?? 0
+            // the slider shows the ACTIVE mode's gain (Instrument = inst,
+            // anything else = mic — the preamp applies in both Mic and
+            // Instrument, only the line levels bypass it)
+            let shown: Double
+            if st.refLevel == 4 { shown = st.instGain ?? st.micGain ?? 0 }
+            else { shown = st.micGain ?? st.instGain ?? 0 }
             if gainSliders[i].doubleValue != shown { gainSliders[i].doubleValue = shown }
             updateGainField(i)
 
@@ -116,9 +121,9 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
             inputHeaders[i]?.stringValue = st.name ?? "Analog IN \(i + 1)"
             let missing = missingInputTargets(i)
-            inputLearnButtons[i].isEnabled = !learning ? !missing.isEmpty
-                : learningColumn == .input(i)
-            inputLearnButtons[i].title = (learning && learningColumn == .input(i)) ? "Skip ▸" : "Learn…"
+            // ids are always computed now — Learn is only a fallback
+            inputLearnButtons[i].isHidden = missing.isEmpty && !isLearning
+            inputLearnButtons[i].isEnabled = (learning && learningColumn == .input(i)) || !missing.isEmpty
         }
 
         // OUTPUTS
@@ -143,9 +148,8 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             setCheck(outSumChecks[o], st.sum, enabled: connected && !learning && sumId != nil)
 
             let missing = missingOutputTargets(o)
-            outLearnButtons[o].isEnabled = !learning ? !missing.isEmpty
-                : learningColumn == .output(o)
-            outLearnButtons[o].title = (learning && learningColumn == .output(o)) ? "Skip ▸" : "Learn…"
+            outLearnButtons[o].isHidden = missing.isEmpty && !isLearning
+            outLearnButtons[o].isEnabled = (learning && learningColumn == .output(o)) || !missing.isEmpty
         }
 
         statusField.stringValue = learnStatus()
@@ -395,7 +399,13 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         ig.addRow(with: (0..<4).map { i in
             let p = NSPopUpButton()
             p.addItem(withTitle: "—")
-            for v in 1...4 { p.addItem(withTitle: "Level \(v)"); p.lastItem?.representedObject = v }
+            // values verified live against Apogee Control 2: 1=Mic,
+            // 2=+4 dBu, 3=−10 dBV, 4=Instrument (line modes hide the
+            // preamp gain; Instrument switches to instSettings gain)
+            for (v, label) in [(1, "Mic"), (2, "+4 dBu"), (3, "−10 dBV"), (4, "Instrument")] {
+                p.addItem(withTitle: label)
+                p.lastItem?.representedObject = v
+            }
             p.target = self
             p.action = #selector(levelChanged(_:))
             p.tag = 100 + i
@@ -581,8 +591,13 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let st = inputs[i]
         var text = "—"
         if let m = st.micGain, let inst = st.instGain {
-            text = abs(m - inst) < 0.05 ? String(format: "%.1f dB", m)
-                : String(format: "M %.1f · I %.1f", m, inst)
+            if abs(m - inst) < 0.05 {
+                text = String(format: "%.1f dB", m)
+            } else if st.refLevel == 4 {
+                text = String(format: "I %.1f · M %.1f", inst, m)
+            } else {
+                text = String(format: "M %.1f · I %.1f", m, inst)
+            }
         } else if let m = st.micGain { text = String(format: "%.1f dB", m) }
         else if let inst = st.instGain { text = String(format: "%.1f dB", inst) }
         if gainFields[i].stringValue != text { gainFields[i].stringValue = text }
@@ -747,9 +762,11 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             .replacingOccurrences(of: "M", with: "")
             .replacingOccurrences(of: "I", with: "")
             .replacingOccurrences(of: "·", with: "")
+            .replacingOccurrences(of: "(", with: "")
+            .replacingOccurrences(of: ")", with: "")
             .trimmingCharacters(in: .whitespaces)
         if t.hasPrefix("+") { t.removeFirst() }
-        return Double(t)
+        return Double(t.split(separator: " ").first ?? "")
     }
 
     // NSWindowDelegate
