@@ -859,6 +859,10 @@ final class InsertServer: NSObject {
 
         effect.bypass = !pairs[i].enabled || bypassAll
 
+        // bring back the last-saved settings (see savePluginState) —
+        // after engine start, when the AU is fully initialized
+        Self.restorePluginState(i: i, desc: desc, effect: effect)
+
         let proc = StereoABL(frames: 4096)
         pairs[i].engine = engine
         pairs[i].srcNode = src
@@ -887,6 +891,39 @@ final class InsertServer: NSObject {
         if let data = try? NSKeyedArchiver.archivedData(withRootObject: state as NSDictionary,
                                                         requiringSecureCoding: false) {
             UserDefaults.standard.set(data, forKey: pluginStateKey(desc, i))
+        }
+    }
+
+    /// Restore a plugin's previously-saved ClassInfo (the counterpart of
+    /// savePluginState — called from instantiatePlugin so settings survive
+    /// relaunches and stop/start cycles).
+    private static func restorePluginState(i: Int, desc: AudioComponentDescription, effect: AVAudioUnitEffect) {
+        guard let data = UserDefaults.standard.data(forKey: pluginStateKey(desc, i)) else { return }
+        guard let obj = try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data),
+              let dict = obj as? NSDictionary,
+              let mutable = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, dict as CFDictionary) else {
+            QBLog.log("insert: pair \(i) saved plugin state unreadable — factory defaults")
+            return
+        }
+        var state = mutable
+        let err = AudioUnitSetProperty(effect.audioUnit, kAudioUnitProperty_ClassInfo,
+                                       kAudioUnitScope_Global, 0, &state,
+                                       UInt32(MemoryLayout<CFMutableDictionary?>.size))
+        if err == noErr {
+            QBLog.log("insert: pair \(i) plugin state restored")
+        } else {
+            QBLog.log("insert: pair \(i) plugin state restore failed (err \(err)) — factory defaults")
+        }
+    }
+
+    /// Persist every loaded plugin's state without tearing anything down —
+    /// the quit-time safety net (savePluginState otherwise only runs on
+    /// stop / plugin swap, so a plain quit would lose that session's tweaks).
+    func savePluginStatesNow() {
+        for i in 0..<4 {
+            if let d = pairs[i].desc, let e = pairs[i].effect {
+                Self.savePluginState(i: i, desc: d, effect: e)
+            }
         }
     }
 
@@ -1004,7 +1041,12 @@ final class InsertServer: NSObject {
     /// later "Open" re-fronts it.
     func windowWillClose(_ notification: Notification) {
         guard let w = notification.object as? NSWindow else { return }
-        guard viewWindow.values.contains(where: { $0 === w }) else { return }
+        guard let i = viewWindow.first(where: { $0.value === w })?.key else { return }
+        // checkpoint the plugin's settings while the AU is still alive —
+        // covers tweaks followed by a force-quit (no terminate callback)
+        if let d = pairs[i].desc, let e = pairs[i].effect {
+            Self.savePluginState(i: i, desc: d, effect: e)
+        }
         // Keep the view alive (re-requesting it from the AU crashes — see
         // showPluginUI) but halt its rendering: JUCE editors run an
         // OpenGL render loop at ~60 fps that burns real CPU while the

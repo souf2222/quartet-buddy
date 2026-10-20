@@ -367,6 +367,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncLoginItem()
     }
 
+    /// Persist hosted plugin settings before the process goes away —
+    /// savePluginStatesNow (stop/plugin-swap/editor-close are the other
+    /// checkpoints) so the next launch restores them.
+    func applicationWillTerminate(_ notification: Notification) {
+        InsertServer.shared.savePluginStatesNow()
+    }
+
     // MARK: - Glue
 
     private func setupGlue() {
