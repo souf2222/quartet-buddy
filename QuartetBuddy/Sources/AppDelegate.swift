@@ -23,21 +23,49 @@ enum PathIds {
         var hwout1Mute: [UInt8]   // Headphones mute (bool)
         var hwout0Dim: [UInt8]    // Main Out dim (bool)
 
+        // Console-window additions (Quartet Console). All optional/defaulted:
+        // tables captured before these existed decode with empty values, and
+        // every control still works if its id was never captured — the
+        // console window shows a Learn button for it instead.
+
+        // Per analog input (key = input index 0…3):
+        var hwinRefLevel: [Int: [UInt8]] = [:]   // analogRefLevel (int32)
+        var hwinMicGain: [Int: [UInt8]] = [:]    // micSettings.PreModelQuartet.gain (double)
+        var hwinInstGain: [Int: [UInt8]] = [:]   // instSettings.PreModelQuartet.gain (double)
+        var hwinPhantom: [Int: [UInt8]] = [:]    // micSettings.phantom +48V (bool)
+        var hwinSoftLimit: [Int: [UInt8]] = [:]  // softLimit (bool)
+        var hwinPolarity: [Int: [UInt8]] = [:]   // polarityInvert (bool)
+
+        // Output extras:
+        var hwout0Sum: [UInt8]? = nil            // Main Out sum/mono (bool)
+        var hwout1Sum: [UInt8]? = nil            // Headphones sum/mono (bool)
+        var hwout1Dim: [UInt8]? = nil            // Headphones dim (bool)
+
         /// Debug-friendly form: `1f1d4c1d`-style hex.
         func hex(_ id: [UInt8]) -> String { id.map { String(format: "%02x", $0) }.joined() }
         var summary: String {
             "gain0=\(hex(hwout0Gain)) gain1=\(hex(hwout1Gain)) mute0=\(hex(hwout0Mute)) " +
             "mute1=\(hex(hwout1Mute)) dim0=\(hex(hwout0Dim))"
         }
+
+        /// Every id already assigned in this table — used by the console
+        /// Learn mode and the wizard to never re-capture a known control.
+        var knownIds: [[UInt8]] {
+            var ids: [[UInt8]] = [hwout0Gain, hwout1Gain, hwout0Mute, hwout1Mute, hwout0Dim,
+                                  hwout0Sum, hwout1Sum, hwout1Dim].compactMap { $0 }
+            ids += Array(hwinRefLevel.values) + Array(hwinMicGain.values) + Array(hwinInstGain.values)
+            ids += Array(hwinPhantom.values) + Array(hwinSoftLimit.values) + Array(hwinPolarity.values)
+            return ids
+        }
     }
 
-    /// App-scoped — identical on every device.
+    /// App-scoped — identical on every device (hashes to the same value by
+    /// the formula below; kept as a compile-time constant for the log/tests).
     static let talkbackOn: [UInt8] = [0x8f, 0x0a, 0x6a, 0x00]
 
-    /// The original captured unit (the table this project was built on).
-    /// Also the fallback while a new unit is not set up yet: reads still
-    /// work (the tree layout is identical on every Quartet), but its
-    /// WRITE ids hit nothing on other units — hence the setup wizard.
+    /// The original captured unit's output ids — only used before the first
+    /// tree arrives (serial unknown). Once the tree lands, every id is
+    /// computed (see `computedTable`).
     static let defaultTable = DeviceTable(
         hwout0Gain: [0xc5, 0xa2, 0xbd, 0xb5],
         hwout1Gain: [0x64, 0x7b, 0x72, 0xb7],
@@ -45,39 +73,57 @@ enum PathIds {
         hwout1Mute: [0xfe, 0x81, 0x75, 0xb7],
         hwout0Dim:  [0x82, 0x2c, 0x69, 0x37])
 
-    /// Built-in per-serial tables — the units captured during development.
-    /// Wizard captures land in UserDefaults (see `savedTables`) and are
-    /// merged over these, so end users never need to touch code.
-    private static let builtIn: [String: DeviceTable] = [
-        "quartet1528B15CEE547FA": defaultTable,
-        "quartet15819153CE0E077": DeviceTable(
-            hwout0Gain: [0x1f, 0x1d, 0x4c, 0x1d],
-            hwout1Gain: [0xbe, 0xf5, 0x00, 0x1f],
-            hwout0Mute: [0xb9, 0x23, 0x4f, 0x1d],
-            hwout1Mute: [0x58, 0xfc, 0x03, 0x1f],
-            hwout0Dim:  [0xe8, 0xfe, 0x54, 0x8d]),
-    ]
-
-    private static let storeKey = "pathIdTables"
-
-    /// Wizard-captured tables, persisted in UserDefaults
-    /// (serial → table). These survive rebuilds and relaunches.
-    private static var savedTables: [String: DeviceTable] {
-        guard let data = UserDefaults.standard.data(forKey: storeKey),
-              let tables = try? JSONDecoder().decode([String: DeviceTable].self, from: data)
-        else { return [:] }
-        return tables
+    // MARK: - The descriptor hash (CRACKED — see tools/crack_id_hash.py)
+    //
+    // The path-id of a property is a Java string hash (h = h·31 + UTF-8
+    // byte, 32-bit wrapping) of its slash path from the tree root, sent as
+    // the 32-bit result little-endian:
+    //
+    //   device-scoped:  /dev/<serial>/<node>/<node>/…/<property>
+    //   app-scoped:     /Apps/Apogee Talkback helper/Talkback/<property>
+    //
+    // Verified against 22 live-captured pairs across two physical units
+    // (outputs, both gain modes, phantom, soft limit, polarity, ref level),
+    // plus a live write test against a never-captured id (hwin2.softLimit).
+    // Consequence: every id for ANY Quartet is computable from the serial —
+    // no capture wizard, no Learn mode, nothing.
+    static func hash(_ path: String) -> [UInt8] {
+        var h: Int32 = 0
+        for b in path.utf8 { h = h &* 31 &+ Int32(b) }
+        let v = UInt32(bitPattern: h)
+        return [UInt8(v & 0xff), UInt8((v >> 8) & 0xff),
+                UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]
     }
 
-    static func table(for serial: String) -> DeviceTable? {
-        savedTables[serial] ?? builtIn[serial]
+    /// The complete id table for a serial — every control the console and
+    /// menubar features touch, computed, nothing captured.
+    static func computedTable(serial: String) -> DeviceTable {
+        func id(_ rel: String) -> [UInt8] { Self.hash("/dev/\(serial)/" + rel) }
+        var t = DeviceTable(
+            hwout0Gain: id("hwout/hwout0/gain"),
+            hwout1Gain: id("hwout/hwout1/gain"),
+            hwout0Mute: id("hwout/hwout0/mute"),
+            hwout1Mute: id("hwout/hwout1/mute"),
+            hwout0Dim:  id("hwout/hwout0/dim"))
+        t.hwout0Sum = id("hwout/hwout0/sum")
+        t.hwout1Sum = id("hwout/hwout1/sum")
+        t.hwout1Dim = id("hwout/hwout1/dim")
+        for i in 0..<4 {
+            let h = "hwin\(i)"
+            t.hwinRefLevel[i] = id("hwin/\(h)/analogRefLevel")
+            t.hwinMicGain[i]  = id("hwin/\(h)/micSettings/PreModelQuartet/gain")
+            t.hwinInstGain[i] = id("hwin/\(h)/instSettings/PreModelQuartet/gain")
+            t.hwinPhantom[i]  = id("hwin/\(h)/micSettings/phantom")
+            t.hwinSoftLimit[i] = id("hwin/\(h)/softLimit")
+            t.hwinPolarity[i] = id("hwin/\(h)/polarityInvert")
+        }
+        return t
     }
 
-    /// True when the connected serial has a usable id table (built-in or
-    /// wizard-captured). False → writes go nowhere; run the setup wizard.
-    static var isKnownSerial: Bool {
-        activeSerial.map { table(for: $0) != nil } ?? false
-    }
+    /// True when the connected serial has a usable id table — always, now
+    /// that every table is computed from the hash formula (kept for the
+    /// menu wiring; the serial itself is the only requirement).
+    static var isKnownSerial: Bool { activeSerial != nil }
 
     /// The table for the connected Quartet.
     private(set) static var active = defaultTable
@@ -85,33 +131,59 @@ enum PathIds {
     /// The connected device's serial (from the tree), for the log.
     private(set) static var activeSerial: String?
 
-    /// Pick the id table for the connected Quartet's serial.
-    /// Called from the tree handler on every tree (connect + reconnect).
+    /// Pick the id table for the connected Quartet's serial — computed from
+    /// the hash formula; works for ANY Quartet, known or brand new.
     static func select(serial: String?) {
         guard serial != activeSerial else { return }
         activeSerial = serial
-        if let serial, let table = table(for: serial) {
-            active = table
-            QBLog.log("path-ids: known serial \(serial)")
-        } else if let serial {
-            active = defaultTable
-            QBLog.log("path-ids: UNKNOWN serial \(serial) — writes are dead until " +
-                      "this unit is set up (menubar → Setup New Quartet…)")
+        if let serial {
+            active = computedTable(serial: serial)
+            QBLog.log("path-ids: computed table for \(serial): \(active.summary)")
         } else {
             active = defaultTable
         }
     }
 
-    /// Store a wizard-captured table for `serial` and make it active.
+    /// Wizard-capture endpoint. The hash formula computes every id now, so
+    /// captured tables are no longer stored or consulted — keep the entry
+    /// point (PathIdSetup still calls it) but make it a no-op re-select.
     static func adopt(table: DeviceTable, for serial: String) {
-        var all = savedTables
-        all[serial] = table
-        if let data = try? JSONEncoder().encode(all) {
-            UserDefaults.standard.set(data, forKey: storeKey)
-        }
-        activeSerial = nil   // force a fresh pick below
+        activeSerial = nil   // force a fresh computed pick below
         select(serial: serial)
-        QBLog.log("path-ids: adopted wizard table for \(serial): \(table.summary)")
+        QBLog.log("path-ids: wizard table for \(serial) ignored — computed table is authoritative")
+    }
+
+    /// Assign a newly captured id to a console-window control and persist it
+    /// (Quartet Console Learn mode). Key format: "hwinMicGain.2" for input
+    /// controls (input index suffix) or "hwout0Sum" / "hwout0Gain" for output
+    /// properties. Unknown keys are ignored.
+    static func learn(id: [UInt8], key: String) {
+        var t = active
+        let parts = key.split(separator: ".").map(String.init)
+        let idx = parts.count > 1 ? Int(parts[1]) ?? -1 : -1
+        switch parts[0] {
+        case "hwinRefLevel" where idx >= 0: t.hwinRefLevel[idx] = id
+        case "hwinMicGain" where idx >= 0: t.hwinMicGain[idx] = id
+        case "hwinInstGain" where idx >= 0: t.hwinInstGain[idx] = id
+        case "hwinPhantom" where idx >= 0: t.hwinPhantom[idx] = id
+        case "hwinSoftLimit" where idx >= 0: t.hwinSoftLimit[idx] = id
+        case "hwinPolarity" where idx >= 0: t.hwinPolarity[idx] = id
+        case "hwout0Sum": t.hwout0Sum = id
+        case "hwout1Sum": t.hwout1Sum = id
+        case "hwout1Dim": t.hwout1Dim = id
+        case "hwout0Gain": t.hwout0Gain = id
+        case "hwout1Gain": t.hwout1Gain = id
+        case "hwout0Mute": t.hwout0Mute = id
+        case "hwout1Mute": t.hwout1Mute = id
+        case "hwout0Dim": t.hwout0Dim = id
+        default: return
+        }
+        if let serial = activeSerial {
+            adopt(table: t, for: serial)
+        } else {
+            active = t
+        }
+        QBLog.log("path-ids: learned \(key) = \(t.hex(id))")
     }
 }
 
@@ -196,7 +268,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// loop — an out-of-range write that took the whole unit down (dark
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
-        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
+        guard !PathIdSetupController.shared.sessionActive,
+              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
         guard Self.isValidDB(db) else {
@@ -218,7 +291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quartet's hardware mute. One-way by design — see OSVolumeMirror's
     /// header for why the app never writes the OS mute.
     private func osMuteChanged(to m: Bool) {
-        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
+        guard !PathIdSetupController.shared.sessionActive,
+              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }
         let target = selectedOutput
@@ -257,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMIDI()
         setupInsert()
         setupSettingsWindow()
+        setupConsoleWindow()
         if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 QBLog.log("insert: AUTO-UI debug trigger")
@@ -303,17 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         glue.onTree = { [weak self] tree in
             guard let self else { return }
+            self.lastTree = tree
             // The device node's type is its serial — path-ids are hashed
             // per-serial, so pick this unit's id table before anything else.
             PathIds.select(serial: GlueClient.quartetSerial(in: tree))
-            // A Quartet we have no table for: prompt the setup wizard
-            // (once per serial — the menu keeps a manual entry too).
-            if PathIds.activeSerial != nil, !PathIds.isKnownSerial,
-               self.promptedSetupSerial != PathIds.activeSerial {
-                self.promptedSetupSerial = PathIds.activeSerial
-                QBLog.log("setup: unknown Quartet — opening the setup wizard")
-                PathIdSetupController.shared.begin()
-            }
             if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
@@ -329,12 +397,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let on = props["talkbackOn"] as? Bool {
                 self.talkbackOn = on
             }
+            // full-state sync for the console window (inputs + monitors)
+            ConsoleWindowController.shared.updateTree(tree)
             self.refreshMenu()
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
             // the setup wizard listens to the same stream (capture steps)
             PathIdSetupController.shared.handle(event)
+            // so does the console window (live updates + Learn mode)
+            ConsoleWindowController.shared.handle(event)
             switch event.id {
             case PathIds.active.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
@@ -372,7 +444,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - macOS audio controls bridge
 
     /// Serial we already auto-prompted the setup wizard for (this launch).
-    private var promptedSetupSerial: String?
+    /// Obsolete: ids are computed now, nothing to capture.
+
+    /// Most recent glue tree (seeds the console window with live values
+    /// the moment it opens).
+    private var lastTree: [String: Any]?
 
     /// Wire the macOS → Quartet halves of the volume + mute bindings. The
     /// volume keys and F10 are never intercepted — macOS drives its own
@@ -485,6 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
             self.outputsWindow.refresh()
             self.settingsWindow.refresh()
+            ConsoleWindowController.shared.refresh()
         }
     }
 
@@ -562,24 +639,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // windows
         menu.addItem(withTitle: "Outputs & Plug-ins…", action: #selector(openOutputs(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Quartet Console…", action: #selector(openConsole(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
-
-        // per-Quartet setup wizard (path-ids are serial-hashed — a new
-        // unit needs its ids captured once)
-        menu.addItem(withTitle: "Setup New Quartet…", action: #selector(openPathIdSetup(_:)), keyEquivalent: "")
 
         // warnings (only when something needs attention)
         if glue.state != .connected {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Reconnect to ApogeeGlue",
                           action: #selector(reconnect(_:)), keyEquivalent: "")
-        }
-        if !PathIds.isKnownSerial, quartetPresence.isConnected {
-            menu.addItem(.separator())
-            menu.addItem(withTitle: "⚠️ Unknown Quartet — volume/mute keys are dead",
-                          action: nil, keyEquivalent: "").isEnabled = false
-            menu.addItem(withTitle: "Run “Setup New Quartet…” to fix this",
-                          action: #selector(openPathIdSetup(_:)), keyEquivalent: "")
         }
         if server.running && server.tapSilent {
             menu.addItem(.separator())
@@ -795,10 +862,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.show()
     }
 
-    /// Per-Quartet setup: capture this unit's path-ids live (see
-    /// PathIdSetupController). Also auto-opens once for an unknown serial.
-    @objc private func openPathIdSetup(_ sender: NSMenuItem) {
-        PathIdSetupController.shared.begin()
+    @objc private func openConsole(_ sender: NSMenuItem) {
+        ConsoleWindowController.shared.show()
+    }
+
+    /// Wire the console window's callbacks to this delegate's glue plumbing.
+    private func setupConsoleWindow() {
+        let console = ConsoleWindowController.shared
+        console.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        console.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
+        console.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        console.onRequestTree = { [weak self] in self?.glue.requestTree() }
+        console.onSeedTree = { [weak self] in self?.lastTree }
+        console.isGlueConnected = { [weak self] in
+            guard let self else { return false }
+            return self.glue.state == .connected && self.quartetPresence.isConnected
+        }
     }
 
     /// Wire the Settings window's callbacks to this delegate's plumbing.

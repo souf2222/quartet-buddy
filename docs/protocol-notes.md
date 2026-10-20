@@ -151,30 +151,56 @@ root
 │        selectedTalkbackDestinationDevice/Channel, talkbackSources/{...}
 ```
 
-## Known path-ids (setProperty descriptors)
+## Path-ids (descriptor hash — CRACKED)
 
-**The id is a hash of the property path INCLUDING the device serial** — every
-physical Quartet gets different ids for its device-scoped properties (live-
-verified with two units). App-scoped properties (`Apps/Apogee Talkback
-helper/Talkback.talkbackOn`) hash identically on every unit. The app keeps a
-per-serial table (`PathIds.bySerial`, selected from the tree's serial node).
+**The path-id is the Java string hash (`h = h·31 + UTF-8 byte`, 32-bit
+wrapping) of the property's slash path from the tree root, sent as the
+32-bit result little-endian:**
 
-| id (LE bytes) | serial | property |
-|---|---|---|
-| `c5 a2 bd b5` | 528B… | hwout0.gain (Main Out fader, double) |
-| `1f 1d 4c 1d` | 1581… | hwout0.gain |
-| `64 7b 72 b7` | 528B… | hwout1.gain |
-| `be f5 00 1f` | 1581… | hwout1.gain |
-| `5f a9 c0 b5` | 528B… | hwout0.mute |
-| `b9 23 4f 1d` | 1581… | hwout0.mute |
-| `fe 81 75 b7` | 528B… | hwout1.mute |
-| `58 fc 03 1f` | 1581… | hwout1.mute |
-| `82 2c 69 37` | 528B… | hwout0.dim |
-| `e8 fe 54 8d` | 1581… | hwout0.dim (also toggled by talkback auto-dim) |
-| `8f 0a 6a 00` | (any) | Talkback.talkbackOn — app-scoped, identical everywhere |
+```
+device-scoped:  /dev/<serial>/<node>/<node>/…/<property>
+app-scoped:     /Apps/Apogee Talkback helper/Talkback/<property>
+```
 
-Capture a new unit's ids with `tools/watch_ids.py` (wiggle each control in
-Apogee Control 2 / on the touchscreen and read the (id, tag, value) stream).
+Examples (all verified live):
+
+| path | id (wire bytes) |
+|---|---|
+| `/dev/quartet1528B15CEE547FA/hwout/hwout0/gain` | `c5 a2 bd b5` |
+| `/dev/quartet1528B15CEE547FA/hwin/hwin0/micSettings/PreModelQuartet/gain` | `f1 e0 2c b3` |
+| `/dev/quartet1528B15CEE547FA/hwin/hwin1/micSettings/phantom` | `83 ed f9 6c` |
+| `/Apps/Apogee Talkback helper/Talkback/talkbackOn` | `8f 0a 6a 00` |
+
+Cracked offline from 22 live-captured pairs across two physical units
+(`tools/crack_id_hash.py` — 1008 path templates × 31 hash functions, only
+java31 over `/dev/<serial>/…` little-endian matched all 22), then
+live-verified by writing a never-captured id
+(`/dev/<serial>/hwin/hwin2/softLimit` → `2d 86 37 ce`) and watching the
+tree change. Consequences:
+
+* **Every id is computable from the serial** (which the tree gives us) —
+  no capture wizard, no per-unit tables, nothing. Any Quartet works
+  out of the box (`PathIds.computedTable(serial:)` in the app).
+* The ids are independent hashes (no derivable relation between inputs
+  1-4 — checked: no constant XOR/sum, no shared bytes), so this formula
+  is the ONLY shortcut.
+* Curious structure leak that guided the crack: per unit, `hwoutN.gain`
+  and `hwoutN.mute` share their last wire byte (unit A: `b5`/`b7`, unit
+  B: `1d`/`1f`, differing by exactly 2 per output index), and the
+  cross-unit XOR of same-path ids ends in `a8` — weak low-byte mixing of
+  the java31 hash over the shared path suffixes.
+
+## analogRefLevel values (Quartet inputs — verified live)
+
+| value | meaning |
+|---|---|
+| 1 | Mic (XLR, preamp, micSettings.gain + phantom apply) |
+| 2 | +4 dBu (line, no preamp gain) |
+| 3 | −10 dBV (line, no preamp gain) |
+| 4 | Instrument (¼", preamp, instSettings.gain applies) |
+
+Switching a line level (2/3) auto-disables phantom. Mic↔Instrument
+selection also swaps which PreModelQuartet gain the hardware applies.
 
 ## Notes
 
