@@ -61,6 +61,123 @@ final class PathIdSetupController: NSObject, NSWindowDelegate {
              hint: "Main Out's dim button. Skip if your unit doesn't expose dim.",
              tag: 3, name: "Main Out dim",
              apply: { $0.hwout0Dim = $1 }, skippable: true),
+
+        // ── Quartet Console captures (all skippable) ──
+        // Per analog input: analog level, preamp gain (mic + instrument
+        // modes are separate properties — both are needed so the console
+        // fader is right in either mode), +48V, soft limit, polarity.
+        Step(label: "Switch Analog IN 1's level back and forth",
+             hint: "In Apogee Control 2's input page (or the touchscreen): change IN 1's Analog Level (Mic/Instrument/+4/−10) a couple of times.",
+             tag: 1, name: "IN 1 analog level",
+             apply: { $0.hwinRefLevel[0] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 1's gain up and down (mic)",
+             hint: "With IN 1 in mic mode, drag its gain a few times.",
+             tag: 4, name: "IN 1 gain (mic)",
+             apply: { $0.hwinMicGain[0] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 1's gain up and down (instrument)",
+             hint: "Switch IN 1 to instrument mode, then drag its gain a few times. (If nothing is detected, this input shares one gain — skip.)",
+             tag: 4, name: "IN 1 gain (instrument)",
+             apply: { $0.hwinInstGain[0] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 1's +48V ON, then OFF",
+             hint: "IN 1's phantom power button.",
+             tag: 3, name: "IN 1 +48V",
+             apply: { $0.hwinPhantom[0] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 1's Soft Limit ON, then OFF",
+             hint: "IN 1's soft limit button.",
+             tag: 3, name: "IN 1 soft limit",
+             apply: { $0.hwinSoftLimit[0] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 1's Polarity ON, then OFF",
+             hint: "IN 1's polarity (Ø) button.",
+             tag: 3, name: "IN 1 polarity",
+             apply: { $0.hwinPolarity[0] = $1 }, skippable: true),
+
+        Step(label: "Switch Analog IN 2's level back and forth",
+             hint: "Change IN 2's Analog Level (Mic/Instrument/+4/−10) a couple of times.",
+             tag: 1, name: "IN 2 analog level",
+             apply: { $0.hwinRefLevel[1] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 2's gain up and down (mic)",
+             hint: "With IN 2 in mic mode, drag its gain a few times.",
+             tag: 4, name: "IN 2 gain (mic)",
+             apply: { $0.hwinMicGain[1] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 2's gain up and down (instrument)",
+             hint: "Switch IN 2 to instrument mode, then drag its gain a few times. (If nothing is detected, skip.)",
+             tag: 4, name: "IN 2 gain (instrument)",
+             apply: { $0.hwinInstGain[1] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 2's +48V ON, then OFF",
+             hint: "IN 2's phantom power button.",
+             tag: 3, name: "IN 2 +48V",
+             apply: { $0.hwinPhantom[1] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 2's Soft Limit ON, then OFF",
+             hint: "IN 2's soft limit button.",
+             tag: 3, name: "IN 2 soft limit",
+             apply: { $0.hwinSoftLimit[1] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 2's Polarity ON, then OFF",
+             hint: "IN 2's polarity (Ø) button.",
+             tag: 3, name: "IN 2 polarity",
+             apply: { $0.hwinPolarity[1] = $1 }, skippable: true),
+
+        Step(label: "Switch Analog IN 3's level back and forth",
+             hint: "Change IN 3's Analog Level (Mic/Instrument/+4/−10) a couple of times.",
+             tag: 1, name: "IN 3 analog level",
+             apply: { $0.hwinRefLevel[2] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 3's gain up and down (mic)",
+             hint: "With IN 3 in mic mode, drag its gain a few times.",
+             tag: 4, name: "IN 3 gain (mic)",
+             apply: { $0.hwinMicGain[2] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 3's gain up and down (instrument)",
+             hint: "Switch IN 3 to instrument mode, then drag its gain a few times. (If nothing is detected, skip.)",
+             tag: 4, name: "IN 3 gain (instrument)",
+             apply: { $0.hwinInstGain[2] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 3's +48V ON, then OFF",
+             hint: "IN 3's phantom power button.",
+             tag: 3, name: "IN 3 +48V",
+             apply: { $0.hwinPhantom[2] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 3's Soft Limit ON, then OFF",
+             hint: "IN 3's soft limit button.",
+             tag: 3, name: "IN 3 soft limit",
+             apply: { $0.hwinSoftLimit[2] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 3's Polarity ON, then OFF",
+             hint: "IN 3's polarity (Ø) button.",
+             tag: 3, name: "IN 3 polarity",
+             apply: { $0.hwinPolarity[2] = $1 }, skippable: true),
+
+        Step(label: "Switch Analog IN 4's level back and forth",
+             hint: "Change IN 4's Analog Level (Mic/Instrument/+4/−10) a couple of times.",
+             tag: 1, name: "IN 4 analog level",
+             apply: { $0.hwinRefLevel[3] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 4's gain up and down (mic)",
+             hint: "With IN 4 in mic mode, drag its gain a few times.",
+             tag: 4, name: "IN 4 gain (mic)",
+             apply: { $0.hwinMicGain[3] = $1 }, skippable: true),
+        Step(label: "Move Analog IN 4's gain up and down (instrument)",
+             hint: "Switch IN 4 to instrument mode, then drag its gain a few times. (If nothing is detected, skip.)",
+             tag: 4, name: "IN 4 gain (instrument)",
+             apply: { $0.hwinInstGain[3] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 4's +48V ON, then OFF",
+             hint: "IN 4's phantom power button.",
+             tag: 3, name: "IN 4 +48V",
+             apply: { $0.hwinPhantom[3] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 4's Soft Limit ON, then OFF",
+             hint: "IN 4's soft limit button.",
+             tag: 3, name: "IN 4 soft limit",
+             apply: { $0.hwinSoftLimit[3] = $1 }, skippable: true),
+        Step(label: "Toggle Analog IN 4's Polarity ON, then OFF",
+             hint: "IN 4's polarity (Ø) button.",
+             tag: 3, name: "IN 4 polarity",
+             apply: { $0.hwinPolarity[3] = $1 }, skippable: true),
+
+        Step(label: "Toggle Main Out's Sum / Mono ON, then OFF",
+             hint: "Main Out's mono/sum button, in Apogee Control 2 or the touchscreen.",
+             tag: 3, name: "Main Out sum",
+             apply: { $0.hwout0Sum = $1 }, skippable: true),
+        Step(label: "Toggle Headphones' Sum / Mono ON, then OFF",
+             hint: "The HP output's own mono/sum button. (If it gangs with Main Out, only the first capture counts — skip if nothing new fires.)",
+             tag: 3, name: "Headphones sum",
+             apply: { $0.hwout1Sum = $1 }, skippable: true),
+        Step(label: "Toggle Headphones' Dim ON, then OFF",
+             hint: "The HP output's own dim button (if it has one). Skip if not exposed.",
+             tag: 3, name: "Headphones dim",
+             apply: { $0.hwout1Dim = $1 }, skippable: true),
     ]}
 
     // MARK: - state
@@ -129,6 +246,9 @@ final class PathIdSetupController: NSObject, NSWindowDelegate {
         // re-capture them (this is also what disambiguates the mute gang
         // in the HP-mute step).
         guard !captured.contains(id) else { return }
+        // Console steps (index ≥ 5): an id already saved for this unit
+        // belongs to a control captured before — never reassign it.
+        if stepIndex >= 5, PathIds.active.knownIds.contains(id) { return }
         if stepIndex == 2 {   // Main mute — burst capture (gang)
             burstIds.append(id)
             captured.append(id)
@@ -176,7 +296,7 @@ final class PathIdSetupController: NSObject, NSWindowDelegate {
     // MARK: - UI
 
     private func build() {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 320))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 400))
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -255,7 +375,10 @@ final class PathIdSetupController: NSObject, NSWindowDelegate {
         progressField.stringValue = "Step \(stepIndex + 1) of \(all.count) · serial \(serial ?? "?")"
         stepField.stringValue = step.label
         hintField.stringValue = step.hint
-        doneField.stringValue = doneLabels.joined(separator: "\n")
+        // long sessions (console captures): show only the recent history
+        let recent = doneLabels.suffix(8)
+        doneField.stringValue = (doneLabels.count > recent.count ? "…\n" : "")
+            + recent.joined(separator: "\n")
         skipButton.isEnabled = step.skippable
         skipButton.isHidden = !step.skippable
     }

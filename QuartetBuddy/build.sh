@@ -61,6 +61,7 @@ swiftc -O \
     "$SRC/OSVolumeMirror.swift" \
     "$SRC/InsertServer.swift" \
     "$SRC/OutputsWindow.swift" \
+    "$SRC/ConsoleWindow.swift" \
     "$SRC/SettingsWindow.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \

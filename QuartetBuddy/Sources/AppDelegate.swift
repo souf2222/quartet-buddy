@@ -23,11 +23,39 @@ enum PathIds {
         var hwout1Mute: [UInt8]   // Headphones mute (bool)
         var hwout0Dim: [UInt8]    // Main Out dim (bool)
 
+        // Console-window additions (Quartet Console). All optional/defaulted:
+        // tables captured before these existed decode with empty values, and
+        // every control still works if its id was never captured — the
+        // console window shows a Learn button for it instead.
+
+        // Per analog input (key = input index 0…3):
+        var hwinRefLevel: [Int: [UInt8]] = [:]   // analogRefLevel (int32)
+        var hwinMicGain: [Int: [UInt8]] = [:]    // micSettings.PreModelQuartet.gain (double)
+        var hwinInstGain: [Int: [UInt8]] = [:]   // instSettings.PreModelQuartet.gain (double)
+        var hwinPhantom: [Int: [UInt8]] = [:]    // micSettings.phantom +48V (bool)
+        var hwinSoftLimit: [Int: [UInt8]] = [:]  // softLimit (bool)
+        var hwinPolarity: [Int: [UInt8]] = [:]   // polarityInvert (bool)
+
+        // Output extras:
+        var hwout0Sum: [UInt8]? = nil            // Main Out sum/mono (bool)
+        var hwout1Sum: [UInt8]? = nil            // Headphones sum/mono (bool)
+        var hwout1Dim: [UInt8]? = nil            // Headphones dim (bool)
+
         /// Debug-friendly form: `1f1d4c1d`-style hex.
         func hex(_ id: [UInt8]) -> String { id.map { String(format: "%02x", $0) }.joined() }
         var summary: String {
             "gain0=\(hex(hwout0Gain)) gain1=\(hex(hwout1Gain)) mute0=\(hex(hwout0Mute)) " +
             "mute1=\(hex(hwout1Mute)) dim0=\(hex(hwout0Dim))"
+        }
+
+        /// Every id already assigned in this table — used by the console
+        /// Learn mode and the wizard to never re-capture a known control.
+        var knownIds: [[UInt8]] {
+            var ids: [[UInt8]] = [hwout0Gain, hwout1Gain, hwout0Mute, hwout1Mute, hwout0Dim,
+                                  hwout0Sum, hwout1Sum, hwout1Dim].compactMap { $0 }
+            ids += Array(hwinRefLevel.values) + Array(hwinMicGain.values) + Array(hwinInstGain.values)
+            ids += Array(hwinPhantom.values) + Array(hwinSoftLimit.values) + Array(hwinPolarity.values)
+            return ids
         }
     }
 
@@ -113,6 +141,39 @@ enum PathIds {
         select(serial: serial)
         QBLog.log("path-ids: adopted wizard table for \(serial): \(table.summary)")
     }
+
+    /// Assign a newly captured id to a console-window control and persist it
+    /// (Quartet Console Learn mode). Key format: "hwinMicGain.2" for input
+    /// controls (input index suffix) or "hwout0Sum" / "hwout0Gain" for output
+    /// properties. Unknown keys are ignored.
+    static func learn(id: [UInt8], key: String) {
+        var t = active
+        let parts = key.split(separator: ".").map(String.init)
+        let idx = parts.count > 1 ? Int(parts[1]) ?? -1 : -1
+        switch parts[0] {
+        case "hwinRefLevel" where idx >= 0: t.hwinRefLevel[idx] = id
+        case "hwinMicGain" where idx >= 0: t.hwinMicGain[idx] = id
+        case "hwinInstGain" where idx >= 0: t.hwinInstGain[idx] = id
+        case "hwinPhantom" where idx >= 0: t.hwinPhantom[idx] = id
+        case "hwinSoftLimit" where idx >= 0: t.hwinSoftLimit[idx] = id
+        case "hwinPolarity" where idx >= 0: t.hwinPolarity[idx] = id
+        case "hwout0Sum": t.hwout0Sum = id
+        case "hwout1Sum": t.hwout1Sum = id
+        case "hwout1Dim": t.hwout1Dim = id
+        case "hwout0Gain": t.hwout0Gain = id
+        case "hwout1Gain": t.hwout1Gain = id
+        case "hwout0Mute": t.hwout0Mute = id
+        case "hwout1Mute": t.hwout1Mute = id
+        case "hwout0Dim": t.hwout0Dim = id
+        default: return
+        }
+        if let serial = activeSerial {
+            adopt(table: t, for: serial)
+        } else {
+            active = t
+        }
+        QBLog.log("path-ids: learned \(key) = \(t.hex(id))")
+    }
 }
 
 enum OutputTarget: String, CaseIterable, Codable {
@@ -196,7 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// loop — an out-of-range write that took the whole unit down (dark
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
-        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
+        guard !PathIdSetupController.shared.sessionActive,
+              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
         guard Self.isValidDB(db) else {
@@ -218,7 +280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quartet's hardware mute. One-way by design — see OSVolumeMirror's
     /// header for why the app never writes the OS mute.
     private func osMuteChanged(to m: Bool) {
-        guard !PathIdSetupController.shared.sessionActive else { return }   // wizard is listening
+        guard !PathIdSetupController.shared.sessionActive,
+              !ConsoleWindowController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown else { return }
         guard case .connected = glue.state else { return }
         let target = selectedOutput
@@ -257,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMIDI()
         setupInsert()
         setupSettingsWindow()
+        setupConsoleWindow()
         if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 QBLog.log("insert: AUTO-UI debug trigger")
@@ -329,12 +393,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let on = props["talkbackOn"] as? Bool {
                 self.talkbackOn = on
             }
+            // full-state sync for the console window (inputs + monitors)
+            ConsoleWindowController.shared.updateTree(tree)
             self.refreshMenu()
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
             // the setup wizard listens to the same stream (capture steps)
             PathIdSetupController.shared.handle(event)
+            // so does the console window (live updates + Learn mode)
+            ConsoleWindowController.shared.handle(event)
             switch event.id {
             case PathIds.active.hwout0Gain where event.tag == 4:
                 self.gain[.mainOut] = event.value.readDouble()
@@ -485,6 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.rebuildMenu()
             self.outputsWindow.refresh()
             self.settingsWindow.refresh()
+            ConsoleWindowController.shared.refresh()
         }
     }
 
@@ -562,6 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // windows
         menu.addItem(withTitle: "Outputs & Plug-ins…", action: #selector(openOutputs(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Quartet Console…", action: #selector(openConsole(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
 
         // per-Quartet setup wizard (path-ids are serial-hashed — a new
@@ -793,6 +863,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings(_ sender: NSMenuItem) {
         settingsWindow.show()
+    }
+
+    @objc private func openConsole(_ sender: NSMenuItem) {
+        ConsoleWindowController.shared.show()
+    }
+
+    /// Wire the console window's callbacks to this delegate's glue plumbing.
+    private func setupConsoleWindow() {
+        let console = ConsoleWindowController.shared
+        console.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        console.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
+        console.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        console.onRequestTree = { [weak self] in self?.glue.requestTree() }
+        console.isGlueConnected = { [weak self] in
+            guard let self else { return false }
+            return self.glue.state == .connected && self.quartetPresence.isConnected
+        }
     }
 
     /// Per-Quartet setup: capture this unit's path-ids live (see

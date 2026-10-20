@@ -30,7 +30,8 @@ routing) and everything stays in sync.
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
 | **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
-| **AU insert** | Run any AU plugin independently on each of the Quartet's 4 stereo pairs, with per-pair routing (own playback / mirror another pair before or after its plug-in / silence) in the Outputs & Plug-ins window. No loopback driver, no default-device switch, volume keys unaffected. See [`docs/au-insert.md`](docs/au-insert.md). |
+| **AU insert** | Run any AU plugin independently on each of the Quartet's 4 stereo pairs, with per-pair routing (own playback / mirror another pair before or after its plug-in / silence) in the Outputs & Plug-ins window. No loopback driver, no default-device switch, volume keys unaffected. See [`docs/au-insert.md`](docs/au-insert.md`). |
+| **Quartet Console** | A floating dark window with every remaining hardware function, off the menubar: per analog input — analog level, preamp gain (mic + instrument written together), +48V, soft limit, polarity; per monitor — level, mute, dim, sum/mono for Main Out and Headphones. Reads are always live (tree poll); write controls whose path-id isn't captured yet on your unit show a **Learn…** button — click it, wiggle the matching control in Apogee Control 2, done. The Setup wizard also has capture steps for the same ids. |
 | **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug) — and the menu header tells you why ("Quartet Not Connected" / "Glue Offline"). |
 
 No media keys are ever intercepted — macOS handles the volume keys and F10
