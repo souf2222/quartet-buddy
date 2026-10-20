@@ -878,6 +878,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
         }
+        // Auto Gain: the engine writes the preamp through the console's
+        // plumbing and reports its status in the console's status line
+        // (failures auto-clear, the success line lingers a while).
+        let engine = AutoGainEngine.shared
+        engine.writeGain = { i, v in ConsoleWindowController.shared.applyAutoGain(i, v) }
+        engine.onStatus = { _, line in ConsoleWindowController.shared.showAutoStatus(line, clearAfter: nil) }
+        engine.onFinished = { _, line, _ in
+            ConsoleWindowController.shared.showAutoStatus(line, clearAfter: 12)
+        }
     }
 
     /// Wire the Settings window's callbacks to this delegate's plumbing.

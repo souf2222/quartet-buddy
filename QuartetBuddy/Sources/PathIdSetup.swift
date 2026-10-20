@@ -63,9 +63,9 @@ final class PathIdSetupController: NSObject, NSWindowDelegate {
              apply: { $0.hwout0Dim = $1 }, skippable: true),
 
         // ── Quartet Console captures (all skippable) ──
-        // Per analog input: analog level, preamp gain (mic + instrument
-        // modes are separate properties — both are needed so the console
-        // fader is right in either mode), +48V, soft limit, polarity.
+        // Per analog input: analog level, preamp gain (mic + instrument are
+        // separate properties — both ids are needed, the console slider
+        // edits whichever mode is active), +48V, soft limit, polarity.
         Step(label: "Switch Analog IN 1's level back and forth",
              hint: "In Apogee Control 2's input page (or the touchscreen): change IN 1's Analog Level (Mic/Instrument/+4/−10) a couple of times.",
              tag: 1, name: "IN 1 analog level",
