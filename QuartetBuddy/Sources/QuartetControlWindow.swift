@@ -16,9 +16,11 @@ import AppKit
 /// The Inputs and Outputs sections live in a scroll view; the Monitor strip
 /// is pinned to the bottom so everyday listening controls never scroll away.
 ///
-/// macOS "Golden Gate" visual direction: warm charcoal, graphite cards
-/// (1pt border, 14pt radius, mostly opaque), restrained translucency in the
-/// title bar and monitor strip only, and a muted bridge-orange accent.
+/// Visual direction: neutral charcoal window and graphite cards (1pt
+/// border, 14pt radius), restrained translucency in the title bar and
+/// monitor strip only. Color appears ONLY as per-function accents:
+/// each toggle owns a muted color family (faint tint when off, richer
+/// fill when engaged) — never decoration.
 ///
 /// Plumbing is unchanged from the two windows it replaces: hardware reads
 /// come from the glue tree (live 2 s poll while visible), writes go through
@@ -55,7 +57,7 @@ enum GGTheme {
     static let subduedFill = NSColor(calibratedWhite: 0.165, alpha: 1)
 
     /// A function-color pair: `off` = faint dark tint (available, not
-    /// engaged), `on` = richer light fill (engaged → dark text + ✓).
+    /// engaged), `on` = richer light fill (engaged → dark text).
     struct FunctionPair {
         let off: NSColor
         let on: NSColor
@@ -239,13 +241,13 @@ final class NeutralSlider: NSControl {
     }
 }
 
-// MARK: - Function-colored controls (off = faint tint, on = rich fill + ✓)
+// MARK: - Function-colored controls (off = faint tint, on = rich fill)
 
 /// Base for the per-function controls. Fully custom-drawn NSButtons — the
 /// cell never renders — so all states are ours:
 ///   OFF       faint tint of the function color, muted light text, quiet border
 ///   HOVER     slightly brighter tint of the SAME family
-///   ON        richer, more saturated fill, dark text + ✓
+///   ON        richer, more saturated fill, dark text — color = state
 ///   DISABLED  neutral subdued styling (no function tint at all)
 ///   FOCUS     thin exterior ring (keyboard only)
 class FunctionButton: NSButton {
@@ -310,9 +312,9 @@ class FunctionButton: NSButton {
     override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
 }
 
-/// The labeled toggle (48V / Soft Limit / Ø / Mute / Dim / Mono): OFF =
-/// faint function tint, ON = richer fill + dark text + ✓. The width always
-/// reserves the ✓ so the button never resizes when toggling.
+/// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM): OFF = faint
+/// function tint, ON = richer fill + dark text — the color highlight IS
+/// the state indicator (no checkmark).
 final class FunctionToggle: FunctionButton {
     let baseTitle: String
     static let font = NSFont.systemFont(ofSize: 11)
@@ -325,7 +327,7 @@ final class FunctionToggle: FunctionButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var intrinsicContentSize: NSSize {
-        let s = NSAttributedString(string: "✓ " + baseTitle, attributes: [.font: Self.font]).size()
+        let s = NSAttributedString(string: baseTitle, attributes: [.font: Self.font]).size()
         return NSSize(width: ceil(s.width) + 24, height: 22)
     }
 
@@ -348,7 +350,7 @@ final class FunctionToggle: FunctionButton {
             path.lineWidth = 1
             path.stroke()
         }
-        let label = engaged ? "✓ " + baseTitle : baseTitle
+        let label = baseTitle
         let text: NSColor = !enabled ? .disabledControlTextColor
             : engaged ? GGTheme.darkText : GGTheme.softGray
         let attr = NSAttributedString(string: label, attributes: [.font: Self.font, .foregroundColor: text])
@@ -915,7 +917,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                          styleMask: [.titled, .closable, .miniaturizable, .resizable,
                                      .fullSizeContentView],
                          backing: .buffered, defer: false)
-        w.title = "Audio Control"
+        w.title = "Quartet Control"
         w.isReleasedWhenClosed = false
         w.appearance = NSAppearance(named: .darkAqua)
         w.isOpaque = false
@@ -941,7 +943,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         header.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "Audio Control")
+        let title = NSTextField(labelWithString: "Quartet Control")
         title.font = GGTheme.titleFont
         title.textColor = GGTheme.primary
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -1230,7 +1232,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(b)
             autoGainButtons.append(b)
 
-            // bottom row: 48V / Soft Limit / Ø — independent toggles.
+            // bottom row: 48V / SL / Ø — independent toggles.
             // push-on/push-off recessed buttons: the active state is a
             // filled, tinted button (shape + text, not color alone).
             let row = NSStackView()
@@ -1239,7 +1241,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let tv = toggle("48V", 300 + i, GGTheme.f48V)
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("Soft Limit", 400 + i, GGTheme.fSoftLimit)
+            let soft = toggle("SL", 400 + i, GGTheme.fSoftLimit)
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
             let pol = toggle("Ø", 500 + i, GGTheme.fPolarity)
@@ -1578,10 +1580,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let mute = toggle("Mute", 800 + o, GGTheme.fMute)
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("Dim", 900 + o, GGTheme.fDim)
+        let dim = toggle("DIM", 900 + o, GGTheme.fDim)
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("Mono", 1000 + o, GGTheme.fMono)
+        let mono = toggle("SUM", 1000 + o, GGTheme.fMono)
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
 
@@ -1735,7 +1737,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         refresh()
     }
 
-    /// +48V / Soft Limit / Polarity (per input).
+    /// +48V / Soft Limit / Polarity toggles (per input).
     @objc private func inputToggleChanged(_ sender: NSButton) {
         let tag = sender.tag
         let on = sender.state == .on
@@ -1928,15 +1930,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: - helpers
 
-    /// A small push-on/push-off button. OFF: neutral gray, no accent. ON: a
-    /// restrained colored tint (bezelColor at low alpha) + an explicit ✓ in
-    /// the title, so state never rides on color alone. Disabled: muted text,
-    /// no accent. The tint color is per-function (amber/blue/red) and is
-    /// applied by `setToggle` from the LIVE state — never baked at creation.
     /// A per-function toggle: OFF = faint tint of its function color, ON =
-    /// richer fill + dark text + ✓, DISABLED = neutral subdued. The color
-    /// pair rides with the control (FunctionToggle draws all states);
-    /// `setToggle` only applies live state.
+    /// richer fill + dark text (the color highlight is the state), DISABLED
+    /// = neutral subdued. The color pair rides with the control
+    /// (FunctionToggle draws all states); `setToggle` only applies live state.
     private func toggle(_ title: String, _ tag: Int,
                         _ pair: GGTheme.FunctionPair) -> FunctionToggle {
         FunctionToggle(title: title, tag: tag, pair: pair, target: self,
