@@ -77,9 +77,9 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         // open with real values: seed from the last tree, then pull a
         // fresh one immediately (don't wait out the first poll tick)
         if let tree = onSeedTree?() { updateTree(tree) } else { refresh() }
-        // stay above Apogee Control 2 WITHOUT activating us (that would
-        // pull focus from the app the user is wiggling controls in)
-        window?.orderFrontRegardless()
+        QBLog.log("console: opened — IN1 M\(inputs[0].micGain.map { String(format: "%.1f", $0) } ?? "?")/I\(inputs[0].instGain.map { String(format: "%.1f", $0) } ?? "?") ref\(inputs[0].refLevel.map(String.init) ?? "?"), IN2 M\(inputs[1].micGain.map { String(format: "%.1f", $0) } ?? "?")")
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         startPoll()
         onRequestTree?()
     }
@@ -154,7 +154,8 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
         statusField.stringValue = learnStatus()
             ?? (connected ? "" : "Not connected — waiting for Apogee Control 2 / ApogeeGlue…")
-        refit()
+        // NOTE: no geometry work here, ever — resizing/re-centering the
+        // window during a refresh cancels slider drags mid-flight
     }
 
     /// Full-state sync from the glue tree (AppDelegate.onTree → here).
@@ -359,6 +360,7 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private var inputGrid: NSGridView!
     private var outputGrid: NSGridView!
+    private var stack: NSStackView!
     private var statusField: NSTextField!
 
     private func build() {
@@ -379,6 +381,7 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         ])
 
         let stack = NSStackView()
+        self.stack = stack
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
@@ -497,7 +500,7 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         statusField.font = .systemFont(ofSize: 11)
         statusField.textColor = .secondaryLabelColor
         statusField.lineBreakMode = .byWordWrapping
-        statusField.preferredMaxLayoutWidth = 700
+        statusField.preferredMaxLayoutWidth = 620
         stack.addArrangedSubview(statusField)
 
         // uniform column widths
@@ -516,52 +519,35 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 46),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+            // ≤ (not ==): the stack sizes itself from its grids — pinning it
+            // to both edges fights the fixed column widths and makes the
+            // geometry unstable, which used to re-center the window on every
+            // refresh and cancel slider drags mid-flight
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -22),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
         ])
 
-        let p = NSPanel(contentRect: content.bounds,
-                       styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView],
-                       backing: .buffered, defer: false)
-        p.title = "Quartet Console"
-        p.isReleasedWhenClosed = false
-        p.appearance = NSAppearance(named: .darkAqua)
-        p.isOpaque = false
-        p.backgroundColor = .clear
-        p.titlebarAppearsTransparent = true
-        p.titleVisibility = .hidden
-        p.isMovableByWindowBackground = true
-        p.isFloatingPanel = true            // stays above Apogee Control 2
-        p.collectionBehavior = [.fullScreenAuxiliary]
-        p.hidesOnDeactivate = false
-        p.contentView = content
-        p.delegate = self
-        window = p
-        refit()
-    }
+        let w = NSWindow(contentRect: content.bounds,
+                        styleMask: [.titled, .closable, .fullSizeContentView],
+                        backing: .buffered, defer: false)
+        w.title = "Quartet Console"
+        w.isReleasedWhenClosed = false
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isMovableByWindowBackground = true
+        w.contentView = content
+        w.delegate = self
+        window = w
 
-    private func refit() {
-        guard let w = window, inputGrid != nil else { return }
-        w.contentView?.layoutSubtreeIfNeeded()
-        let fit = stackFittingSize()
-        let size = NSSize(width: max(fit.width + 44, 420), height: fit.height + 62)
-        // compare against the ACTUAL current content size (see the operator-
-        // precedence note in OutputsWindow.refit — the naive form always
-        // re-centers the window on every refresh)
-        let cur = w.contentView?.frame.size ?? .zero
-        if abs(cur.width - size.width) > 1 || abs(cur.height - size.height) > 1 {
-            w.setContentSize(size)
-            w.center()
-        }
-    }
-
-    private func stackFittingSize() -> NSSize {
-        // content bounds already track the stack; just use fitting sizes
-        let inFit = inputGrid.fittingSize, outFit = outputGrid.fittingSize
-        let status = statusField?.intrinsicContentSize.width ?? 0
-        let width = max(max(inFit.width, outFit.width), min(status, 700)) + 36
-        let height = inFit.height + outFit.height + (statusField?.intrinsicContentSize.height ?? 0) + 90
-        return NSSize(width: width, height: height)
+        // Size ONCE from the real laid-out content, then never touch the
+        // geometry again — the user owns the window's position and size.
+        content.layoutSubtreeIfNeeded()
+        let fit = stack.fittingSize
+        w.setContentSize(NSSize(width: fit.width + 44, height: fit.height + 62))
+        w.center()
     }
 
     // MARK: - actions (all clamped — bad ranges crash the unit)
@@ -582,7 +568,12 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         guard !suppressActions, !isLearning else { return }
         let v = min(max(sender.doubleValue, 0), 75)
         let t = PathIds.active
-        if let id = t.hwinMicGain[i] { onWriteDouble?(id, v); inputs[i].micGain = v }
+        if let id = t.hwinMicGain[i] {
+            onWriteDouble?(id, v)
+            inputs[i].micGain = v
+            QBLog.log(String(format: "console: IN %d gain -> %.2f dB (mic id %@)",
+                             i + 1, v, id.map { String(format: "%02x", $0) }.joined()))
+        }
         if let id = t.hwinInstGain[i] { onWriteDouble?(id, v); inputs[i].instGain = v }
         updateGainField(i)
     }
