@@ -44,16 +44,44 @@ enum GGTheme {
     static let primary = NSColor(calibratedWhite: 0.945, alpha: 1)
     /// Secondary text — labels and hardware identifiers (`#A5A5AB`).
     static let softGray = NSColor(calibratedWhite: 0.647, alpha: 1)
-    /// Restrained STATE colors — ONLY for engaged toggles / running
-    /// operations / signal status. Never decoration.
-    /// 48V / Dim: amber when engaged.
-    static let stateAmber = NSColor(calibratedRed: 0.82, green: 0.60, blue: 0.22, alpha: 1)
-    /// Soft Limit / Polarity / Mono / running ops: blue when engaged.
-    static let stateBlue = NSColor(calibratedRed: 0.30, green: 0.55, blue: 0.92, alpha: 1)
-    /// Mute: red when engaged.
-    static let stateRed = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
-    /// Red — clipping / prominent warnings (a mute is a state, not a warning).
-    static let warning = stateRed
+    /// Restrained red — clipping / warnings in text (a mute is a state,
+    /// not a warning; meter reds live in GGLevelMeter).
+    static let warning = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
+
+    /// Dark text used ON rich active fills.
+    static let darkText = NSColor(srgbRed: 0.11, green: 0.11, blue: 0.12, alpha: 1)
+    /// Neutral fill for DISABLED function controls — subdued gray, clearly
+    /// distinct from an available function that is simply OFF.
+    static let subduedFill = NSColor(calibratedWhite: 0.165, alpha: 1)
+
+    /// A function-color pair: `off` = faint dark tint (available, not
+    /// engaged), `on` = richer light fill (engaged → dark text + ✓).
+    struct FunctionPair {
+        let off: NSColor
+        let on: NSColor
+    }
+
+    /// `#RRGGBB` → NSColor (sRGB).
+    static func hex(_ h: String) -> NSColor {
+        var v = h.trimmingCharacters(in: .whitespaces)
+        if v.hasPrefix("#") { v.removeFirst() }
+        var rgb: UInt64 = 0
+        Scanner(string: v).scanHexInt64(&rgb)
+        return NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
+                       green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                       blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+    }
+
+    // Per-function muted accents — soft, distinguishable families.
+    // off = faint tint at rest · on = richer fill when engaged.
+    static let f48V       = FunctionPair(off: hex("493C2E"), on: hex("C69B62"))  // warm amber
+    static let fSoftLimit = FunctionPair(off: hex("33433B"), on: hex("83AE93"))  // sage green
+    static let fPolarity  = FunctionPair(off: hex("40394E"), on: hex("A697C7"))  // lavender
+    static let fMute      = FunctionPair(off: hex("4B343B"), on: hex("CB8C99"))  // dusty rose
+    static let fDim       = FunctionPair(off: hex("493D34"), on: hex("C9A07D"))  // muted apricot
+    static let fMono      = FunctionPair(off: hex("363E51"), on: hex("94A5D0"))  // soft periwinkle
+    static let fPlugin    = FunctionPair(off: hex("304442"), on: hex("7EB5AD"))  // muted teal
+    static let fAutoGain  = FunctionPair(off: hex("323E4D"), on: hex("87ADD0"))  // soft blue (running)
 
     static let titleFont = NSFont.systemFont(ofSize: 17, weight: .semibold)
     static let sectionFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
@@ -211,6 +239,159 @@ final class NeutralSlider: NSControl {
     }
 }
 
+// MARK: - Function-colored controls (off = faint tint, on = rich fill + ✓)
+
+/// Base for the per-function controls. Fully custom-drawn NSButtons — the
+/// cell never renders — so all states are ours:
+///   OFF       faint tint of the function color, muted light text, quiet border
+///   HOVER     slightly brighter tint of the SAME family
+///   ON        richer, more saturated fill, dark text + ✓
+///   DISABLED  neutral subdued styling (no function tint at all)
+///   FOCUS     thin exterior ring (keyboard only)
+class FunctionButton: NSButton {
+    var pair: GGTheme.FunctionPair
+    var hovering = false
+    private var hoverArea: NSTrackingArea?
+
+    init(tag: Int, pair: GGTheme.FunctionPair, target: AnyObject?, action: Selector) {
+        self.pair = pair
+        super.init(frame: .zero)
+        self.tag = tag
+        self.target = target
+        self.action = action
+        isBordered = false
+        focusRingType = .exterior
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var state: NSControl.StateValue { didSet { needsDisplay = true } }
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
+
+    var isEngaged: Bool { isEnabled && state == .on }
+
+    /// Brighten a color within its family (hover lift).
+    static func lift(_ c: NSColor, _ fraction: CGFloat) -> NSColor {
+        c.blended(withFraction: fraction, of: .white) ?? c
+    }
+
+    // hover: slightly brighter tint, same family
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = hoverArea { removeTrackingArea(a) }
+        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+                               owner: self, userInfo: nil)
+        hoverArea = t
+        addTrackingArea(t)
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+
+    // toggle on mouse-up-inside (cell tracking is bypassed entirely)
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        while true {
+            guard let ev = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { return }
+            guard ev.type == .leftMouseUp else { continue }
+            let p = convert(ev.locationInWindow, from: nil)
+            if bounds.contains(p) {
+                state = (state == .on) ? .off : .on
+                _ = sendAction(action, to: target)
+            }
+            return
+        }
+    }
+    override func performClick(_ sender: Any?) {
+        guard isEnabled else { return }
+        state = (state == .on) ? .off : .on
+        _ = sendAction(action, to: target)
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
+}
+
+/// The labeled toggle (48V / Soft Limit / Ø / Mute / Dim / Mono): OFF =
+/// faint function tint, ON = richer fill + dark text + ✓. The width always
+/// reserves the ✓ so the button never resizes when toggling.
+final class FunctionToggle: FunctionButton {
+    let baseTitle: String
+    static let font = NSFont.systemFont(ofSize: 11)
+
+    init(title: String, tag: Int, pair: GGTheme.FunctionPair,
+         target: AnyObject?, action: Selector) {
+        self.baseTitle = title
+        super.init(tag: tag, pair: pair, target: target, action: action)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var intrinsicContentSize: NSSize {
+        let s = NSAttributedString(string: "✓ " + baseTitle, attributes: [.font: Self.font]).size()
+        return NSSize(width: ceil(s.width) + 24, height: 22)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let engaged = isEngaged
+        let enabled = isEnabled
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        let fill: NSColor
+        if !enabled { fill = GGTheme.subduedFill }
+        else if engaged { fill = hovering ? Self.lift(pair.on, 0.10) : pair.on }
+        else { fill = hovering ? Self.lift(pair.off, 0.20) : pair.off }
+        fill.setFill()
+        path.fill()
+        if enabled {
+            let border = engaged
+                ? (pair.on.blended(withFraction: 0.35, of: .black) ?? pair.on)
+                : NSColor(white: 1, alpha: 0.07)
+            border.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        let label = engaged ? "✓ " + baseTitle : baseTitle
+        let text: NSColor = !enabled ? .disabledControlTextColor
+            : engaged ? GGTheme.darkText : GGTheme.softGray
+        let attr = NSAttributedString(string: label, attributes: [.font: Self.font, .foregroundColor: text])
+        let s = attr.size()
+        attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
+                              y: (bounds.height - s.height) / 2 - 0.5))
+    }
+}
+
+/// The small enable/bypass pill switch for plug-ins — muted teal when on.
+final class FunctionSwitch: FunctionButton {
+    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 20) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let engaged = isEngaged
+        let enabled = isEnabled
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        let fill: NSColor
+        if !enabled { fill = GGTheme.subduedFill }
+        else if engaged { fill = hovering ? Self.lift(pair.on, 0.10) : pair.on }
+        else { fill = hovering ? Self.lift(pair.off, 0.25) : pair.off }
+        fill.setFill()
+        path.fill()
+        if enabled {
+            let border = engaged
+                ? (pair.on.blended(withFraction: 0.35, of: .black) ?? pair.on)
+                : NSColor(white: 1, alpha: 0.07)
+            border.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        let inset: CGFloat = 3
+        let d = rect.height - inset * 2
+        let travel = rect.width - inset * 2 - d
+        let x = engaged ? rect.minX + inset + travel : rect.minX + inset
+        let knob = !enabled ? NSColor(calibratedWhite: 0.45, alpha: 1)
+            : NSColor(calibratedWhite: 0.89, alpha: 1)
+        knob.setFill()
+        NSBezierPath(ovalIn: NSRect(x: x, y: rect.minY + inset, width: d, height: d)).fill()
+    }
+}
+
 // MARK: - controller
 
 final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
@@ -321,15 +502,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             toggles48V[i].isHidden = lineMode || st.refLevel == 4
 
             let mineRunning = autoRunning.contains(i)
-            autoGainButtons[i].title = mineRunning ? "Cancel" : "Auto Gain"
             autoGainButtons[i].isEnabled = connected && !learning
                 && (mineRunning || autoRunning.isEmpty)
             // Auto Gain is an action, not a persistent state: neutral at
-            // rest, blue accent + progress semantics only while running.
-            if #available(macOS 13.0, *) {
-                autoGainButtons[i].bezelColor =
-                    mineRunning ? GGTheme.stateBlue.withAlphaComponent(0.32) : nil
-            }
+            // rest; while running it becomes a soft-blue "Cancel" chip.
+            let agTitle = mineRunning ? "Cancel" : "Auto Gain"
+            let agColor = mineRunning ? GGTheme.darkText : GGTheme.softGray
+            autoGainButtons[i].bezelColor = mineRunning ? GGTheme.fAutoGain.on : nil
+            autoGainButtons[i].attributedTitle = NSAttributedString(
+                string: agTitle,
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             gainSliders[i].isEnabled = connected && !learning && micId != nil && instId != nil && autoRunning.isEmpty
@@ -340,14 +522,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             updateGainField(i)
 
             setToggle(toggles48V[i], st.phantom,
-                      enabled: connected && !learning && t.hwinPhantom[i] != nil,
-                      activeColor: GGTheme.stateAmber)
+                      enabled: connected && !learning && t.hwinPhantom[i] != nil)
             setToggle(softLimitToggles[i], st.softLimit,
-                      enabled: connected && !learning && t.hwinSoftLimit[i] != nil,
-                      activeColor: GGTheme.stateBlue)
+                      enabled: connected && !learning && t.hwinSoftLimit[i] != nil)
             setToggle(polarityToggles[i], st.polarity,
-                      enabled: connected && !learning && t.hwinPolarity[i] != nil,
-                      activeColor: GGTheme.stateBlue)
+                      enabled: connected && !learning && t.hwinPolarity[i] != nil)
 
             inputHeaders[i]?.stringValue = st.name ?? "Analog In \(i + 1)"
 
@@ -430,12 +609,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let text = String(format: "%.1f dB", st.gain ?? 0)
             if monFields[o].stringValue != text { monFields[o].stringValue = text }
 
-            setToggle(muteToggles[o], st.mute, enabled: connected && !learning && !muteId.isEmpty,
-                      activeColor: GGTheme.stateRed)
-            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil,
-                      activeColor: GGTheme.stateAmber)
-            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil,
-                      activeColor: GGTheme.stateBlue)
+            setToggle(muteToggles[o], st.mute, enabled: connected && !learning && !muteId.isEmpty)
+            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
+            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil)
 
             // Mute gets the clearest active state: filled button + badge.
             mutedBadges[o]?.isHidden = !(st.mute ?? false)
@@ -1060,13 +1236,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
-            let tv = toggle("48V", 300 + i)
+            let tv = toggle("48V", 300 + i, GGTheme.f48V)
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("Soft Limit", 400 + i)
+            let soft = toggle("Soft Limit", 400 + i, GGTheme.fSoftLimit)
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = toggle("Ø", 500 + i)
+            let pol = toggle("Ø", 500 + i, GGTheme.fPolarity)
             pol.toolTip = "Invert Polarity"
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
@@ -1180,9 +1356,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             plugRow.alignment = .centerY
             plugRow.translatesAutoresizingMaskIntoConstraints = false
 
-            let en = NSButton(checkboxWithTitle: "", target: self,
-                               action: #selector(enabledChanged(_:)))
-            en.tag = 2400 + i
+            let en = FunctionSwitch(tag: 2400 + i, pair: GGTheme.fPlugin,
+                                    target: self, action: #selector(enabledChanged(_:)))
             en.toolTip = "Enable / bypass the plug-in"
             plugRow.addArrangedSubview(en)
             enabledChecks.append(en)
@@ -1351,7 +1526,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         head.textColor = GGTheme.primary
         let badge = NSTextField(labelWithString: "Muted")
         badge.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
-        badge.textColor = GGTheme.warning
+        badge.textColor = GGTheme.fMute.on
         badge.isHidden = true
         mutedBadges.append(badge)
         let headRow = NSStackView(views: [head, badge])
@@ -1400,13 +1575,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
         btnRow.spacing = 6
-        let mute = toggle("Mute", 800 + o)
+        let mute = toggle("Mute", 800 + o, GGTheme.fMute)
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("Dim", 900 + o)
+        let dim = toggle("Dim", 900 + o, GGTheme.fDim)
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("Mono", 1000 + o)
+        let mono = toggle("Mono", 1000 + o, GGTheme.fMono)
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
 
@@ -1758,40 +1933,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// the title, so state never rides on color alone. Disabled: muted text,
     /// no accent. The tint color is per-function (amber/blue/red) and is
     /// applied by `setToggle` from the LIVE state — never baked at creation.
-    private func toggle(_ title: String, _ tag: Int) -> NSButton {
-        let b = NSButton(title: title, target: nil, action: nil)
-        // route by tag range: inputs → inputToggleChanged, monitor → monToggleChanged
-        if tag >= 700 { b.action = #selector(monToggleChanged(_:)) }
-        else { b.action = #selector(inputToggleChanged(_:)) }
-        b.target = self
-        b.tag = tag
-        b.bezelStyle = .rounded
-        b.setButtonType(.pushOnPushOff)
-        b.controlSize = .small
-        b.font = NSFont.systemFont(ofSize: 11)
-        return b
+    /// A per-function toggle: OFF = faint tint of its function color, ON =
+    /// richer fill + dark text + ✓, DISABLED = neutral subdued. The color
+    /// pair rides with the control (FunctionToggle draws all states);
+    /// `setToggle` only applies live state.
+    private func toggle(_ title: String, _ tag: Int,
+                        _ pair: GGTheme.FunctionPair) -> FunctionToggle {
+        FunctionToggle(title: title, tag: tag, pair: pair, target: self,
+                       action: tag >= 700 ? #selector(monToggleChanged(_:))
+                                          : #selector(inputToggleChanged(_:)))
     }
 
-    /// Apply the full OFF/ON/DISABLED treatment to a toggle button.
-    /// OFF: neutral gray bezel, secondary label. ON: restrained tinted
-    /// bezel + ✓ + primary label. DISABLED: muted label, no accent.
-    private func setToggle(_ b: NSButton, _ value: Bool?, enabled: Bool,
-                           activeColor: NSColor? = nil) {
+    /// Apply the live state to a function toggle (colors/shapes are the
+    /// control's own).
+    private func setToggle(_ b: NSButton, _ value: Bool?, enabled: Bool) {
         b.isEnabled = enabled
-        let base = (b.attributedTitle.string as NSString)
-            .replacingOccurrences(of: "✓ ", with: "")
-        let on = (value ?? false) && enabled
-        let font = NSFont.systemFont(ofSize: 11)
-        if on {
-            b.bezelColor = (activeColor ?? GGTheme.stateBlue).withAlphaComponent(0.32)
-            b.attributedTitle = NSAttributedString(string: "✓ " + base, attributes: [
-                .font: font, .foregroundColor: GGTheme.primary])
-        } else {
-            b.bezelColor = nil
-            b.attributedTitle = NSAttributedString(string: base, attributes: [
-                .font: font,
-                .foregroundColor: enabled ? GGTheme.softGray : NSColor.disabledControlTextColor])
-        }
+        b.state = (value ?? false) ? .on : .off
     }
 
     private func selectPopup(_ p: NSPopUpButton, value: Int) {
