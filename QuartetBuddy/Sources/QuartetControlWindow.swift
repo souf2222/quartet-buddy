@@ -622,6 +622,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             monLearnButtons[o].isEnabled = (learning && learningColumn == .monitor(o)) || !missing.isEmpty
         }
 
+        updateCardHighlights()
         statusField.stringValue = learnStatus()
             ?? autoGainStatus
             ?? (connected ? "" : "Not connected — waiting for Apogee Control 2 / ApogeeGlue…")
@@ -848,6 +849,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var subtitleField: NSTextField!
     /// The scroll area's document view (top-scroll on open).
     private var scrollDoc: NSView?
+
+    // MARK: keyboard-shortcut selection state (see extension at file end)
+
+    /// Card views for the input / routing grids (index 0…3) — the shortcut
+    /// selection highlight writes their layer borders directly.
+    var inputCards: [NSView] = []
+    var outputCards: [NSView] = []
+    /// The card each "selected…" shortcut acts on (gain, trim, processing).
+    var selectedInputIndex = 0
+    var selectedOutputIndex = 0
 
     private static let nameKey: (Int) -> String = { "insertPair.\($0).name" }
     /// Current custom name for a pair ("" when unset).
@@ -1153,6 +1164,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let card = NSView()
             card.translatesAutoresizingMaskIntoConstraints = false
             GGTheme.applyCardStyle(card)
+            inputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
@@ -1287,6 +1299,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let card = NSView()
             card.translatesAutoresizingMaskIntoConstraints = false
             GGTheme.applyCardStyle(card)
+            outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
@@ -2019,4 +2032,128 @@ private extension NSPopUpButton {
 
 private extension Optional where Wrapped == Int {
     func getOrElse(_ f: () -> Int) -> Int { self ?? f() }
+}
+
+// MARK: - Keyboard-shortcut APIs (Shortcuts settings → ShortcutManager)
+
+/// App-only shortcut targets: card selection + the per-card actions. These
+/// reuse the window's existing @objc selector bodies by invoking them with
+/// the real controls (the selectors decode their index from `sender.tag`),
+/// so a shortcut and a mouse click run EXACTLY the same code.
+extension QuartetControlController {
+
+    /// True while the Quartet Control window is the key window — the gate
+    /// for app-only shortcut bindings (AppDelegate's local event monitor).
+    var isKeyWindow: Bool { window?.isKeyWindow ?? false }
+
+    /// Show / hide the window (the global "Show / hide Quartet Control").
+    func toggleShown() {
+        guard let window, window.isVisible else { show(); return }
+        window.orderOut(nil)
+    }
+
+    // MARK: selection
+
+    func selectOutput(_ i: Int) {
+        guard (0..<4).contains(i) else { return }
+        selectedOutputIndex = i
+        updateCardHighlights()
+    }
+
+    func selectInput(_ i: Int) {
+        guard (0..<4).contains(i) else { return }
+        selectedInputIndex = i
+        updateCardHighlights()
+    }
+
+    /// Next / previous output card (wraps).
+    func selectAdjacentOutput(_ delta: Int) {
+        selectOutput((selectedOutputIndex + delta + 4) % 4)
+    }
+
+    /// Selection visual: the selected card gets a brighter border —
+    /// color is state, per the window's theme rules.
+    func updateCardHighlights() {
+        for (i, card) in inputCards.enumerated() {
+            card.layer?.borderColor = (i == selectedInputIndex
+                ? NSColor(white: 1, alpha: 0.35) : GGTheme.cardBorder).cgColor
+        }
+        for (i, card) in outputCards.enumerated() {
+            card.layer?.borderColor = (i == selectedOutputIndex
+                ? NSColor(white: 1, alpha: 0.35) : GGTheme.cardBorder).cgColor
+        }
+    }
+
+    // MARK: outputs & routing (selected card)
+
+    func shortcutOutputTrim(up: Bool, step: Double) {
+        let i = selectedOutputIndex
+        trimSliders[i].doubleValue = min(max(trimSliders[i].doubleValue + (up ? step : -step), -64), 6)
+        trimSlid(trimSliders[i])
+    }
+
+    func shortcutEditOutputTrim() {
+        let i = selectedOutputIndex
+        window?.makeFirstResponder(trimFields[i])
+        trimFields[i].selectText(nil)
+    }
+
+    func shortcutOpenSourceSelector() {
+        sourcePopups[selectedOutputIndex].performClick(nil)
+    }
+
+    func shortcutToggleIncludeSource() {
+        let i = selectedOutputIndex
+        includeChecks[i].state = includeChecks[i].state == .on ? .off : .on
+        includeChanged(includeChecks[i])
+    }
+
+    func shortcutBypassSelectedOutput() {
+        let i = selectedOutputIndex
+        enabledChecks[i].state = enabledChecks[i].state == .on ? .off : .on
+        enabledChanged(enabledChecks[i])
+    }
+
+    func shortcutOpenSelectedPlugin() {
+        InsertServer.shared.showPluginUI(selectedOutputIndex)
+    }
+
+    // MARK: inputs (selected card)
+
+    func shortcutInputGain(up: Bool, step: Double) {
+        let i = selectedInputIndex
+        gainSliders[i].doubleValue = min(max(gainSliders[i].doubleValue + (up ? step : -step), 0), 75)
+        gainSlid(gainSliders[i])
+    }
+
+    func shortcutEditInputGain() {
+        let i = selectedInputIndex
+        window?.makeFirstResponder(gainFields[i])
+        gainFields[i].selectText(nil)
+    }
+
+    func shortcutAutoGainSelected() {
+        autoGainClicked(autoGainButtons[selectedInputIndex])
+    }
+
+    func shortcutAutoGainAll() {
+        autoGainAllClicked(autoGainButtons[0])
+    }
+
+    func shortcutCancelAutoGain() {
+        AutoGainEngine.shared.cancelAll(reason: "cancelled")
+        showAutoStatus("Auto Gain cancelled", clearAfter: 4)
+    }
+
+    func shortcutToggleSoftLimit() {
+        let i = selectedInputIndex
+        softLimitToggles[i].state = softLimitToggles[i].state == .on ? .off : .on
+        inputToggleChanged(softLimitToggles[i])
+    }
+
+    func shortcutTogglePolarity() {
+        let i = selectedInputIndex
+        polarityToggles[i].state = polarityToggles[i].state == .on ? .off : .on
+        inputToggleChanged(polarityToggles[i])
+    }
 }

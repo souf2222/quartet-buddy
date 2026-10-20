@@ -12,7 +12,10 @@ enum HotKeyRecorder {
 
         override func keyDown(with event: NSEvent) {
             let carbonMods = carbonModifiers(from: event.modifierFlags)
+            // A modifier is required unless the key is non-printing
+            // (F-keys, arrows, Esc, …) — a bare letter would swallow typing.
             let needsModifier = carbonMods & UInt32(cmdKey | optionKey | controlKey) == 0
+                && UCKeyTranslateForDisplay(UInt32(event.keyCode)) != nil
             if needsModifier && event.keyCode != UInt32(kVK_Escape) {
                 NSSound.beep()
                 return
@@ -31,7 +34,8 @@ enum HotKeyRecorder {
         }
     }
 
-    static func record(title: String, onCombo: @escaping (HotKeyManager.Combo?) -> Void) {
+    static func record(title: String, subtitle: String = "Press the key combination (⌘/⌥/⌃ + key, Esc to cancel)",
+                      onCombo: @escaping (HotKeyManager.Combo?) -> Void) {
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 140),
                             styleMask: [.titled, .closable],
                             backing: .buffered, defer: false)
@@ -45,7 +49,7 @@ enum HotKeyRecorder {
         view.onCancel = { onCombo(nil) }
         panel.contentView = view
 
-        let label = NSTextField(labelWithString: "Press the key combination for Talkback\n(⌘/⌥/⌃ + key, Esc to cancel)")
+        let label = NSTextField(labelWithString: "\(subtitle)\nEsc to cancel")
         label.alignment = .center
         label.frame = NSRect(x: 20, y: 40, width: 280, height: 60)
         view.addSubview(label)

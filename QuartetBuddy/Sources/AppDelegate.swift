@@ -198,8 +198,9 @@ enum OutputTarget: String, CaseIterable, Codable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let glue = GlueClient()
-    let talkbackHotKeys = HotKeyManager(signature: 0x51425442 /* 'QBTB' */, id: 1)
-    let switchHotKeys = HotKeyManager(signature: 0x51515357 /* 'QBSW' */, id: 2)
+    /// Every keyboard shortcut: bindings, global registration, app-only
+    /// matching, conflicts, defaults (see Shortcuts.swift).
+    let shortcuts = ShortcutManager()
     let midi = MidiWatcher()
     let deviceMonitor = DefaultDeviceMonitor()
     let quartetPresence = QuartetPresence()
@@ -236,6 +237,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var talkbackMomentary = false
     /// Hardware dim on the speakers (Out 1‑2), synced from the glue tree.
     var speakerDim = false
+    /// Hardware sum/mono on the speakers + dim/sum on the headphones —
+    /// shortcut toggles need the current state; synced like speakerDim.
+    var speakerSum = false
+    var headphoneDim = false
+    var headphoneSum = false
+    /// Local key monitor for app-only shortcuts (Quartet Control focused).
+    private var localMonitor: Any?
     /// True once a tree has given us real hardware gain values (never
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
@@ -395,7 +403,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
                 self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
                 self.speakerDim = (GlueClient.intProp(hw0, "dim") ?? 0) == 1
+                self.speakerSum = (GlueClient.intProp(hw0, "sum") ?? 0) == 1
                 self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
+                self.headphoneDim = (GlueClient.intProp(hw1, "dim") ?? 0) == 1
+                self.headphoneSum = (GlueClient.intProp(hw1, "sum") ?? 0) == 1
                 self.gainKnown = true
                 self.syncMacSlider(force: true)
             }
@@ -427,6 +438,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.muted[.headphones] = event.value.first == 1
             case PathIds.active.hwout0Dim where event.tag == 3:
                 self.speakerDim = event.value.first == 1
+            case let id where event.tag == 3 && PathIds.active.hwout0Sum == id:
+                self.speakerSum = event.value.first == 1
+            case let id where event.tag == 3 && PathIds.active.hwout1Dim == id:
+                self.headphoneDim = event.value.first == 1
+            case let id where event.tag == 3 && PathIds.active.hwout1Sum == id:
+                self.headphoneSum = event.value.first == 1
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
             default:
@@ -485,15 +502,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotKey() {
-        talkbackHotKeys.onHotKey = { [weak self] in self?.toggleTalkback() }
-        if let comboData = UserDefaults.standard.data(forKey: "hotkeyCombo"),
-           let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: comboData) {
-            talkbackHotKeys.register(combo)
+        shortcuts.perform = { [weak self] action, keyDown in
+            self?.performShortcut(action, keyDown: keyDown)
         }
-        switchHotKeys.onHotKey = { [weak self] in self?.switchVolumeTarget() }
-        if let comboData = UserDefaults.standard.data(forKey: "hotkeySwitchCombo"),
-           let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: comboData) {
-            switchHotKeys.register(combo)
+        shortcuts.registerAll()
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // app-only bindings fire just while Quartet Control is focused
+            guard QuartetControlController.shared.isKeyWindow else { return event }
+            guard let action = self.shortcuts.matchLocal(event) else { return event }
+            self.performShortcut(action, keyDown: true)
+            return nil
         }
     }
 
@@ -501,6 +520,140 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func switchVolumeTarget() {
         selectedOutput = selectedOutput == .mainOut ? .headphones : .mainOut
         QBLog.log("hotkey: volume target now \(selectedOutput.rawValue)")
+    }
+
+    /// Route a shortcut action to the app — the ONLY dispatcher (a menubar
+    /// item, a mouse click and a keystroke all run the same code).
+    private func performShortcut(_ action: ShortcutAction, keyDown: Bool) {
+        guard keyDown else {
+            // key-up: hold actions only (talkback release)
+            if action == .talkbackHold { setTalkback(false) }
+            return
+        }
+        let control = QuartetControlController.shared
+        switch action {
+        // Window & Navigation
+        case .showHideWindow: control.toggleShown()
+        case .openSettings: settingsWindow.show()
+        case .selectNextOutput: control.selectAdjacentOutput(1)
+        case .selectPreviousOutput: control.selectAdjacentOutput(-1)
+
+        // Speakers (monitor 0)
+        case .speakerMute: toggleMute(.mainOut)
+        case .speakerDim:
+            let on = !speakerDim
+            glue.setBool(id: PathIds.active.hwout0Dim, on)
+            speakerDim = on
+        case .speakerSum:
+            if let id = PathIds.active.hwout0Sum {
+                let on = !speakerSum
+                glue.setBool(id: id, on)
+                speakerSum = on
+            }
+        case .speakerVolumeUp: adjust(.mainOut, shortcuts.volumeStep)
+        case .speakerVolumeDown: adjust(.mainOut, -shortcuts.volumeStep)
+        case .speakerFineUp: adjust(.mainOut, shortcuts.fineStep)
+        case .speakerFineDown: adjust(.mainOut, -shortcuts.fineStep)
+
+        // Headphones (monitor 1)
+        case .headphoneMute: toggleMute(.headphones)
+        case .headphoneDim:
+            if let id = PathIds.active.hwout1Dim {
+                let on = !headphoneDim
+                glue.setBool(id: id, on)
+                headphoneDim = on
+            }
+        case .headphoneSum:
+            if let id = PathIds.active.hwout1Sum {
+                let on = !headphoneSum
+                glue.setBool(id: id, on)
+                headphoneSum = on
+            }
+        case .headphoneVolumeUp: adjust(.headphones, shortcuts.volumeStep)
+        case .headphoneVolumeDown: adjust(.headphones, -shortcuts.volumeStep)
+        case .headphoneFineUp: adjust(.headphones, shortcuts.fineStep)
+        case .headphoneFineDown: adjust(.headphones, -shortcuts.fineStep)
+
+        // Volume-Control Target
+        case .selectSpeakersTarget: selectedOutput = .mainOut
+        case .selectHeadphonesTarget: selectedOutput = .headphones
+        case .switchTarget: switchVolumeTarget()
+        case .targetVolumeUp: adjust(selectedOutput, shortcuts.volumeStep)
+        case .targetVolumeDown: adjust(selectedOutput, -shortcuts.volumeStep)
+
+        // Talkback
+        case .talkbackHold: setTalkback(true)   // release arrives on key-up
+        case .talkbackToggle: toggleTalkback()
+
+        // Plug-ins
+        case .bypassAllPlugins:
+            InsertServer.shared.setBypassAll(!InsertServer.shared.bypassAll)
+        case .toggleInsert:
+            let on = !InsertServer.shared.running
+            UserDefaults.standard.set(on, forKey: "insertEnabled")
+            InsertServer.shared.setRunning(on)
+        case .bypassSelectedOutput: control.shortcutBypassSelectedOutput()
+        case .openSelectedPlugin: control.shortcutOpenSelectedPlugin()
+
+        // Outputs & Routing (selected card)
+        case .selectOutput1: control.selectOutput(0)
+        case .selectOutput2: control.selectOutput(1)
+        case .selectOutput3: control.selectOutput(2)
+        case .selectOutput4: control.selectOutput(3)
+        case .outputTrimUp: control.shortcutOutputTrim(up: true, step: 1)
+        case .outputTrimDown: control.shortcutOutputTrim(up: false, step: 1)
+        case .editOutputTrim: control.shortcutEditOutputTrim()
+        case .openSourceSelector: control.shortcutOpenSourceSelector()
+        case .toggleIncludeSource: control.shortcutToggleIncludeSource()
+
+        // Inputs (selected card)
+        case .selectInput1: control.selectInput(0)
+        case .selectInput2: control.selectInput(1)
+        case .selectInput3: control.selectInput(2)
+        case .selectInput4: control.selectInput(3)
+        case .inputGainUp: control.shortcutInputGain(up: true, step: shortcuts.volumeStep)
+        case .inputGainDown: control.shortcutInputGain(up: false, step: shortcuts.volumeStep)
+        case .editInputGain: control.shortcutEditInputGain()
+        case .autoGainSelectedInput: control.shortcutAutoGainSelected()
+        case .autoGainAllInputs: control.shortcutAutoGainAll()
+        case .cancelAutoGain: control.shortcutCancelAutoGain()
+        case .toggleSoftLimit: control.shortcutToggleSoftLimit()
+        case .togglePolarity: control.shortcutTogglePolarity()
+
+        // Safety
+        case .muteAllOutputs:
+            // ALWAYS mute — never unmute (a panic command must never
+            // make sound by surprise).
+            for t in OutputTarget.allCases where muted[t] != true {
+                glue.setBool(id: t.muteId, true)
+                muted[t] = true
+            }
+        }
+        refreshMenu()
+    }
+
+    /// Explicit talkback state (hold-to-talk presses this with true/false).
+    private func setTalkback(_ on: Bool) {
+        guard on != talkbackOn else { return }
+        glue.setBool(id: PathIds.talkbackOn, on)
+        talkbackOn = on
+        refreshMenu()
+    }
+
+    /// ± dB adjustment on one output (hardware fader, range-clamped).
+    private func adjust(_ t: OutputTarget, _ delta: Double) {
+        let new = min(0, max(Self.minDB, (gain[t] ?? 0) + delta))
+        guard abs(new - (gain[t] ?? 0)) > 0.01 else { return }
+        glue.setDouble(id: t.gainId, new)
+        gain[t] = new
+        syncMacSlider()
+    }
+
+    /// Hardware mute toggle per output target.
+    private func toggleMute(_ t: OutputTarget) {
+        let new = !(muted[t] ?? false)
+        glue.setBool(id: t.muteId, new)
+        muted[t] = new
     }
 
     // MARK: - MIDI
@@ -621,25 +774,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let muteMain = menu.addItem(withTitle: "Mute Speakers", action: #selector(toggleMuteTarget(_:)), keyEquivalent: "")
         muteMain.representedObject = OutputTarget.mainOut.rawValue
         muteMain.state = mainMuted ? .on : .off
+        applyKeyEquivalent(muteMain, combo: shortcuts.bindings[.speakerMute]?.combo)
         let muteHP = menu.addItem(withTitle: "Mute Headphones", action: #selector(toggleMuteTarget(_:)), keyEquivalent: "")
         muteHP.representedObject = OutputTarget.headphones.rawValue
         muteHP.state = hpMuted ? .on : .off
+        applyKeyEquivalent(muteHP, combo: shortcuts.bindings[.headphoneMute]?.combo)
         let dimItem = menu.addItem(withTitle: "Dim Speakers", action: #selector(toggleDim(_:)), keyEquivalent: "")
         dimItem.state = speakerDim ? .on : .off
+        applyKeyEquivalent(dimItem, combo: shortcuts.bindings[.speakerDim]?.combo)
 
         menu.addItem(.separator())
 
         // talkback + AU insert + global plug-in bypass
         let tbTitle = talkbackOn ? "Stop Talkback" : "Start Talkback"
         let tbItem = menu.addItem(withTitle: tbTitle, action: #selector(talkbackNow(_:)), keyEquivalent: "")
-        applyKeyEquivalent(tbItem, combo: talkbackHotKeys.current)
+        applyKeyEquivalent(tbItem, combo: shortcuts.bindings[.talkbackToggle]?.combo)
         let insertTitle = server.running ? "Stop Plug-in Insert" : "Start Plug-in Insert"
         let insertItem = menu.addItem(withTitle: insertTitle,
                                       action: #selector(toggleInsert(_:)), keyEquivalent: "")
         insertItem.state = server.running ? .on : .off
+        applyKeyEquivalent(insertItem, combo: shortcuts.bindings[.toggleInsert]?.combo)
         let bypassItem = menu.addItem(withTitle: "Bypass All Plug-ins",
                                        action: #selector(toggleBypassAll(_:)), keyEquivalent: "")
         bypassItem.state = server.bypassAll ? .on : .off
+        applyKeyEquivalent(bypassItem, combo: shortcuts.bindings[.bypassAllPlugins]?.combo)
 
         menu.addItem(.separator())
 
@@ -810,27 +968,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
-    @objc private func recordHotKey(_ sender: NSMenuItem) {
-        HotKeyRecorder.record(title: "Talkback Hotkey") { [weak self] combo in
-            guard let self, let combo else { return }
-            self.talkbackHotKeys.register(combo)
-            if let data = try? JSONEncoder().encode(combo) {
-                UserDefaults.standard.set(data, forKey: "hotkeyCombo")
-            }
-            self.refreshMenu()
-        }
-    }
-
-    @objc private func recordSwitchHotKey(_ sender: NSMenuItem) {
-        HotKeyRecorder.record(title: "Switch Output Hotkey") { [weak self] combo in
-            guard let self, let combo else { return }
-            self.switchHotKeys.register(combo)
-            if let data = try? JSONEncoder().encode(combo) {
-                UserDefaults.standard.set(data, forKey: "hotkeySwitchCombo")
-            }
-            self.refreshMenu()
-        }
-    }
+    // Shortcut recording lives in the Settings window (Shortcuts pane) —
+    // ShortcutManager owns registration and persistence.
 
     // MARK: - Mute / Dim (hardware, via ApogeeGlue)
 
@@ -892,21 +1031,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Wire the Settings window's callbacks to this delegate's plumbing.
+    /// (Shortcut bindings are handled by ShortcutManager directly — the
+    /// Settings window holds a reference to it and assigns through it.)
     private func setupSettingsWindow() {
-        settingsWindow.onTalkbackHotkey = { [weak self] combo in
-            guard let self, let combo else { return }
-            self.talkbackHotKeys.register(combo)
-            if let data = try? JSONEncoder().encode(combo) {
-                UserDefaults.standard.set(data, forKey: "hotkeyCombo")
-            }
-        }
-        settingsWindow.onSwitchHotkey = { [weak self] combo in
-            guard let self, let combo else { return }
-            self.switchHotKeys.register(combo)
-            if let data = try? JSONEncoder().encode(combo) {
-                UserDefaults.standard.set(data, forKey: "hotkeySwitchCombo")
-            }
-        }
+        settingsWindow.shortcuts = shortcuts
         settingsWindow.onMidiLearn = { [weak self] in
             self?.learningMidi = true
             self?.refreshMenu()
