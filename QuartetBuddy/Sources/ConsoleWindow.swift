@@ -3,10 +3,16 @@ import AppKit
 /// The "Quartet Console" window: every input- and monitor-side hardware
 /// function in one place, off the menubar so the core features stay clean.
 ///
-/// Per analog input (IN 1-4): analog level, preamp gain (mic + instrument
-/// are written together so the fader is right whichever mode the channel is
-/// in), +48V phantom, soft limit, polarity. Per monitor (Main Out /
-/// Headphones): level, mute, dim, sum/mono.
+/// Per analog input (IN 1-4): analog level, preamp gain (mic and instrument
+/// keep their OWN values — the slider edits only the active mode's gain,
+/// so switching modes never drags the gain along), +48V phantom, soft
+/// limit, polarity. Per monitor (Main Out / Headphones): level, mute,
+/// dim, sum/mono.
+///
+/// Mode-dependent controls: the preamp only applies in Mic and Instrument
+/// modes, so the GAIN slider + dB field (and the section label) are hidden
+/// while an input is at +4 dBu / −10 dBV; +48V is Mic-only. The dB field
+/// shows the ACTIVE mode's gain — a single value, never "M x · I y".
 ///
 /// Reads come from the glue tree (live via a 2 s poll while visible — the
 /// tree is the only source that works even for controls whose write id is
@@ -68,6 +74,15 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// hardware writes on this so echoes can't pollute the capture).
     var isLearning: Bool { !learnQueue.isEmpty }
 
+    // Auto Gain — the console shows the engine's status lines; failures
+    // clear themselves after a moment, the success line stays until the
+    // next calibration. Multi-input runs show the LAST status/failure.
+    private var autoGainStatus: String?
+    private var autoGainStatusTimer: Timer?
+    private var autoGainAllButton: NSButton!
+    private var targetLevelPopup: NSPopUpButton!
+    private var timeLevelPopup: NSPopUpButton!
+
     enum LearnColumn: Equatable { case input(Int), output(Int) }
 
     // MARK: - show / refresh cycle
@@ -91,21 +106,42 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let connected = isGlueConnected?() ?? false
         let learning = isLearning
 
+        let autoRunning = AutoGainEngine.shared.runningInputs
+
         // INPUTS
         for i in 0..<4 {
             let st = inputs[i]
             let t = PathIds.active
             let levelId = t.hwinRefLevel[i]
-            levelPopups[i].isEnabled = connected && !learning && levelId != nil
+            levelPopups[i].isEnabled = connected && !learning && levelId != nil && autoRunning.isEmpty
             if let rl = st.refLevel {
                 selectPopup(levelPopups[i], value: rl)
             } else {
                 levelPopups[i].selectItem(withTitle: "—")
             }
 
+            // Mode-dependent controls: the preamp only applies in Mic /
+            // Instrument (gain), phantom in Mic only. At the line levels
+            // (+4 dBu / −10 dBV) the preamp is bypassed — hide those
+            // cells so the column shows only what the mode can do.
+            // (Unknown refLevel → show everything, harmless fallback.)
+            let lineMode = st.refLevel == 2 || st.refLevel == 3
+            gainSectionFields[i]?.isHidden = lineMode
+            gainSliders[i].isHidden = lineMode
+            gainFields[i].isHidden = lineMode
+            autoGainButtons[i].isHidden = lineMode
+            phantomChecks[i].isHidden = lineMode || st.refLevel == 4
+
+            // Auto Gain: one batch at a time; a running column's button
+            // becomes Cancel (any of them cancels), the rest wait.
+            let mineRunning = autoRunning.contains(i)
+            autoGainButtons[i].title = mineRunning ? "Cancel" : "Auto Gain…"
+            autoGainButtons[i].isEnabled = connected && !learning
+                && (mineRunning || autoRunning.isEmpty)
+
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             let bothIds = micId != nil && instId != nil
-            gainSliders[i].isEnabled = connected && !learning && bothIds
+            gainSliders[i].isEnabled = connected && !learning && bothIds && autoRunning.isEmpty
             // the slider shows the ACTIVE mode's gain (Instrument = inst,
             // anything else = mic — the preamp applies in both Mic and
             // Instrument, only the line levels bypass it)
@@ -153,6 +189,7 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
 
         statusField.stringValue = learnStatus()
+            ?? autoGainStatus
             ?? (connected ? "" : "Not connected — waiting for Apogee Control 2 / ApogeeGlue…")
         // NOTE: no geometry work here, ever — resizing/re-centering the
         // window during a refresh cancels slider drags mid-flight
@@ -198,6 +235,9 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// running, the event stream instead feeds the capture.
     func handle(_ event: GlueClient.SetPropertyEvent) {
         if isLearning { learnHandle(event); return }
+        if AutoGainEngine.shared.isRunning {
+            AutoGainEngine.shared.noteGlueEvent(id: event.id, tag: event.tag, value: event.value)
+        }
         let t = PathIds.active
         for i in 0..<4 {
             if event.tag == 1, let id = t.hwinRefLevel[i], id == event.id,
@@ -343,8 +383,10 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     // input controls (index 0…3)
     private var inputHeaders: [NSTextField?] = []
     private var levelPopups: [NSPopUpButton] = []
+    private var gainSectionFields: [NSTextField?] = []
     private var gainSliders: [NSSlider] = []
     private var gainFields: [NSTextField] = []
+    private var autoGainButtons: [NSButton] = []
     private var phantomChecks: [NSButton] = []
     private var softLimitChecks: [NSButton] = []
     private var polarityChecks: [NSButton] = []
@@ -418,6 +460,7 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         })
 
         ig.addRow(with: (0..<4).map { _ in sectionField("GAIN") })
+        gainSectionFields = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 3).contentView as? NSTextField }
         ig.addRow(with: (0..<4).map { i in
             let sl = NSSlider(value: 0, minValue: 0, maxValue: 75, target: self,
                               action: #selector(gainSlid(_:)))
@@ -437,15 +480,29 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             return f
         })
 
+        // Auto Gain: one-time preamp calibration (AutoGain.swift). Same
+        // visibility as the gain block (Mic / Instrument only); becomes
+        // "Cancel" while a calibration runs on this input.
+        ig.addRow(with: (0..<4).map { i in
+            let b = NSButton(title: "Auto Gain…", target: self,
+                             action: #selector(autoGainClicked(_:)))
+            b.tag = 1200 + i
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 10)
+            return b
+        })
+        autoGainButtons = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 6).contentView as! NSButton }
+
         ig.addRow(with: (0..<4).map { i in check("+48V", 300 + i, #selector(boolChanged(_:))) })
-        phantomChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 6).contentView as! NSButton }
+        phantomChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 7).contentView as! NSButton }
         ig.addRow(with: (0..<4).map { i in check("Soft Limit", 400 + i, #selector(boolChanged(_:))) })
-        softLimitChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 7).contentView as! NSButton }
+        softLimitChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 8).contentView as! NSButton }
         ig.addRow(with: (0..<4).map { i in check("Polarity Ø", 500 + i, #selector(boolChanged(_:))) })
-        polarityChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 8).contentView as! NSButton }
+        polarityChecks = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 9).contentView as! NSButton }
 
         ig.addRow(with: (0..<4).map { i in learnButton(600 + i) })
-        inputLearnButtons = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 9).contentView as! NSButton }
+        inputLearnButtons = (0..<4).map { ig.cell(atColumnIndex: $0, rowIndex: 10).contentView as! NSButton }
 
         // --- OUTPUTS grid: Main Out + Headphones ---
         outputGrid = NSGridView()
@@ -491,7 +548,64 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         outTitle.font = .systemFont(ofSize: 10, weight: .bold)
         outTitle.textColor = .tertiaryLabelColor
 
-        stack.addArrangedSubview(inTitle)
+        // INPUTS header row: title + "All" button + target-level popup.
+        // "All" calibrates every Mic/Instrument input in one batch; the
+        // popup is the shared target (persisted setting, engine reads it
+        // live each nudge so a change applies to the next run).
+        let inHeader = NSStackView()
+        inHeader.orientation = .horizontal
+        inHeader.alignment = .centerY
+        inHeader.spacing = 10
+        inHeader.addArrangedSubview(inTitle)
+
+        let allButton = NSButton(title: "Auto Gain All", target: self,
+                                 action: #selector(autoGainAllClicked(_:)))
+        allButton.bezelStyle = .rounded
+        allButton.controlSize = .small
+        allButton.font = .systemFont(ofSize: 10)
+        inHeader.addArrangedSubview(allButton)
+        autoGainAllButton = allButton
+
+        let targetLabel = NSTextField(labelWithString: "target")
+        targetLabel.font = .systemFont(ofSize: 10)
+        targetLabel.textColor = .tertiaryLabelColor
+        inHeader.addArrangedSubview(targetLabel)
+
+        let targetPopup = NSPopUpButton()
+        targetPopup.target = self
+        targetPopup.action = #selector(targetChanged(_:))
+        targetPopup.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        for v in AutoGainEngine.targetOptions {
+            targetPopup.addItem(withTitle: String(format: "%.0f dBFS peak", v))
+            targetPopup.lastItem?.representedObject = v
+        }
+        selectPopupValue(targetPopup, double: AutoGainEngine.targetDBFS)
+        inHeader.addArrangedSubview(targetPopup)
+        targetPopup.autoenablesItems = true
+        inHeader.translatesAutoresizingMaskIntoConstraints = false
+        targetLevelPopup = targetPopup
+
+        // calibration time (persisted setting): how long the engine tracks
+        // before verifying — read live, applies to the next run
+        let timeLabel = NSTextField(labelWithString: "time")
+        timeLabel.font = .systemFont(ofSize: 10)
+        timeLabel.textColor = .tertiaryLabelColor
+        inHeader.addArrangedSubview(timeLabel)
+
+        let timePopup = NSPopUpButton()
+        timePopup.target = self
+        timePopup.action = #selector(timeChanged(_:))
+        timePopup.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        for v in AutoGainEngine.listenOptions {
+            timePopup.addItem(withTitle: String(format: "%.0f s", v))
+            timePopup.lastItem?.representedObject = v
+        }
+        selectPopupValue(timePopup, double: AutoGainEngine.listenSeconds)
+        inHeader.addArrangedSubview(timePopup)
+        timePopup.autoenablesItems = true
+        timeLevelPopup = timePopup
+
+        stack.addArrangedSubview(inHeader)
         stack.addArrangedSubview(ig)
         stack.addArrangedSubview(outTitle)
         stack.addArrangedSubview(og)
@@ -503,18 +617,24 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         statusField.preferredMaxLayoutWidth = 620
         stack.addArrangedSubview(statusField)
 
-        // uniform column widths
-        for grid in [ig, og] {
-            for c in 0..<grid.numberOfColumns {
-                for r in 0..<grid.numberOfRows {
-                    if let v = grid.cell(atColumnIndex: c, rowIndex: r).contentView {
-                        v.widthAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
-                    }
-                }
+        // Fixed column widths — pin every cell's contentView to the column
+        // width (same approach as OutputsWindow). NSSlider/NSTextField have
+        // no intrinsic width, and `column.width` alone does not size them:
+        // the GAIN slider and the dB field collapsed to ZERO width (knob
+        // with no track, empty field — verified by rendering this exact
+        // hierarchy offscreen; the pinned-width variant renders correctly).
+        for i in 0..<4 {
+            for r in 0..<ig.numberOfRows {
+                ig.cell(atColumnIndex: i, rowIndex: r).contentView?.widthAnchor
+                    .constraint(equalToConstant: 150).isActive = true
             }
         }
-        for i in 0..<4 { ig.column(at: i).width = 150 }
-        for i in 0..<2 { og.column(at: i).width = 150 }
+        for i in 0..<2 {
+            for r in 0..<og.numberOfRows {
+                og.cell(atColumnIndex: i, rowIndex: r).contentView?.widthAnchor
+                    .constraint(equalToConstant: 150).isActive = true
+            }
+        }
 
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 46),
@@ -554,44 +674,159 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc private func levelChanged(_ sender: NSPopUpButton) {
         let i = sender.tag - 100
-        guard !suppressActions, !isLearning, let v = sender.selectedItem?.representedObject as? Int,
+        guard !suppressActions, !isLearning, !AutoGainEngine.shared.isRunning,
+              let v = sender.selectedItem?.representedObject as? Int,
               let id = PathIds.active.hwinRefLevel[i] else { return refresh() }
         guard (1...4).contains(v) else { return refresh() }
         inputs[i].refLevel = v
         onWriteInt?(id, Int32(v))
+        // apply mode-dependent visibility + slider jump immediately —
+        // don't wait for the echo/poll to hide gain at line levels etc.
+        refresh()
     }
 
-    /// Preamp gain: writes BOTH mic and instrument values so the slider is
-    /// correct whichever mode the channel is in.
+    /// Preamp gain: writes the ACTIVE mode's gain only — mic and instrument
+    /// keep their own values, so switching modes doesn't carry the gain
+    /// over (same as Apogee Control 2).
     @objc private func gainSlid(_ sender: NSSlider) {
         let i = sender.tag - 200
-        guard !suppressActions, !isLearning else { return }
+        guard !suppressActions, !isLearning, !AutoGainEngine.shared.isRunning else { return }
+        // line modes bypass the preamp — the slider is hidden there, but a
+        // drag already in flight when the mode flips must not write
+        if let rl = inputs[i].refLevel, rl == 2 || rl == 3 { return }
         let v = min(max(sender.doubleValue, 0), 75)
         let t = PathIds.active
-        if let id = t.hwinMicGain[i] {
+        if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
+            onWriteDouble?(id, v)
+            inputs[i].instGain = v
+            QBLog.log(String(format: "console: IN %d gain -> %.2f dB (inst id %@)",
+                             i + 1, v, id.map { String(format: "%02x", $0) }.joined()))
+        } else if let id = t.hwinMicGain[i] {
             onWriteDouble?(id, v)
             inputs[i].micGain = v
             QBLog.log(String(format: "console: IN %d gain -> %.2f dB (mic id %@)",
                              i + 1, v, id.map { String(format: "%02x", $0) }.joined()))
         }
-        if let id = t.hwinInstGain[i] { onWriteDouble?(id, v); inputs[i].instGain = v }
         updateGainField(i)
     }
 
+    /// The dB field shows the ACTIVE mode's gain only — "32.0 dB", never
+    /// a "M x · I y" pair. Instrument = instSettings gain, anything
+    /// else (Mic / unknown) = micSettings gain.
     private func updateGainField(_ i: Int) {
         let st = inputs[i]
         var text = "—"
-        if let m = st.micGain, let inst = st.instGain {
-            if abs(m - inst) < 0.05 {
-                text = String(format: "%.1f dB", m)
-            } else if st.refLevel == 4 {
-                text = String(format: "I %.1f · M %.1f", inst, m)
-            } else {
-                text = String(format: "M %.1f · I %.1f", m, inst)
-            }
-        } else if let m = st.micGain { text = String(format: "%.1f dB", m) }
-        else if let inst = st.instGain { text = String(format: "%.1f dB", inst) }
+        if st.refLevel == 4 {
+            if let inst = st.instGain { text = String(format: "%.1f dB", inst) }
+        } else if let m = st.micGain {
+            text = String(format: "%.1f dB", m)
+        }
         if gainFields[i].stringValue != text { gainFields[i].stringValue = text }
+    }
+
+    // MARK: - Auto Gain (one-time preamp calibration — AutoGain.swift)
+
+    /// The Auto Gain button: start a calibration, or cancel the running
+    /// batch (any column's button cancels while one runs).
+    @objc private func autoGainClicked(_ sender: NSButton) {
+        let i = sender.tag - 1200
+        if AutoGainEngine.shared.isRunning {
+            AutoGainEngine.shared.cancelAll(reason: "cancelled")
+            return
+        }
+        startAutoGain(for: [i])
+    }
+
+    /// "Auto Gain All": calibrate every Mic/Instrument input in one batch
+    /// (line-level inputs are skipped — no preamp to calibrate).
+    @objc private func autoGainAllClicked(_ sender: NSButton) {
+        if AutoGainEngine.shared.isRunning {
+            AutoGainEngine.shared.cancelAll(reason: "cancelled")
+            return
+        }
+        let calibratable = (0..<4).filter { i in
+            if let rl = inputs[i].refLevel { return rl == 1 || rl == 4 }
+            return false
+        }
+        guard !calibratable.isEmpty else {
+            showAutoStatus("Auto Gain All — no inputs in Mic/Instrument mode", clearAfter: 8)
+            return
+        }
+        startAutoGain(for: calibratable)
+    }
+
+    /// Target-level popup (persisted; read live by the engine each nudge).
+    @objc private func targetChanged(_ sender: NSPopUpButton) {
+        guard let v = sender.selectedItem?.representedObject as? Double else { return }
+        AutoGainEngine.targetDBFS = v
+    }
+
+    /// Calibration-time popup (persisted; read live by the engine).
+    @objc private func timeChanged(_ sender: NSPopUpButton) {
+        guard let v = sender.selectedItem?.representedObject as? Double else { return }
+        AutoGainEngine.listenSeconds = v
+    }
+
+    private func startAutoGain(for indices: [Int]) {
+        guard (isGlueConnected?() ?? false) else { return }
+        var params: [AutoGainEngine.StartParams] = []
+        var skipped = 0
+        for i in indices {
+            guard let rl = inputs[i].refLevel, rl == 1 || rl == 4 else { skipped += 1; continue }
+            let t = PathIds.active
+            let gainId = rl == 4 ? t.hwinInstGain[i] : t.hwinMicGain[i]
+            let current = rl == 4 ? inputs[i].instGain : inputs[i].micGain
+            guard let gainId, let current else { skipped += 1; continue }
+            params.append(AutoGainEngine.StartParams(
+                input: i,
+                activeGainId: gainId,
+                refLevelId: t.hwinRefLevel[i],
+                currentGain: current))
+        }
+        guard !params.isEmpty else {
+            showAutoStatus("Auto Gain — no Mic/Instrument inputs ready", clearAfter: 8)
+            return
+        }
+        _ = skipped
+        AutoGainEngine.shared.start(params)
+    }
+
+    /// Engine → hardware + console state: write an input's ACTIVE mode
+    /// preamp gain (the engine clamps and floors; same plumbing as the
+    /// slider).
+    func applyAutoGain(_ i: Int, _ v: Double) {
+        let t = PathIds.active
+        let clamped = min(max(v, AutoGainEngine.minGainDB), AutoGainEngine.maxGainDB)
+        if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
+            onWriteDouble?(id, clamped)
+            inputs[i].instGain = clamped
+        } else if let id = t.hwinMicGain[i] {
+            onWriteDouble?(id, clamped)
+            inputs[i].micGain = clamped
+        }
+        refresh()
+    }
+
+    /// Show an Auto Gain line in the console's status area.
+    func showAutoStatus(_ line: String, clearAfter seconds: TimeInterval?) {
+        autoGainStatus = line
+        autoGainStatusTimer?.invalidate()
+        if let seconds {
+            autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: seconds,
+                                                       repeats: false) { [weak self] _ in
+                self?.autoGainStatus = nil
+                self?.autoGainStatusTimer = nil
+                self?.refresh()
+            }
+        }
+        refresh()
+    }
+
+    private func selectPopupValue(_ p: NSPopUpButton, double v: Double) {
+        for item in p.itemArray where (item.representedObject as? Double) == v {
+            p.select(item)
+            return
+        }
     }
 
     /// +48V / Soft Limit / Polarity (per input).
@@ -665,13 +900,21 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let field = obj.object as? NSTextField, !suppressActions, !isLearning else { return }
         if field.tag >= 250, field.tag < 254 {
-            // input gain (dB)
+            // input gain (dB) — active mode's gain only, so mic and
+            // instrument keep their own values
             let i = field.tag - 250
-            guard let db = parseDB(field.stringValue), let id = PathIds.active.hwinMicGain[i] else { return refresh() }
+            guard let db = parseDB(field.stringValue) else { return refresh() }
             let v = min(max(db, 0), 75)
-            onWriteDouble?(id, v)
-            if let inst = PathIds.active.hwinInstGain[i] { onWriteDouble?(inst, v) }
-            inputs[i].micGain = v; inputs[i].instGain = v
+            let t = PathIds.active
+            if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
+                onWriteDouble?(id, v)
+                inputs[i].instGain = v
+            } else if let id = t.hwinMicGain[i] {
+                onWriteDouble?(id, v)
+                inputs[i].micGain = v
+            } else {
+                return refresh()
+            }
             refresh()
         } else if field.tag >= 750, field.tag < 752 {
             // monitor gain (dB)
@@ -766,6 +1009,9 @@ final class ConsoleWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         learningColumn = nil
         pollTimer?.invalidate()
         pollTimer = nil
+        if AutoGainEngine.shared.isRunning {
+            AutoGainEngine.shared.cancelAll(reason: "console closed")
+        }
     }
 }
 

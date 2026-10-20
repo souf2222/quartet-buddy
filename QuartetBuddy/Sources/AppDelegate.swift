@@ -367,6 +367,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncLoginItem()
     }
 
+    /// Persist hosted plugin settings before the process goes away —
+    /// savePluginStatesNow (stop/plugin-swap/editor-close are the other
+    /// checkpoints) so the next launch restores them.
+    func applicationWillTerminate(_ notification: Notification) {
+        InsertServer.shared.savePluginStatesNow()
+    }
+
     // MARK: - Glue
 
     private func setupGlue() {
@@ -877,6 +884,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         console.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
+        }
+        // Auto Gain: the engine writes the preamp through the console's
+        // plumbing and reports its status in the console's status line
+        // (failures auto-clear, the success line lingers a while).
+        let engine = AutoGainEngine.shared
+        engine.writeGain = { i, v in ConsoleWindowController.shared.applyAutoGain(i, v) }
+        engine.onStatus = { _, line in ConsoleWindowController.shared.showAutoStatus(line, clearAfter: nil) }
+        engine.onFinished = { _, line, _ in
+            ConsoleWindowController.shared.showAutoStatus(line, clearAfter: 12)
         }
     }
 

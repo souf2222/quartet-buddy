@@ -74,8 +74,10 @@ ClassInfo state. Global: `insertBypassAll`.
   engine renders in 512-frame chunks and the chunks are assembled back
   into the 8-channel output stream.
 - Plugin choice, bypass and plugin state (ClassInfo) persist in
-  `UserDefaults` (`insertPluginDesc`, `insertPluginBypass`,
-  `insertPluginState.*`).
+  `UserDefaults` (`insertPair.N.plugin`, `.enabled`,
+  `insertPluginState.*`). The ClassInfo is saved on stop, plugin swap,
+  editor close and app quit, and restored when the plugin is
+  instantiated — so a relaunch picks up exactly where it left off.
 
 ### macOS 27.0.1 quirks (live-tested Oct 2026)
 
