@@ -13,6 +13,12 @@ volume experience — plus a few things Apogee never offered. It talks to the
 ApogeeGlue daemon directly, so you keep Apogee Control 2 installed (for
 routing) and everything stays in sync.
 
+## Screenshots
+
+![Quartet Buddy](docs/screenshots/screenshot-1.jpg)
+
+![Quartet Buddy](docs/screenshots/screenshot-2.jpg)
+
 ## Features
 
 | Feature | Details |
