@@ -466,15 +466,25 @@ final class GainKnob: NSControl {
         }
     }
 
-    // MARK: scroll wheel — hover + scroll adjusts (up = more)
+    // MARK: scroll wheel — hover + scroll adjusts
+    //   mouse wheel: INVERTED direction (wheel down = more), ~1 dB per notch
+    //   trackpad:    natural direction (up = more); precise deltas accumulate
+    //                to a whole step (values are whole numbers)
     override func scrollWheel(with event: NSEvent) {
         guard isEnabled, !isEditing else { super.scrollWheel(with: event); return }
         let dy = event.scrollingDeltaY
         guard dy != 0 else { return }
-        // accumulate precise trackpad deltas so tiny gestures still move
-        // (values are whole numbers — sub-1 deltas must add up first)
-        scrollAccum += Double(dy)
-        let threshold = event.hasPreciseScrollingDeltas ? 8.0 : 4.0
+        var threshold = 8.0
+        if event.hasPreciseScrollingDeltas {
+            scrollAccum += Double(dy)
+        } else {
+            // classic mouse wheel: inverted, and one notch ≈ one step —
+            // wheels report small non-precise deltas, so a low threshold
+            // (not the trackpad's) is what makes the wheel FEEL working
+            let d = Double(-dy)
+            scrollAccum += min(max(d, -3), 3)
+            threshold = 1.0
+        }
         while abs(scrollAccum) >= threshold {
             let dir = scrollAccum > 0 ? 1.0 : -1.0
             doubleValue += dir
@@ -1367,9 +1377,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private let cardWidth: CGFloat = 240
 
     private func build() {
-        // Window: one resizable workspace — default 1,060 × 620 (the
-        // MINIMAL width that fits all four strips + rules + margins).
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 620))
+        // Window: one resizable workspace — default 1,060 × 632: the
+        // minimal width that fits all four strips + rules + margins, and
+        // a height measured to fit EVERYTHING (header + inputs + outputs
+        // + footer ≈ 624pt) with no scrollbar at the default size.
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 632))
 
         // NATIVE background: the standard dark window material over a
         // subtle system blur — no manually simulated black overlay, no
@@ -1432,9 +1444,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // the pinned strip widths are hard requirements, not wishes
         w.minSize = NSSize(width: 1060, height: 520)
         window = w
-        // default size = the minimal width — NSWindow sizes to the
-        // contentView's fitting size otherwise, and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1060, height: 620))
+        // default size = the minimal width, measured no-scroll height —
+        // NSWindow sizes to the contentView's fitting size otherwise,
+        // and the intrinsic size is tiny
+        w.setContentSize(NSSize(width: 1060, height: 632))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
