@@ -80,6 +80,11 @@ PathIds.select(serial: serial)
 controller.isGlueConnected = { true }
 controller.onSeedTree = { tree }
 controller.updateTree(tree)
+// the four trims in every arc state: unity, attenuation, boost, deep cut
+for (i, v) in [0.0, -6.0, 3.0, -24.0].enumerated() {
+    InsertServer.shared.setTrim(i, v, notify: false)
+}
+controller.refresh()
 RunLoop.main.run(until: Date().addingTimeInterval(0.6))
 render(outPrefix + "-connected.png")
 

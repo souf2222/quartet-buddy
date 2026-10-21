@@ -676,8 +676,10 @@ final class GGLevelMeter: NSView {
 /// WHAT the value is decides how it is drawn (see `ValueKind`): a LIVE
 /// hardware reading gets the green arc, a SAVED app-side setting gets a
 /// neutral arc, and an UNKNOWN value (the device is unreachable) shows
-/// "—" with no arc at all. Green never means "there is a number here"
-/// — it means "this is a known, live value".
+/// "—" with no arc at all. A control whose arc carries its own meaning
+/// (the output trim: gray at unity, green below it, red above it)
+/// overrides the default with `arcColor` — the ARC is always the color
+/// carrier, so the number inside stays off-white.
 ///
 /// Interaction: drag vertically (up = more, ⇧ = slower), arrow keys step
 /// ±1, double-click the number to type an exact value into an inline
@@ -709,9 +711,12 @@ final class GainKnob: NSControl {
     }
     /// True when a value is known (live or saved).
     private var hasValue: Bool { valueKind != .unknown }
-    /// Optional override tint for the value text — e.g. red as the clip
-    /// warning on positive output trim.
-    var valueTint: NSColor? { didSet { needsDisplay = true } }
+    /// The ARC's color, when the control's own state decides it (the
+    /// output trim: gray at unity, green below it, red above it). nil =
+    /// the default for the value's kind — green for a live reading,
+    /// neutral for a saved setting. The number inside the knob always
+    /// stays off-white: the ARC is the color carrier.
+    var arcColor: NSColor? { didSet { needsDisplay = true } }
 
     private var _value: Double = 0
     /// Values are WHOLE numbers — the setter rounds (display + writes).
@@ -823,9 +828,11 @@ final class GainKnob: NSControl {
         arc(Self.sweepAngle).stroke()
         let f = hasValue ? fraction : 0
         if f > 0.002, enabled {
-            // GREEN is reserved for a LIVE, known value; a SAVED setting
-            // (the output trim) rides a neutral arc.
-            let arcColor: NSColor = valueKind == .live ? GGTheme.knobArc : GGTheme.knobSavedArc
+            // GREEN is the default for a LIVE, known value; a SAVED
+            // setting rides a neutral arc — unless the control's own
+            // state says otherwise (the trim's level scale).
+            let arcColor = self.arcColor
+                ?? (valueKind == .live ? GGTheme.knobArc : GGTheme.knobSavedArc)
             arcColor.setStroke()
             arc(CGFloat(f) * Self.sweepAngle).stroke()
         }
@@ -838,11 +845,9 @@ final class GainKnob: NSControl {
 
         // LAYER 4 — the value: off-white, tabular, with an EXPLICIT sign
         // (+ positive, - negative, bare 0 at zero) and its "dB" unit
-        // UNDER it. No value known: "—" alone, no unit. Disabled:
-        // still READABLE.
-        let text: NSColor = hasValue
-            ? (valueTint ?? GGTheme.knobValue)
-            : GGTheme.muted
+        // UNDER it. No value known: "—" alone, no unit. The number
+        // never changes color — the ARC is the color carrier.
+        let text: NSColor = hasValue ? GGTheme.knobValue : GGTheme.muted
         let n = Int(doubleValue)   // whole numbers only — the setter rounds
         let valueString = hasValue
             ? (n > 0 ? "+\(n)" : n < 0 ? "\(n)" : "0")
@@ -2200,12 +2205,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             let trim = server.trim(i)
             if trimKnobs[i].doubleValue != trim { trimKnobs[i].doubleValue = trim }
-            // red value text as the clip warning on boosted trim
-            trimKnobs[i].valueTint = trim > 0.5 ? GGTheme.red : nil
             // the trim is a SAVED app-side setting — a real, applied
             // value, but not a hardware reading (the caption above the
-            // knob says so, and the arc stays neutral)
+            // knob says so)
             trimKnobs[i].valueKind = .saved
+            // The ARC carries the level: gray at unity (0 dB), green
+            // below it (attenuation — the safe direction), red above it
+            // (boost — it can clip). The number stays off-white.
+            trimKnobs[i].arcColor = Self.trimArcColor(trimKnobs[i].doubleValue)
         }
 
         // MONITOR
@@ -4214,8 +4221,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let i = sender.tag - 2600
         let v = sender.doubleValue   // already whole (knob rounds)
         InsertServer.shared.setTrim(i, v, notify: false)
-        // red value text as the clip warning on boosted trim
-        trimKnobs[i].valueTint = v > 0.5 ? GGTheme.red : nil
+        // the ARC carries the level — it follows the drag live
+        trimKnobs[i].arcColor = Self.trimArcColor(v)
+    }
+
+    /// The trim's arc color: gray at unity (0 dB), green BELOW it
+    /// (attenuation — the safe direction), red ABOVE it (boost — it can
+    /// clip). The number inside the knob stays off-white.
+    private static func trimArcColor(_ v: Double) -> NSColor {
+        v < 0 ? GGTheme.green : v > 0 ? GGTheme.red : GGTheme.knobSavedArc
     }
 
     // Monitor actions
