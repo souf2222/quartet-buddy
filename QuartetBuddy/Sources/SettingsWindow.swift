@@ -107,14 +107,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         w.contentView = content
         w.delegate = self
         w.center()
+        // One cohesive dark surface — matches Quartet Control's theme and
+        // keeps the sidebar readable in every system appearance.
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.backgroundColor = NSColor(calibratedWhite: 0.15, alpha: 1)
         window = w
     }
 
+    /// Sidebar: same dark family as the content area (a shade darker, like
+    /// System Settings), light text, and a clear selected-row pill.
     private func makeSidebar() -> NSView {
         let sidebar = NSView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor(white: 0.94, alpha: 1).cgColor
+        sidebar.layer?.backgroundColor = NSColor(calibratedWhite: 0.125, alpha: 1).cgColor
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -128,53 +134,92 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             stack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
         ])
         for pane in Pane.allCases {
+            // Full-width row: the row carries the selected highlight, the
+            // button stays transparent — a recessed bezel would fight it.
+            let row = NSView()
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.wantsLayer = true
+            row.layer?.cornerRadius = 6
             let b = NSButton(title: "\(pane.icon)  \(pane.title)", target: self,
                              action: #selector(sidebarClicked(_:)))
-            b.bezelStyle = .recessed
+            b.isBordered = false
             b.alignment = .left
             b.tag = pane.rawValue
             b.font = .systemFont(ofSize: 13, weight: .medium)
-            stack.addArrangedSubview(b)
+            b.contentTintColor = NSColor(calibratedWhite: 0.92, alpha: 1)
+            b.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(b)
+            NSLayoutConstraint.activate([
+                b.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 10),
+                b.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                row.heightAnchor.constraint(equalToConstant: 30),
+            ])
+            stack.addArrangedSubview(row)
+            // equal widths — every pill spans the sidebar's content width
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            paneRows[pane] = row
             sidebarButtons[pane] = b
         }
         return sidebar
     }
 
-    /// A pane = title + scrollable stack body (pinned 20/24 insets).
+    /// Sidebar rows (the highlight carriers).
+    private var paneRows: [Pane: NSView] = [:]
+
+    /// A pane = title + body, pinned directly under the title. Only the
+    /// Shortcuts table scrolls — everything else fits and must hug its
+    /// content (a scroll view around a plain NSView stretches it, which
+    /// pushed the controls down and showed a phantom scrollbar).
     private func makePane(_ pane: Pane) -> NSView {
         let v = NSView()
         v.translatesAutoresizingMaskIntoConstraints = false
         let title = NSTextField(labelWithString: pane.title)
         title.font = .systemFont(ofSize: 19, weight: .semibold)
+        title.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
         title.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(title)
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: v.topAnchor, constant: 20),
+            title.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
+        ])
         let body = NSStackView()
         body.orientation = .vertical
         body.alignment = .leading
-        body.spacing = 10
+        body.spacing = 12
         body.translatesAutoresizingMaskIntoConstraints = false
         bodyViews[pane] = body
-        let scroll = NSScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.hasVerticalScroller = true
-        let doc = NSView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(body)
-        scroll.documentView = doc
-        v.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: v.topAnchor, constant: 18),
-            title.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
-            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
-            scroll.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
-            scroll.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -16),
-            scroll.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -16),
-            body.topAnchor.constraint(equalTo: doc.topAnchor),
-            body.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            body.trailingAnchor.constraint(lessThanOrEqualTo: doc.trailingAnchor),
-            body.bottomAnchor.constraint(lessThanOrEqualTo: doc.bottomAnchor),
-            doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-        ])
+        body.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+
+        if pane == .shortcuts {
+            // The table can outgrow the window — this one pane scrolls.
+            let doc = NSView()
+            doc.translatesAutoresizingMaskIntoConstraints = false
+            doc.addSubview(body)
+            let scroll = NSScrollView()
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+            scroll.documentView = doc
+            v.addSubview(scroll)
+            NSLayoutConstraint.activate([
+                scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
+                scroll.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
+                scroll.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -24),
+                scroll.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -16),
+                body.topAnchor.constraint(equalTo: doc.topAnchor),
+                body.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
+                body.trailingAnchor.constraint(lessThanOrEqualTo: doc.trailingAnchor),
+                doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            ])
+        } else {
+            // Top-pinned, hugs its content — no expanding gap, no scrollbar.
+            v.addSubview(body)
+            NSLayoutConstraint.activate([
+                body.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
+                body.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
+                body.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -24),
+            ])
+        }
         switch pane {
         case .general: buildGeneral(into: body)
         case .shortcuts: buildShortcuts(into: body)
@@ -188,6 +233,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var bodyViews: [Pane: NSStackView] = [:]
 
+    /// Full-width divider (NSBox separators hug intrinsic width inside a
+    /// .leading stack — pin them to the body's width explicitly).
+    private func addDivider(to body: NSStackView) {
+        let sep = separator()
+        body.addArrangedSubview(sep)
+        sep.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+    }
+
     @objc private func sidebarClicked(_ sender: NSButton) {
         guard let pane = Pane(rawValue: sender.tag) else { return }
         selectPane(pane)
@@ -196,8 +249,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private func selectPane(_ pane: Pane) {
         currentPane = pane
         for (p, view) in paneViews { view.isHidden = p != pane }
+        for (p, row) in paneRows {
+            row.layer?.backgroundColor = (p == pane)
+                ? NSColor(white: 1, alpha: 0.10).cgColor   // clear selected pill
+                : NSColor.clear.cgColor
+        }
         for (p, button) in sidebarButtons {
-            button.font = .systemFont(ofSize: 13, weight: p == pane ? .bold : .medium)
+            button.font = .systemFont(ofSize: 13, weight: p == pane ? .semibold : .medium)
         }
     }
 
@@ -206,11 +264,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var loginCheck: NSButton!
 
     private func buildGeneral(into body: NSStackView) {
-        body.addArrangedSubview(sectionLabel("Launch at Login"))
+        body.addArrangedSubview(sectionLabel("Startup"))
         loginCheck = NSButton(checkboxWithTitle: "Launch Quartet Buddy at login", target: self,
                               action: #selector(loginChanged(_:)))
         body.addArrangedSubview(loginCheck)
-        body.addArrangedSubview(separator())
+        addDivider(to: body)
+        // Debug log lives in its own Troubleshooting group.
+        body.addArrangedSubview(sectionLabel("Troubleshooting"))
         let logButton = NSButton(title: "Open Debug Log…", target: self,
                                   action: #selector(openLog(_:)))
         body.addArrangedSubview(logButton)
@@ -267,7 +327,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         body.addArrangedSubview(shortcutStack)
 
         // footer
-        body.addArrangedSubview(separator())
+        addDivider(to: body)
         globalCheck = NSButton(checkboxWithTitle: "Enable global shortcuts", target: self,
                                action: #selector(globalToggled(_:)))
         body.addArrangedSubview(globalCheck)
@@ -353,7 +413,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Rebuild the shortcut table: groups in catalog order, disclosure
     /// headers, action rows (record button + clear + global checkbox).
     private func rebuildShortcuts() {
-        guard let shortcuts, let shortcutStack, window?.isVisible == true else { return }
+        guard let shortcuts, let shortcutStack else { return }
         globalCheck.state = shortcuts.globalEnabled ? .on : .off
         volStepLabel.stringValue = String(format: "%.1f dB", shortcuts.volumeStep)
         fineStepLabel.stringValue = String(format: "%.1f dB", shortcuts.fineStep)
@@ -508,7 +568,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         momentaryCheck = NSButton(checkboxWithTitle: "Momentary mode (hold to talk)",
                                   target: self, action: #selector(momentaryChanged(_:)))
         body.addArrangedSubview(momentaryCheck)
-        body.addArrangedSubview(separator())
+        addDivider(to: body)
         body.addArrangedSubview(sectionLabel("MIDI Trigger"))
         midiLearnButton = NSButton(title: "Learn MIDI Button…", target: self,
                                     action: #selector(midiLearn(_:)))
@@ -605,7 +665,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         name.font = .systemFont(ofSize: 16, weight: .semibold)
         body.addArrangedSubview(name)
         body.addArrangedSubview(secondary("Version 0.2 (2)"))
-        body.addArrangedSubview(separator())
+        addDivider(to: body)
         body.addArrangedSubview(secondary(
             "Menubar companion for the Apogee Quartet — monitoring, talkback,\n" +
             "routing, AU plug-ins and Auto Gain, driven through ApogeeGlue.\n"))
