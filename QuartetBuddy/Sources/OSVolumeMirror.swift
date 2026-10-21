@@ -13,12 +13,15 @@ import CoreAudio
 ///  • volume — bound BOTH ways: enforce(_:) copies the hardware level onto
 ///    the slider (glue tree + echoes), and onSliderMoved applies OS slider
 ///    moves to the fader. Volume writes are driver-safe (proven over hours).
-///  • mute — ONE way only: onMuteChanged applies OS mute changes (F10,
-///    Control Center) to the hardware mute. The app never writes the OS
-///    mute: doing so wedged the Apogee driver (CoreAudio 'what' errors on
-///    every volume write until the Quartet was power-cycled — live-tested
-///    incident, Oct 18 2026). Cosmetic side effect: mutes done in Apogee
-///    Control 2 / on the touchscreen don't update the macOS mute display.
+///  • mute — OS changes (F10, Control Center) apply to the hardware mute.
+///    The OS mute is written only on a volume-target switch
+///    (syncMuteAfterSwitch(to:)), so the macOS mute display follows the
+///    newly selected output — RISK NOTED: a mute write wedged the Apogee
+///    driver once (CoreAudio 'what' errors on every volume write until the
+///    Quartet was power-cycled — live-tested incident, Oct 18 2026), so the
+///    write is single, guarded and loudly logged, with an absorb-only
+///    fallback if it fails. Cosmetic side effect remains: mutes done in
+///    Apogee Control 2 / on the touchscreen don't update the macOS mute display.
 final class OSVolumeMirror {
 
     /// Fired on the main thread with the slider's new level in dB.
@@ -48,13 +51,18 @@ final class OSVolumeMirror {
     /// *now* (muting the just-switched-to output — observed Oct 19 2026).
     /// See muteChanged().
     private var lastMute: Bool?
-    /// True after a volume-target switch: the OS mute flag is stale — it
-    /// still reflects the PREVIOUS target's last F10 state (the app never
-    /// writes the OS mute; Oct 18 driver wedge). The next OS mute change
-    /// is that stale state being cleared (user's first F10 press, or
-    /// macOS auto-unmuting on a volume write), NOT a mute request for the
-    /// newly selected output. Absorb it. Observed live Oct 19 2026:
-    /// muting Main Out then switching muted the Headphones.
+    /// The OS mute state the mirror is waiting for after a target switch
+    /// (see syncMuteAfterSwitch(to:)). While set, mute notifications are
+    /// absorbed until one matches — they are the macOS auto-unmute (volume
+    /// write) plus our own mute write echoing back, never a real F10 press.
+    private var absorbUntilMute: Bool?
+    /// True after a volume-target switch whose OS mute write FAILED: the OS
+    /// mute flag is stale — it still reflects the PREVIOUS target's last F10
+    /// state. The next OS mute change is that stale state being cleared
+    /// (user's first F10 press, or macOS auto-unmuting on a volume write),
+    /// NOT a mute request for the newly selected output. Absorb it.
+    /// Observed live Oct 19 2026: muting Main Out then switching muted the
+    /// Headphones.
     private var absorbNextMuteChange = false
     private var systemListenerProc: AudioObjectPropertyListenerProc?
     private var retryTimer: Timer?
@@ -182,20 +190,73 @@ final class OSVolumeMirror {
         onSliderMoved?(db)
     }
 
-    /// Volume-target switch (Main Out ↔ Headphones): arm the absorb latch.
-    /// The OS mute flag still carries the OLD target's state and cannot be
-    /// written (driver wedge, Oct 18) — the next OS mute change is stale
-    /// cleanup, never a real mute request for the newly selected output.
+    /// Fallback (absorb-only, no OS mute write): arm the latch so the next
+    /// OS mute change — the previous output's stale state being cleared —
+    /// is absorbed instead of applied to the newly selected output.
     func noteTargetSwitch() {
         absorbNextMuteChange = true
+    }
+
+    /// Volume-target switch (Main Out ↔ Headphones): make the macOS mute
+    /// display match the newly selected output by writing the OS mute flag
+    /// once. RISK NOTED: a mute write wedged the driver once (Oct 18 2026) —
+    /// so this is a single, loudly-logged write, and on failure it falls
+    /// back to the absorb-only latch (noteTargetSwitch) instead.
+    ///
+    /// While absorbing (absorbUntilMute), the notifications expected are
+    /// the macOS auto-unmute from our own volume write plus this write's
+    /// own echo — never a real F10 press, which can't get through the
+    /// main-queue backlog ahead of them.
+    func syncMuteAfterSwitch(to m: Bool) {
+        guard let dev = device() else {
+            noteTargetSwitch()
+            return
+        }
+        // Already matching (or unreadable): nothing to write, nothing to
+        // absorb — arming a latch here would eat the user's next real F10.
+        guard let current = Self.readMute(from: dev) else { return noteTargetSwitch() }
+        guard current != m else {
+            lastMute = m
+            return
+        }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute,
+                                               mScope: kAudioDevicePropertyScopeOutput,
+                                               mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(dev, &addr) else { return noteTargetSwitch() }
+        // Absorb everything until the flag settles on the requested state.
+        absorbUntilMute = m
+        var v: UInt32 = m ? 1 : 0
+        let err = AudioObjectSetPropertyData(dev, &addr, 0, nil,
+                                             UInt32(MemoryLayout<UInt32>.size), &v)
+        if err == noErr {
+            lastMute = m
+            QBLog.log("mute sync: OS mute -> \(m ? "on" : "off") after target switch")
+        } else {
+            // Oct 18 wedge signature ('what!', 'who!') — say it loudly.
+            QBLog.log(String(format: "mute sync: OS mute write FAILED (HAL %d) — %#04x — falling back to absorb-only", err, err))
+            absorbUntilMute = nil
+            absorbNextMuteChange = true
+        }
     }
 
     private func muteChanged() {
         guard let dev = device(),
               let m = Self.readMute(from: dev) else { return }
-        // Target just switched: this change clears the previous output's
-        // stale OS mute (first F10 press, macOS volume-write auto-unmute).
-        // Applying it muted/unmuted the just-switched-to output (Oct 19).
+        // Target just switched and the OS mute write succeeded: absorb the
+        // notifications until the flag settles on the requested state —
+        // they are our own volume-write auto-unmute + mute write echoing
+        // back, not real F10 requests (Oct 19: delivering them muted or
+        // unmuted the just-switched-to output).
+        if let expected = absorbUntilMute {
+            lastMute = m
+            if m == expected { absorbUntilMute = nil }
+            QBLog.log("mute sync: absorbed OS mute (\(m ? "on" : "off")) settling after target switch")
+            return
+        }
+        // Target just switched and the OS mute write FAILED: this change
+        // clears the previous output's stale OS mute (first F10 press,
+        // macOS volume-write auto-unmute). Applying it muted/unmuted the
+        // just-switched-to output (Oct 19).
         if absorbNextMuteChange {
             absorbNextMuteChange = false
             lastMute = m
@@ -303,13 +364,17 @@ final class OSVolumeMirror {
         return v == 1
     }
 
-    /// Write the level onto the slider. Prefers VolumeDecibels (the HAL then
-    /// applies its own taper); falls back to VolumeScalar using the HAL's
-    /// square-law taper: scalar = (normalized dB)².
+    /// Write the level onto the slider. Writes BOTH VolumeDecibels and
+    /// VolumeScalar — the macOS UI reads the scalar, and the Apogee driver
+    /// does not always propagate a decibels write to it (observed live
+    /// Oct 20 2026: after a volume-target switch the macOS slider stayed at
+    /// the previous output's level until the scalar was written directly).
+    /// The scalar uses the HAL's square-law taper: scalar = (normalized dB)².
     static func write(decibels db: Double, to dev: AudioDeviceID) -> Bool {
         var dbAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeDecibels,
                                                 mScope: kAudioDevicePropertyScopeOutput,
                                                 mElement: kAudioObjectPropertyElementMain)
+        var wroteDecibels = false
         var settable = DarwinBoolean(false)
         if AudioObjectHasProperty(dev, &dbAddr),
            AudioObjectIsPropertySettable(dev, &dbAddr, &settable) == noErr,
@@ -317,10 +382,11 @@ final class OSVolumeMirror {
             var v = Float32(db)
             if AudioObjectSetPropertyData(dev, &dbAddr, 0, nil,
                                           UInt32(MemoryLayout<Float32>.size), &v) == noErr {
-                return true
+                wroteDecibels = true
             }
         }
-        // fallback: VolumeScalar, square-law taper
+        // scalar — same square-law taper, written ALWAYS so the macOS
+        // slider tracks even when the driver drops the decibels write
         // (a 'who!' error here means the control is gone entirely — flagged)
         var lo = -64.0, hi = 0.0
         var rAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeRangeDecibels,
@@ -336,7 +402,8 @@ final class OSVolumeMirror {
         let norm = min(1, max(0, (db - lo) / (hi - lo)))
         var s = Float32(norm * norm)
         var sAddr = volumeAddress()
-        return AudioObjectSetPropertyData(dev, &sAddr, 0, nil,
-                                          UInt32(MemoryLayout<Float32>.size), &s) == noErr
+        let scalarOK = AudioObjectSetPropertyData(dev, &sAddr, 0, nil,
+                                                  UInt32(MemoryLayout<Float32>.size), &s) == noErr
+        return wroteDecibels || scalarOK
     }
 }
