@@ -68,7 +68,7 @@ enum ShortcutAction: String, CaseIterable {
     case outputTrimDown
     case editOutputTrim
     case openSourceSelector
-    case toggleIncludeSource
+    case cycleStage
 
     // Inputs (app-only by default)
     case selectInput1
@@ -110,7 +110,7 @@ enum ShortcutAction: String, CaseIterable {
         case .bypassAllPlugins, .toggleInsert, .bypassSelectedOutput, .openSelectedPlugin:
             return "Plug-ins"
         case .selectOutput1, .selectOutput2, .selectOutput3, .selectOutput4,
-             .outputTrimUp, .outputTrimDown, .editOutputTrim, .openSourceSelector, .toggleIncludeSource:
+             .outputTrimUp, .outputTrimDown, .editOutputTrim, .openSourceSelector, .cycleStage:
             return "Outputs & Routing"
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4,
              .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
@@ -161,7 +161,7 @@ enum ShortcutAction: String, CaseIterable {
         case .outputTrimDown: return "Output trim down"
         case .editOutputTrim: return "Edit output trim"
         case .openSourceSelector: return "Open source selector"
-        case .toggleIncludeSource: return "Toggle include source processing"
+        case .cycleStage: return "Cycle source signal stage"
         case .selectInput1: return "Select Analog In 1"
         case .selectInput2: return "Select Analog In 2"
         case .selectInput3: return "Select Analog In 3"
@@ -199,7 +199,7 @@ enum ShortcutAction: String, CaseIterable {
         case .toggleInsert, .bypassSelectedOutput, .openSelectedPlugin: return false
         case .selectOutput1, .selectOutput2, .selectOutput3, .selectOutput4: return false
         case .outputTrimUp, .outputTrimDown, .editOutputTrim,
-             .openSourceSelector, .toggleIncludeSource: return false
+             .openSourceSelector, .cycleStage: return false
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4: return false
         case .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
              .autoGainAllInputs, .cancelAutoGain, .toggleSoftLimit, .togglePolarity: return false

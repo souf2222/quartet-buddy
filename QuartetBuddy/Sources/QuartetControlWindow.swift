@@ -54,7 +54,7 @@ import AppKit
 /// the position.
 /// Color is meaning:
 /// system accent for focus/selection and the neutral functions (Ø, SUM,
-/// Include, plug-in enable); green only for Soft Limit + the live value
+/// plug-in enable); green only for Soft Limit + the live value
 /// arcs; amber for 48V/DIM; red for Mute + clipping. Everything else is
 /// quiet.
 ///
@@ -77,7 +77,7 @@ enum GGTheme {
     static let muted = NSColor.tertiaryLabelColor
 
     /// The ONE interaction color — the system accent (focus, selection,
-    /// and the neutral active functions: Ø, SUM, Include, plug-in enable,
+    /// and the neutral active functions: Ø, SUM, plug-in enable,
     /// Auto Gain running).
     static let accent = NSColor.controlAccentColor
 
@@ -1120,6 +1120,102 @@ final class ChevronView: NSControl {
     }
 }
 
+// MARK: - Grouped source menu (the output strip's SOURCE control)
+
+/// The output strip's SOURCE selector — a popup-style button whose menu
+/// carries TWO independent selections, separated by a divider:
+///
+///     Source                    one checkmark per section
+///     Playback 1–2                ✓ marks the routed source
+///     Playback 3–4
+///     …
+///     Silence
+///     ─────────────────────
+///     Pre-FX                      ✓ marks the tap point on the
+///     Post-FX                       SOURCE's chain (mirrors only)
+///     Post-Trim
+///
+/// Picking a source never resets the stage; picking a stage never
+/// changes the source. The closed control reads "Playback 3–4 ·
+/// Post-FX" so the two selections are both visible (for own sources the
+/// stage section is absent — there is no separate chain to tap — and
+/// the title is just the source). Drawn flat like every other control
+/// here, with a hand-drawn chevron: the native popup bezel would fight
+/// the window's material.
+final class SourceMenuButton: NSControl {
+
+    var title: String = "" { didSet { needsDisplay = true } }
+    private var hovering = false
+
+    /// Bezel geometry — wide enough for the combined title
+    /// ("Playback 3–4 · Post-Trim"), flat and compact like the popup
+    /// control it replaces.
+    static let size = NSSize(width: 160, height: 20)
+
+    override var intrinsicContentSize: NSSize { Self.size }
+
+    init(target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        self.target = target
+        self.action = action
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: Self.size.width).isActive = true
+        heightAnchor.constraint(equalToConstant: Self.size.height).isActive = true
+        toolTip = "Source · tap point on the source's chain"
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for t in trackingAreas { removeTrackingArea(t) }
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .activeAlways],
+                                       owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
+
+    // popup buttons open on mouse DOWN and from performClick alike
+    override func mouseDown(with event: NSEvent) { _ = sendAction(action, to: target) }
+    override func performClick(_ sender: Any?) { _ = sendAction(action, to: target) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // bezel — flat fill that lifts on hover, hairline border
+        let bezel = NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5)
+        (hovering && isEnabled ? NSColor.controlBackgroundColor
+            .blended(withFraction: 0.12, of: NSColor.white) ?? NSColor.controlBackgroundColor
+            : NSColor.controlBackgroundColor).setFill()
+        bezel.fill()
+        NSColor.separatorColor.setStroke()
+        bezel.stroke()
+
+        // title — truncated tail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let textRect = NSRect(x: bounds.minX + 7,
+                              y: bounds.midY - 8,
+                              width: bounds.width - 22,
+                              height: 16)
+        NSAttributedString(string: title, attributes: attrs)
+            .draw(with: textRect, options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin])
+
+        // chevron — the same small stroke the disclosure chevrons use
+        NSColor.secondaryLabelColor.setStroke()
+        let cx = bounds.maxX - 10
+        let cy = bounds.midY
+        let c = NSBezierPath()
+        c.move(to: NSPoint(x: cx - 2.5, y: cy + 1.5))
+        c.line(to: NSPoint(x: cx, y: cy - 1.5))
+        c.line(to: NSPoint(x: cx + 2.5, y: cy + 1.5))
+        c.lineWidth = 1.2
+        c.lineCapStyle = .round
+        c.lineJoinStyle = .round
+        c.stroke()
+    }
+}
+
 // MARK: - Function-accent controls (idle = flat neutral gray, engaged = flat accent)
 
 /// Base for the per-function controls. Fully custom-drawn NSButtons — the
@@ -1196,7 +1292,7 @@ class FunctionButton: NSButton {
     override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
 }
 
-/// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM / Include): OFF =
+/// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM): OFF =
 /// the shared flat neutral treatment, ON = the function's flat accent
 /// fill + near-black label — the color IS the state indicator (no
 /// checkmark). Compact, rounded like a native small button.
@@ -2203,21 +2299,17 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 nameFields[i].stringValue = display
             }
 
-            let srcPopup = sourcePopups[i]
-            srcPopup.removeAllItems()
-            for src in InsertServer.sourceOptions(i) {
-                srcPopup.addItem(withTitle: InsertServer.sourceLabel(src, for: i))
-                srcPopup.lastItem?.representedObject = src.rawValue
-            }
-            srcPopup.selectItem(at: srcPopup.indexOfItem(withObjectValue: server.source(i).rawValue).getOrElse { 0 })
-
-            // "Include source processing" — mirrored sources only.
-            let mirrored = server.source(i).copyIndex != nil && server.source(i) != .off
-            let include = includeChecks[i]
-            include.isHidden = !mirrored
-            if mirrored {
-                include.state = server.mirrorPre(i) ? .off : .on
-            }
+            // SOURCE — the grouped control displays BOTH selections:
+            // "Playback 3–4 · Post-FX" (for own sources and Off there
+            // is no separate chain to tap, so it's just the source).
+            // No item juggling here — the menu is rebuilt when it opens.
+            let srcBtn = sourceMenus[i]
+            let srcTitle = InsertServer.sourceLabel(server.source(i), for: i)
+            // mirrored sources have a separate chain to tap and show the
+            // stage in the closed title; own sources and Off don't
+            let stageTitle: String? = server.source(i).copyIndex == nil
+                ? nil : server.stage(i).label
+            srcBtn.title = stageTitle.map { "\(srcTitle) · \($0)" } ?? srcTitle
 
             // Processing slot — ONE component carries the whole state:
             // the plug-in's short name (or "Add Plug-in…" when empty)
@@ -2632,8 +2724,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // routing cards (index 0…3)
     private var nameFields: [NSTextField] = []
-    private var sourcePopups: [NSPopUpButton] = []
-    private var includeChecks: [NSButton] = []
+    private var sourceMenus: [SourceMenuButton] = []
     private var pluginSlots: [PluginSlotView] = []
     private var trimKnobs: [GainKnob] = []
 
@@ -3447,17 +3538,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// rules as the inputs. Each strip reads as the actual SIGNAL PATH,
     /// top to bottom, with thin quiet connectors between the stages:
     ///
-    ///     [ Playback 1–2 ▾ ]      the SOURCE
-    ///     [ ] Include source processing
+    ///     [ Playback 3–4 · Pre-FX ▾ ]    SOURCe + tap point (one menu,
+    ///                                    two sections with one
+    ///                                    checkmark each)
     ///           ↓
     ///     Audio FX          Trim  the two processing stages
     ///     [ Add Plug-in… ] → ( 0 dB )
     ///                    ↓
     ///                Out 1–2      the HARDWARE destination, last
     ///
-    /// The source selector sits at the head of the path and the physical
-    /// output pair at its end — the destination is no longer spelled out
-    /// beside the source, where it read as a bypass of Audio FX and Trim.
+    /// The grouped source menu replaces the old source dropdown +
+    /// "Include source processing" checkbox — the checkbox row is gone,
+    /// so the source and the Audio FX stages sit closer together. For
+    /// mirrored sources the menu's second section picks the tap point
+    /// on the SOURCE's chain (Pre-FX / Post-FX / Post-Trim); own
+    /// sources have no separate chain to tap, so the section is absent.
     /// The plug-in slot is ONE hover-reveal control (the name ⇄ power |
     /// open | browse) and the trim is a knob; empty and loaded slots
     /// share identical dimensions.
@@ -3513,15 +3608,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(headerRow)
             nf.widthAnchor.constraint(lessThanOrEqualTo: col.widthAnchor).isActive = true
 
-            // SOURCE — the head of the path: a compact native dropdown
-            // naming where the audio comes from.
-            let sp = NSPopUpButton()
-            sp.target = self
-            sp.action = #selector(sourceChanged(_:))
+            // SOURCE — the head of the path: a grouped popup-style
+            // button naming BOTH selections (source · tap point).
+            let sp = SourceMenuButton(target: self,
+                                      action: #selector(showSourceMenu(_:)))
             sp.tag = 2100 + i
-            sp.font = NSFont.systemFont(ofSize: 11)
-            sp.controlSize = .small
-            sp.widthAnchor.constraint(equalToConstant: 124).isActive = true
             let srcRow = NSStackView()
             srcRow.orientation = .horizontal
             srcRow.alignment = .centerY
@@ -3537,39 +3628,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             srcRow.addArrangedSubview(srcGap)
             col.addArrangedSubview(srcRow)
             srcRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
-            sourcePopups.append(sp)
-
-            // "Include source processing" — a real CHECKBOX directly
-            // beneath the source selector, in a reserved option row of
-            // the SAME height in all four columns, so the processing
-            // stages below line up. (Direct sources keep the row empty —
-            // it never collapses.) The reserved height is the CHECKBOX's
-            // own height — no magic number.
-            let inc = NSButton(checkboxWithTitle: "Include source processing", target: self,
-                               action: #selector(includeChanged(_:)))
-            inc.tag = 2200 + i
-            inc.font = NSFont.systemFont(ofSize: 11)
-            inc.controlSize = .small
-            inc.toolTip = "Mirror this output AFTER the source’s plug-in"
-            let incRow = NSView()
-            incRow.translatesAutoresizingMaskIntoConstraints = false
-            incRow.addSubview(inc)
-            NSLayoutConstraint.activate([
-                inc.leadingAnchor.constraint(equalTo: incRow.leadingAnchor),
-                inc.centerYAnchor.constraint(equalTo: incRow.centerYAnchor),
-            ])
-            // the reservation follows the checkbox, so the row is
-            // exactly as tall as it needs to be — in every column
-            incRow.heightAnchor.constraint(equalTo: inc.heightAnchor).isActive = true
-            col.addArrangedSubview(incRow)
-            includeChecks.append(inc)
+            sourceMenus.append(sp)
 
             // CONNECTOR — the path drops from the source into the
             // processing stages. Thin and quiet: a hairline, no box. It
             // hangs under the MIDDLE of the source selector — the same
             // axis as the plug-in slot below it, so the chain reads
             // straight down. It is SHORT: a connector between nearby
-            // stages, not a row of its own.
+            // stages, not a row of its own. It sits close under the
+            // menu now that the checkbox row is gone.
             let dropIn = FlowArrow(.down)
             let dropHolder = NSView()
             dropHolder.translatesAutoresizingMaskIntoConstraints = false
@@ -3581,7 +3648,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 dropIn.topAnchor.constraint(equalTo: dropHolder.topAnchor),
                 dropIn.bottomAnchor.constraint(equalTo: dropHolder.bottomAnchor),
             ])
-            col.setCustomSpacing(3, after: incRow)
+            col.setCustomSpacing(3, after: srcRow)
             col.setCustomSpacing(3, after: dropHolder)
 
             // BODY — the two processing stages, side by side: Audio FX
@@ -4183,21 +4250,68 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         QBLog.log("control: routing edit started the plug-in insert")
     }
 
-    @objc private func sourceChanged(_ sender: NSPopUpButton) {
+    @objc private func showSourceMenu(_ sender: SourceMenuButton) {
         let i = sender.tag - 2100
-        guard !suppressActions, let raw = sender.selectedItem?.representedObject as? String,
+        let server = InsertServer.shared
+        let menu = NSMenu()
+
+        // SECTION 1 — the source (own playback, the other pairs, silence)
+        for src in InsertServer.sourceOptions(i) {
+            let item = NSMenuItem(title: InsertServer.sourceLabel(src, for: i),
+                                  action: #selector(sourceMenuItemChosen(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.tag = i                    // the menu item carries the
+            item.representedObject = src.rawValue
+            item.state = server.source(i) == src ? .on : .off
+            menu.addItem(item)
+        }
+
+        // SECTION 2 — the tap point on the SELECTED SOURCE's chain.
+        // Mirrors only: an own source is a raw playback stream, and the
+        // stages below the selector here are the DESTINATION's own
+        // controls — never offered. All three stages always stay
+        // enabled (a source without a plug-in or trim simply sounds
+        // identical on the adjacent stages).
+        if server.source(i).copyIndex != nil {
+            menu.addItem(.separator())
+            for stage in [InsertServer.MirrorStage.pre, .postFX, .postTrim] {
+                let item = NSMenuItem(title: stage.label,
+                                      action: #selector(stageMenuItemChosen(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.tag = i
+                item.representedObject = stage.rawValue
+                item.state = server.stage(i) == stage ? .on : .off
+                menu.addItem(item)
+            }
+        }
+
+        // below the button (the view is NOT flipped — "below" is negative y)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -2), in: sender)
+    }
+
+    /// A choice from the source menu's SOURCE section (tag = the output
+    /// pair, representedObject = the PairSource raw value).
+    @objc private func sourceMenuItemChosen(_ item: NSMenuItem) {
+        let i = item.tag
+        guard !suppressActions,
+              let raw = item.representedObject as? String,
               let src = InsertServer.PairSource(rawValue: raw) else { return refresh() }
         InsertServer.shared.setSource(i, src)
         ensureInsertRunning()
         refresh()
     }
 
-    /// "Include source processing" — on = mirror AFTER the source's plug-in
-    /// (destination inherits its processing); off = before (raw channels).
-    @objc private func includeChanged(_ sender: NSButton) {
-        let i = sender.tag - 2200
-        guard !suppressActions else { return refresh() }
-        InsertServer.shared.setMirrorPre(i, sender.state == .off)
+    /// A choice from the source menu's STAGE section (tag = the output
+    /// pair, representedObject = the MirrorStage raw value). Selecting
+    /// a stage never touches the source.
+    @objc private func stageMenuItemChosen(_ item: NSMenuItem) {
+        let i = item.tag
+        guard !suppressActions,
+              let raw = item.representedObject as? String,
+              let stage = InsertServer.MirrorStage(rawValue: raw) else { return refresh() }
+        InsertServer.shared.setStage(i, stage)
         ensureInsertRunning()
         refresh()
     }
@@ -4619,13 +4733,21 @@ extension QuartetControlController {
     }
 
     func shortcutOpenSourceSelector() {
-        sourcePopups[selectedOutputIndex].performClick(nil)
+        sourceMenus[selectedOutputIndex].performClick(nil)
     }
 
-    func shortcutToggleIncludeSource() {
+    /// Cycle the selected strip's tap point Pre-FX → Post-FX →
+    /// Post-Trim → Pre-FX (mirrors only — own sources have no separate
+    /// chain to tap).
+    func shortcutCycleStage() {
         let i = selectedOutputIndex
-        includeChecks[i].state = includeChecks[i].state == .on ? .off : .on
-        includeChanged(includeChecks[i])
+        let server = InsertServer.shared
+        guard server.source(i).copyIndex != nil else { return }
+        let all: [InsertServer.MirrorStage] = [.pre, .postFX, .postTrim]
+        let next = all[(all.firstIndex(of: server.stage(i)).getOrElse { 0 } + 1) % all.count]
+        server.setStage(i, next)
+        ensureInsertRunning()
+        refresh()
     }
 
     func shortcutBypassSelectedOutput() {

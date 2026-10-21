@@ -617,7 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .outputTrimDown: control.shortcutOutputTrim(up: false, step: 1)
         case .editOutputTrim: control.shortcutEditOutputTrim()
         case .openSourceSelector: control.shortcutOpenSourceSelector()
-        case .toggleIncludeSource: control.shortcutToggleIncludeSource()
+        case .cycleStage: control.shortcutCycleStage()
 
         // Inputs (selected card)
         case .selectInput1: control.selectInput(0)
