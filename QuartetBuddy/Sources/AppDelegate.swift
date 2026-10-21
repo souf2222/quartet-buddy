@@ -214,8 +214,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// persisted across sessions.
     var selectedOutput: OutputTarget {
         didSet {
-            osSlider.noteTargetSwitch()   // stale OS mute must not leak to the new target
             syncMacSlider(force: true)    // slider follows whichever output is bound
+            if gainKnown {
+                // macOS mute display follows the newly selected output too
+                // (writes the OS mute once — see OSVolumeMirror.syncMuteAfterSwitch)
+                osSlider.syncMuteAfterSwitch(to: muted[selectedOutput] ?? false)
+            } else {
+                osSlider.noteTargetSwitch()   // pre-tree: stale OS mute must not leak
+            }
             refreshMenu()
         }
     }
@@ -296,8 +302,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The macOS mute changed (F10, Control Center): apply it to the
-    /// Quartet's hardware mute. One-way by design — see OSVolumeMirror's
-    /// header for why the app never writes the OS mute.
+    /// Quartet's hardware mute. Normally one-way (see OSVolumeMirror's
+    /// header); the one exception is a target switch, where the OS mute is
+    /// written once so the macOS display matches the newly selected output.
     private func osMuteChanged(to m: Bool) {
         guard !PathIdSetupController.shared.sessionActive,
               !QuartetControlController.shared.isLearning else { return }   // a capture is listening
