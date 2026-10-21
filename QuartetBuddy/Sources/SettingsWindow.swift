@@ -192,6 +192,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         if pane == .shortcuts {
             // The table can outgrow the window — this one pane scrolls.
+            // The document view is FULLY chained to the body (top, leading,
+            // trailing AND bottom) and width-locked to the clip view, so its
+            // height derives from the table — without the bottom link Auto
+            // Layout cannot size a plain NSView document and the scroll view
+            // renders it zero-height (empty pane) with its own background as
+            // a stray darker rectangle.
             let doc = NSView()
             doc.translatesAutoresizingMaskIntoConstraints = false
             doc.addSubview(body)
@@ -199,6 +205,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             scroll.translatesAutoresizingMaskIntoConstraints = false
             scroll.hasVerticalScroller = true
             scroll.autohidesScrollers = true
+            scroll.drawsBackground = false
+            scroll.backgroundColor = .clear
             scroll.documentView = doc
             v.addSubview(scroll)
             NSLayoutConstraint.activate([
@@ -208,8 +216,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 scroll.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -16),
                 body.topAnchor.constraint(equalTo: doc.topAnchor),
                 body.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-                body.trailingAnchor.constraint(lessThanOrEqualTo: doc.trailingAnchor),
+                body.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
+                body.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
                 doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+                // content fills at least the visible area, never a stub.
+                doc.heightAnchor.constraint(
+                    greaterThanOrEqualTo: scroll.contentView.heightAnchor),
             ])
         } else {
             // Top-pinned, hugs its content — no expanding gap, no scrollbar.
