@@ -289,12 +289,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     // MARK: - General
 
     private var loginCheck: NSButton!
+    private var invertScrollCheck: NSButton!
+
+    /// UserDefaults key: when true, scrolling DOWN on a knob increases
+    /// the value (classic mouse-wheel convention — "wheel down = more"),
+    /// the reverse of the natural trackpad direction. Read live by
+    /// GainKnob.scrollWheel.
+    static let invertScrollKey = "invertKnobScroll"
 
     private func buildGeneral(into body: NSStackView) {
         body.addArrangedSubview(sectionLabel("Startup"))
         loginCheck = NSButton(checkboxWithTitle: "Launch Quartet Buddy at login", target: self,
                               action: #selector(loginChanged(_:)))
         body.addArrangedSubview(loginCheck)
+        addDivider(to: body)
+        // Knob behavior — the scroll-direction preference, live-read by
+        // the control window's knobs (no restart needed).
+        body.addArrangedSubview(sectionLabel("Knobs"))
+        invertScrollCheck = NSButton(
+            checkboxWithTitle: "Invert scroll direction (wheel down = more)",
+            target: self, action: #selector(invertScrollChanged(_:)))
+        invertScrollCheck.state = UserDefaults.standard.bool(forKey: Self.invertScrollKey) ? .on : .off
+        invertScrollCheck.toolTip = "Reverses scrolling on the gain/trim/level knobs.\n\nOff (natural): scroll up = more.\nOn (classic wheel): scroll down = more."
+        body.addArrangedSubview(invertScrollCheck)
+        let invertSub = NSTextField(labelWithString:
+            "Applies to the scroll wheel on every knob in Quartet Control (gain, trim, monitor level).")
+        invertSub.textColor = .secondaryLabelColor
+        invertSub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(invertSub)
         addDivider(to: body)
         // Debug log lives in its own Troubleshooting group.
         body.addArrangedSubview(sectionLabel("Troubleshooting"))
@@ -717,6 +739,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard !midiSuppress else { return }
         UserDefaults.standard.set(sender.state == .on, forKey: "momentary")
         NotificationCenter.default.post(name: .init("qb.momentaryChanged"), object: nil)
+    }
+
+    /// Knob scroll-direction preference — GainKnob reads the default
+    /// live, so no restart/rebuild is needed.
+    @objc private func invertScrollChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: Self.invertScrollKey)
+        QBLog.log("settings: knob scroll inverted = \(sender.state == .on)")
     }
 
     @objc private func midiLearn(_ sender: NSButton) {

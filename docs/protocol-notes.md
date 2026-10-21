@@ -202,6 +202,29 @@ tree change. Consequences:
 Switching a line level (2/3) auto-disables phantom. Mic↔Instrument
 selection also swaps which PreModelQuartet gain the hardware applies.
 
+## Device sample rate (WRITABLE via Glue — live-verified Oct 21 2026)
+
+The device node itself carries a `samplerate` property (JUCE double):
+
+```
+<quartet1528B15CEE547FA … samplerate="44100.0" …>
+```
+
+* path-id: java31 hash of `/dev/<serial>/samplerate`, LE
+  (this unit: `32f2cf89`)
+* write: `setProperty` (type 3, flag 0), var-tag `4` (double), 8-byte LE value.
+* Glue echoes the setProperty back, updates its tree, **and applies the new
+  clock to the Quartet hardware** — live test `tools/sample_rate_write.py`:
+  wrote 48000 over Glue, tree flipped 44100→48000 and CoreAudio's
+  `Current SampleRate` followed to 48000 (verified via system_profiler).
+  Restore to the previous rate works identically.
+* Supported rates come from CoreAudio
+  (`kAudioDevicePropertyAvailableNominalSampleRanges`) — the tree does not
+  list them.
+* Apogee Control 2 exposes no sample-rate UI, but the property is a fully
+  functional device-side write, unlike the display-only CoreAudio master
+  volume.
+
 ## Notes
 
 * Record size field = data length (excludes keybyte and chk).

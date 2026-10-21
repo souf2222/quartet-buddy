@@ -1040,10 +1040,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (failures auto-clear, the success line lingers a while).
         let engine = AutoGainEngine.shared
         engine.writeGain = { i, v in QuartetControlController.shared.applyAutoGain(i, v) }
-        engine.onStatus = { _, line in QuartetControlController.shared.showAutoStatus(line, clearAfter: nil) }
-        engine.onFinished = { _, line, success in
-            QuartetControlController.shared.showAutoStatus(line, clearAfter: 12,
-                                                           kind: success ? .success : .warning)
+        engine.onStatus = { _, line, detail, remaining in
+            QuartetControlController.shared.showAutoStatus(line, clearAfter: nil, detail: detail,
+                                                           remaining: remaining)
+        }
+        engine.onFinished = { _, line, detail, gain, outcome in
+            QuartetControlController.shared.showAutoGainResult(line, detail: detail,
+                                                               gain: gain, outcome: outcome)
         }
     }
 

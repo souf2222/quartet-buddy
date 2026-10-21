@@ -295,6 +295,7 @@ final class InsertServer: NSObject {
         }
         let quartetUID = try Self.deviceUID(quartet)
         sampleRate = Self.deviceRate(quartet)
+        installRateListener(on: quartet)
 
         // 1) the tap: stereo mix of everything bound for the Quartet's
         //    output stream 0, except this process, muted at the hardware.
@@ -364,6 +365,7 @@ final class InsertServer: NSObject {
     }
 
     private func teardown() {
+        removeRateListener()
         if let ioProcID {
             AudioDeviceStop(aggregateID, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateID, ioProcID)
@@ -541,6 +543,140 @@ final class InsertServer: NSObject {
     func enabled(_ i: Int) -> Bool { pairs[i].enabled }
     /// Current device sample rate (48000 by default before start).
     func currentRate() -> Double { sampleRate }
+
+    // MARK: - Device-wide sample rate (title-bar dropdown)
+
+    /// Rates the Quartet driver typically advertises (Hz) — used when
+    /// the device is unreachable or lists nothing.
+    private static let quartetRateFallback: [Double] = [44100, 48000, 88200, 96000, 176400, 192000]
+
+    /// The Quartet's LIVE hardware rate read straight from Core Audio —
+    /// the actual active value, not the last one we requested.
+    static func deviceSampleRate() -> Double? {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return nil }
+        return deviceRate(dev)
+    }
+
+    /// Sample rates the Quartet hardware advertises (Hz, ascending).
+    static func availableSampleRates() -> [Double] {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return quartetRateFallback }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyAvailableNominalSampleRates,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(0)
+        guard AudioObjectGetPropertyDataSize(dev, &addr, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioValueRange>.size) else { return quartetRateFallback }
+        var ranges = [AudioValueRange](repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &ranges) == noErr else {
+            return quartetRateFallback
+        }
+        // discrete ranges (min == max) are exact; continuous ranges get
+        // expanded to the standard family within their bounds
+        let standard: [Double] = [44100, 48000, 88200, 96000, 176400, 192000]
+        var rates = Set<Double>()
+        for r in ranges {
+            if r.mMinimum > 0, r.mMinimum == r.mMaximum {
+                rates.insert(r.mMinimum)
+            } else {
+                rates.formUnion(standard.filter { $0 >= r.mMinimum && $0 <= r.mMaximum })
+            }
+        }
+        let list = rates.sorted()
+        return list.isEmpty ? quartetRateFallback : list
+    }
+
+    /// Ask the device for a new rate; true when Core Audio accepted it
+    /// (the HAL applies the change asynchronously).
+    @discardableResult
+    static func setDeviceSampleRate(_ rate: Double) -> Bool {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return false }
+        var r = rate
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(dev, &addr, 0, nil,
+                                          UInt32(MemoryLayout<Double>.size), &r) == noErr
+    }
+
+    // MARK: - Sample-rate change → insert restart
+
+    /// The Quartet device our rate listener is attached to (0 = none).
+    private var rateListenerDev: AudioObjectID = 0
+
+    /// Fires on the Quartet's nominal-rate property — anything can change
+    /// the clock (our dropdown, Apogee Control, Audio MIDI Setup), and the
+    /// insert's aggregate + tap are built against the OLD rate: the IO
+    /// cycle then renders at the wrong pitch/buffer and audio breaks.
+    /// Recovery = restart the insert (same as a buffer-size change):
+    /// plugin state is saved on teardown and reloaded on start.
+    private let rateListenerProc: AudioObjectPropertyListenerProc = { _, _, _, refCon in
+        guard let refCon else { return noErr }
+        let myself = Unmanaged<InsertServer>.fromOpaque(refCon).takeUnretainedValue()
+        myself.rateChanged()
+        return noErr
+    }
+
+    private func installRateListener(on dev: AudioObjectID) {
+        // build() runs on every start — never stack duplicate listeners
+        removeRateListener()
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectAddPropertyListener(dev, &addr, rateListenerProc,
+                                             Unmanaged.passUnretained(self).toOpaque()) == noErr else {
+            QBLog.log("insert: rate listener install failed — no auto-restart on rate change")
+            return
+        }
+        rateListenerDev = dev
+    }
+
+    private func removeRateListener() {
+        guard rateListenerDev != 0 else { return }
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        AudioObjectRemovePropertyListener(rateListenerDev, &addr, rateListenerProc,
+                                          Unmanaged.passUnretained(self).toOpaque())
+        rateListenerDev = 0
+    }
+
+    /// Property-listener callback (audio thread) → bounce to the main queue.
+    private func rateChanged() {
+        DispatchQueue.main.async { [weak self] in self?.restartIfRateChanged() }
+    }
+
+    /// When the Quartet's clock moved: rebuild the insert against the new
+    /// rate (stop → start). No-op when the change already matches our
+    /// cache (e.g. our own restart just settled), and safe when not
+    /// running. `start()` re-reads the rate into the cache.
+    func restartIfRateChanged() {
+        let live = rateListenerDev != 0 ? Self.deviceRate(rateListenerDev)
+                                        : Self.deviceSampleRate() ?? sampleRate
+        guard abs(live - sampleRate) > 0.5 else { return }
+        let wasRunning = running
+        if wasRunning {
+            QBLog.log("insert: sample rate \(Int(sampleRate)) → \(Int(live)) Hz — restarting insert")
+            stop()
+        }
+        sampleRate = live
+        if wasRunning {
+            start()
+            // start() re-reads the rate; keep the cache truthful if the
+            // clock settles again mid-rebuild
+            if let live = Self.deviceSampleRate(), abs(live - sampleRate) > 0.5 {
+                sampleRate = live
+            }
+            onStateChange?()
+        }
+    }
+
+    /// Re-read the hardware rate into the insert's cached sampleRate so
+    /// buffer-size labels and logs stay truthful after a change — and
+    /// restart the insert if the clock actually moved.
+    func refreshRate() {
+        restartIfRateChanged()
+        onStateChange?()
+    }
 
     // MARK: - The IO cycle
 

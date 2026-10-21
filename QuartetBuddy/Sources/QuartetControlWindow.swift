@@ -9,12 +9,18 @@ import AppKit
 ///     input configuration → playback routing & processing → listening level
 ///
 /// Three regions share one window (never tabs — everything stays visible):
-///   • Inputs             — four identical analog-input cards
-///   • Outputs & Routing  — four stereo-output cards (same 4-column grid)
-///   • Monitor            — a fixed strip: Main Speakers + Headphones
+///   • Title bar          — the app title + the connected device name
+///   • Monitor bar        — Speakers + Headphones monitoring (knob, glyph,
+///                          M/D/∑) on the left; Talkback · Mute-All ·
+///                          Settings on the right. Directly under the
+///                          title bar — the controls you reach for most
+///                          never scroll away.
+///   • Inputs / Outputs   — four analog-input cards + four stereo-output
+///                          cards (same 4-column grid), in a scroll view
 ///
-/// The Inputs and Outputs sections live in a scroll view; the Monitor strip
-/// is pinned to the bottom so everyday listening controls never scroll away.
+/// The Inputs and Outputs sections live in a scroll view and HUG their
+/// content (no stretched empty bands); a slim feedback strip is pinned
+/// to the bottom.
 ///
 /// Visual direction: NATIVE macOS — a standard Golden Gate window, not a
 /// custom glass dashboard. Standard window frame, traffic lights, system
@@ -61,34 +67,61 @@ enum GGTheme {
     static let accent = NSColor.controlAccentColor
 
     // Function accents — flat fills when engaged, neutral otherwise.
+    // ONE job per color:
+    //   blue   — selection, focus, enabled processing
+    //   green  — knob arcs + healthy-signal meters (+ talkback)
+    //   cyan   — enabled Soft Limit
+    //   purple — enabled polarity (Ø)
+    //   amber  — enabled DIM
+    //   red    — enabled 48V, active mute, errors
+    //   gray   — everything inactive
 
+    /// Green — knob value arcs, healthy-signal meters, talkback.
+    static let green = hex("46C58A")
     /// Cyan — Soft Limit engaged.
     static let cyan = hex("50D8F4")
-    /// Green — healthy-signal meters; Talkback active.
-    static let green = hex("46C58A")
-    /// Amber — 48V + DIM engaged.
+    /// Purple — polarity (Ø) engaged.
+    static let purple = hex("B08CFF")
+    /// Amber — DIM engaged.
     static let amber = hex("E7AE49")
-    /// Red — Mute engaged, global mute, clipping warnings.
+    /// Red — 48V engaged, Mute engaged, global mute, clipping warnings.
     static let red = hex("E3636D")
     static let warning = red
 
     /// Near-black label ON flat accent fills.
     static let darkText = hex("101318")
 
-    // Knob — the app's one custom control.
+    // The Auto Gain scanning light — flat, crisp, pixel-like.
 
-    /// Thin, subdued 270° track — the system separator gray.
-    static let knobTrack = NSColor.separatorColor
-    /// The green value arc — the setting, not the live signal.
-    static let knobArc = hex("65D98B")
+    /// The bright head of the scan — pale electric blue.
+    static let scanHead = hex("A8E4FF")
+    /// The trail behind the head — medium blue, fading by OPACITY into
+    /// the background (no glow, no blur).
+    static let scanTrail = hex("3FA9F5")
+    /// The row when the gain is applied — the app's green.
+    static let scanDone = green
+    /// The row when something went wrong — the app's amber.
+    static let scanFail = amber
+
+    // Knob — the app's one custom control (one component, two sizes).
+
+    /// The UNFILLED arc — a subdued DARK gray (not a white ring): the
+    /// quiet remainder of the dial.
+    static let knobTrack = NSColor(white: 1, alpha: 0.16)
+    /// The green value arc — the setting, not the live signal. The SAME
+    /// green as every other "active" green in the app.
+    static let knobArc = green
+    /// The numeric value inside the knob — off-white, tabular numerals.
+    static let knobValue = NSColor(white: 0.94, alpha: 1)
 
     // Idle custom controls — quiet, system-adjacent neutrals.
 
-    static let idleFill = NSColor(white: 1, alpha: 0.08)
+    static let idleFill = NSColor(white: 1, alpha: 0.10)
     static let idleBorder = NSColor.separatorColor
     static let idleLabel = NSColor.secondaryLabelColor
-    static let hoverFill = NSColor(white: 1, alpha: 0.13)
-    /// DISABLED function controls — dimmer than idle-but-available.
+    static let hoverFill = NSColor(white: 1, alpha: 0.16)
+    /// DISABLED function controls — dimmer than idle-but-available (an
+    /// available-but-off button must never look unusable).
     static let subduedFill = NSColor(white: 1, alpha: 0.04)
     /// Recessed areas — plug-in well, meter bed.
     static let inset = NSColor(white: 0, alpha: 0.18)
@@ -183,15 +216,250 @@ final class SelectLabel: NSTextField {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
+/// Bundled monochrome icon assets (flaticon PNGs in assets/: speaker,
+/// headphones, microphone-black-shape, mute, unmute). Drawn tint-only —
+/// the PNG's own dark fill is replaced by the caller's color via a
+/// source-in compositing pass — and cached per name + appearance +
+/// resolved tint (the tints are dynamic label colors).
+enum GGIconAsset {
+    private static var cache: [String: NSImage] = [:]
+
+    static func tinted(_ name: String, _ tint: NSColor) -> NSImage? {
+        let appearance = NSApp?.effectiveAppearance.name.rawValue ?? "none"
+        let rgb = tint.usingColorSpace(.deviceRGB)
+        let key = "\(name)|\(appearance)|\(rgb?.redComponent ?? 0)-\(rgb?.greenComponent ?? 0)-\(rgb?.blueComponent ?? 0)-\(rgb?.alphaComponent ?? 1)"
+        if let hit = cache[key] { return hit }
+        guard let raw = Bundle.main.image(forResource: name) else { return nil }
+        let size = raw.size
+        let tinted = NSImage(size: size)
+        tinted.lockFocus()
+        raw.draw(in: NSRect(origin: .zero, size: size))
+        tint.set()
+        NSRect(origin: .zero, size: size).fill(using: .sourceIn)
+        tinted.unlockFocus()
+        cache[key] = tinted
+        return tinted
+    }
+
+    /// Aspect-fit draw of a bundled icon, tinted, centered in `rect`
+    /// (the icon's own aspect ratio is preserved).
+    static func draw(_ name: String, tint: NSColor, in rect: NSRect) {
+        guard let icon = tinted(name, tint) else { return }
+        let s = icon.size
+        guard s.width > 0, s.height > 0 else { return }
+        let scale = min(rect.width / s.width, rect.height / s.height)
+        let w = s.width * scale, h = s.height * scale
+        icon.draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+    }
+}
+
+/// The Auto Gain SCANNING LIGHT — ONE thick row of square blocks across
+/// the button, with a small bright head travelling over them. The blocks
+/// FADE: each one lights up as the head reaches it and dims again as it
+/// moves on, so the light fades to the right and then fades back to the
+/// left. Flat and crisp — the "light" is only color + opacity: no glow,
+/// no blur, no gradients, no image assets.
+///
+/// The whole thing runs on CORE ANIMATION (GPU-composited) — there is
+/// no timer and no per-frame redraw, so it costs (almost) no CPU.
+final class GGScanLight: NSView {
+
+    enum Mode { case idle, scanning }
+
+    /// The gap between blocks.
+    private static let gap: CGFloat = 1.5
+    private static let cornerRadius: CGFloat = 5
+    /// One there-and-back sweep, in seconds.
+    private static let cycle: CFTimeInterval = 2.0
+    /// How long a block takes to fade out after the head passes it.
+    private static let decay: CFTimeInterval = 0.5
+    /// The dim level of a block the head hasn't reached.
+    private static let dim: CGFloat = 0.12
+
+    private var mode: Mode = .idle
+    private var cellLayers: [CALayer] = []
+    private var headLayer: CALayer?
+    private var cellImage: CGImage?
+    private var headImage: CGImage?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.cornerRadius = Self.cornerRadius
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    // MARK: - geometry
+
+    /// ONE thick row: the blocks are square and chunky, sized from the
+    /// button's height.
+    private var blockSize: CGFloat { max(6, min(16, bounds.height * 0.58)) }
+    private var headSize: CGFloat { blockSize * 0.6 }
+    private var pitch: CGFloat { blockSize + Self.gap }
+    /// How many blocks fit across the button.
+    private var cellCount: Int { max(3, Int((bounds.width + Self.gap) / pitch)) }
+    /// How far the head travels (the button's width).
+    private var travel: CGFloat { max(1, bounds.width - headSize) }
+
+    // MARK: - artwork
+
+    /// A single square block.
+    private func renderBlock(size: CGFloat, color: NSColor) -> CGImage? {
+        guard size > 0 else { return nil }
+        let img = NSImage(size: NSSize(width: size, height: size))
+        img.lockFocus()
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: size, height: size),
+                     xRadius: 1.5, yRadius: 1.5).fill()
+        img.unlockFocus()
+        return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    override func layout() {
+        super.layout()
+        guard let host = layer else { return }
+        host.cornerRadius = Self.cornerRadius
+
+        cellImage = renderBlock(size: blockSize, color: GGTheme.scanTrail)
+        headImage = renderBlock(size: headSize, color: GGTheme.scanHead)
+
+        // the blocks — ONE row, evenly pitched across the button
+        while cellLayers.count > cellCount {
+            cellLayers.removeLast().removeFromSuperlayer()
+        }
+        while cellLayers.count < cellCount {
+            let l = CALayer()
+            host.addSublayer(l)
+            cellLayers.append(l)
+        }
+        let y = (bounds.height - blockSize) / 2
+        for (i, l) in cellLayers.enumerated() {
+            l.contents = cellImage
+            l.anchorPoint = CGPoint(x: 0, y: 0.5)
+            l.frame = CGRect(x: CGFloat(i) * pitch, y: y, width: blockSize, height: blockSize)
+            l.opacity = Float(Self.dim)
+        }
+
+        // the head — a small bright square on top
+        if headLayer == nil {
+            let h = CALayer()
+            host.addSublayer(h)
+            headLayer = h
+        }
+        headLayer?.contents = headImage
+        headLayer?.anchorPoint = CGPoint(x: 0, y: 0.5)
+        headLayer?.frame = CGRect(x: 0, y: (bounds.height - headSize) / 2,
+                                  width: headSize, height: headSize)
+
+        if mode == .scanning { startAnimations() }
+    }
+
+    // MARK: - states
+
+    /// Start (or keep) the sweep. Idempotent — the engine reports status
+    /// ~10×/s, and restarting the sweep each time would jump the head
+    /// back to the start.
+    func startScanning() {
+        guard mode != .scanning else { return }
+        mode = .scanning
+        layer?.opacity = 1
+        startAnimations()
+    }
+
+    /// Dark — the light is off (the button shows its normal surface).
+    func setIdle() {
+        guard mode != .idle else { return }
+        mode = .idle
+        for l in cellLayers { l.removeAnimation(forKey: "fade") }
+        headLayer?.removeAnimation(forKey: "travel")
+        layer?.opacity = 0
+    }
+
+    var isScanning: Bool { mode == .scanning }
+
+    // MARK: - the animations (all on the render server)
+
+    /// The head travels across and back at a constant speed, and every
+    /// block fades UP as the head reaches it and back DOWN as it leaves —
+    /// so the light fades to the right, then fades back to the left.
+    private func startAnimations() {
+        let half = Self.cycle / 2
+        let travel = Double(self.travel)
+
+        // the head's sweep (linear, so the arrival times below are exact)
+        let move = CAKeyframeAnimation(keyPath: "position.x")
+        move.values = [0, travel, 0]
+        move.keyTimes = [0, 0.5, 1]
+        move.duration = Self.cycle
+        move.repeatCount = .infinity
+        move.isRemovedOnCompletion = false
+        move.fillMode = .forwards
+        headLayer?.add(move, forKey: "travel")
+
+        // each block's fade — bright at the moment the head passes it
+        for (i, l) in cellLayers.enumerated() {
+            let x = Double(i) * Double(pitch)
+            let tRight = min(half, (x / travel) * half)     // going right
+            let tLeft = Self.cycle - tRight                  // coming back
+            var times: [Double] = []
+            var values: [CGFloat] = []
+            // a BRIGHT key at the same instant wins over a dim one
+            func addBright(_ t: Double) {
+                let c = min(max(t, 0), Self.cycle)
+                if let last = times.last, c <= last + 0.0001 {
+                    values[values.count - 1] = 1.0
+                    return
+                }
+                times.append(c)
+                values.append(1.0)
+            }
+            func addDim(_ t: Double) {
+                let c = min(max(t, 0), Self.cycle)
+                if let last = times.last, c <= last + 0.0001 { return }
+                times.append(c)
+                values.append(Self.dim)
+            }
+            addDim(0)
+            addBright(tRight)
+            addDim(min(tRight + Self.decay, tLeft))
+            addBright(tLeft)
+            addDim(min(tLeft + Self.decay, Self.cycle))
+            if times.last ?? 0 < Self.cycle - 0.0001 { addDim(Self.cycle) }
+
+            let anim = CAKeyframeAnimation(keyPath: "opacity")
+            anim.values = values
+            anim.keyTimes = times.map { NSNumber(value: $0 / Self.cycle) }
+            anim.duration = Self.cycle
+            anim.repeatCount = .infinity
+            anim.isRemovedOnCompletion = false
+            anim.fillMode = .forwards
+            anim.calculationMode = .linear
+            l.add(anim, forKey: "fade")
+        }
+    }
+}
+
 /// A small monochrome glyph beside a monitor group's title — speaker
-/// (Main Speakers) or headphones. 14pt, quiet secondary color.
+/// (Main Speakers) or headphones. Configurable size (14pt default, the
+/// monitor groups use the full mute-button height), quiet secondary color.
 final class TinyGlyphView: NSView {
     enum Glyph { case speaker, headphones }
     private let glyph: Glyph
+    private let side: CGFloat
 
-    init(_ glyph: Glyph) {
+    /// Optional click handler (the monitor groups open their
+    /// "Learn Control…" menu from the glyph).
+    var onClick: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    init(_ glyph: Glyph, side: CGFloat = 14) {
         self.glyph = glyph
-        super.init(frame: NSRect(x: 0, y: 0, width: 14, height: 14))
+        self.side = side
+        super.init(frame: NSRect(x: 0, y: 0, width: side, height: side))
         setContentHuggingPriority(.required, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -199,7 +467,7 @@ final class TinyGlyphView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 14, height: 14) }
+    override var intrinsicContentSize: NSSize { NSSize(width: side, height: side) }
     override func draw(_ dirtyRect: NSRect) {
         let color = GGTheme.softGray
         let u = bounds.width / 16
@@ -209,8 +477,11 @@ final class TinyGlyphView: NSView {
         color.setStroke()
         switch glyph {
         case .speaker:
-            // classic speaker + one sound wave (after flaticon
-            // speaker_650504), optically centered in the 16-space
+            // bundled flaticon artwork (assets/speaker.png), tinted to the
+            // quiet secondary color, aspect-fit in the box
+            GGIconAsset.draw("speaker", tint: color, in: bounds)
+            guard GGIconAsset.tinted("speaker", color) == nil else { return }
+            // fallback if the asset is ever missing: speaker + one sound wave
             NSBezierPath(rect: NSRect(x: ox + 2.5 * u, y: oy + 6 * u,
                                       width: 3 * u, height: 4 * u)).fill()
             let cone = NSBezierPath()
@@ -227,7 +498,11 @@ final class TinyGlyphView: NSView {
             wave.lineCapStyle = .round
             wave.stroke()
         case .headphones:
-            // band over the top + two ear pads
+            // bundled flaticon artwork (assets/headphones.png), tinted to
+            // the quiet secondary color, aspect-fit in the box
+            GGIconAsset.draw("headphones", tint: color, in: bounds)
+            guard GGIconAsset.tinted("headphones", color) == nil else { return }
+            // fallback: band over the top + two ear pads
             let band = NSBezierPath()
             band.appendArc(withCenter: pt(8, 8.5), radius: 6 * u,
                            startAngle: 20, endAngle: 160, clockwise: false)
@@ -293,14 +568,6 @@ final class GainKnob: NSControl {
     var sendsContinuously = true
     /// False while no value is known (device offline) — draws "—".
     var hasValue = true { didSet { needsDisplay = true } }
-    /// Monitor knobs are larger and ALSO show a small "dB" beneath the
-    /// value; gain/trim knobs show only the number.
-    var showsUnit = false {
-        didSet {
-            editorY?.constant = showsUnit ? 4 : 3
-            needsDisplay = true
-        }
-    }
     /// Optional override tint for the value text — e.g. red as the clip
     /// warning on positive output trim.
     var valueTint: NSColor? { didSet { needsDisplay = true } }
@@ -318,6 +585,7 @@ final class GainKnob: NSControl {
     let valueField = NSTextField()
     private var isEditing = false
     private var editorY: NSLayoutConstraint?
+    private var fieldWidth: NSLayoutConstraint?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -332,12 +600,21 @@ final class GainKnob: NSControl {
         valueField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(valueField)
         editorY = valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 3)
+        fieldWidth = valueField.widthAnchor.constraint(equalToConstant: 44)
         NSLayoutConstraint.activate([
             valueField.centerXAnchor.constraint(equalTo: centerXAnchor),
             editorY!,
-            valueField.widthAnchor.constraint(equalToConstant: 44),
+            fieldWidth!,
             valueField.heightAnchor.constraint(equalToConstant: 18),
         ])
+    }
+
+    /// The editor is never wider than the knob it sits in.
+    override func layout() {
+        super.layout()
+        if let fieldWidth {
+            fieldWidth.constant = min(44, max(24, bounds.width - 4))
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
@@ -351,7 +628,12 @@ final class GainKnob: NSControl {
 
     // MARK: geometry — the 270° dial scales with bounds
     private var trackRadius: CGFloat { bounds.width / 2 - 1.5 }
-    private static let stroke: CGFloat = 2.5
+    /// Stroke weight scales with the dial (a 52-pt knob = 2.5, a 40-pt
+    /// one = 1.9) so a smaller knob doesn't read as a fat ring.
+    private var stroke: CGFloat { max(1.6, bounds.width / 52 * 2.5) }
+    /// Type scale — the value/unit follow the dial's size (never smaller
+    /// than 78%, so the number stays readable on a 32-pt dial).
+    private var typeScale: CGFloat { max(0.78, min(bounds.width / 52, 1)) }
     /// Track: start 7:30 (225°), sweep 270° clockwise to 4:30 (-45°).
     private static let startAngle: CGFloat = 225
     private static let sweepAngle: CGFloat = 270
@@ -360,10 +642,9 @@ final class GainKnob: NSControl {
         maxValue > minValue ? (doubleValue - minValue) / (maxValue - minValue) : 0
     }
 
-    // MARK: drawing — the dial arcs + ONLY the number inside (no dB)
+    // MARK: drawing — the dial arcs + the number inside
     override func draw(_ dirtyRect: NSRect) {
         let enabled = isEnabled
-        let alpha: CGFloat = enabled ? 1 : 0.45
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
 
         func arc(_ sweep: CGFloat) -> NSBezierPath {
@@ -371,42 +652,37 @@ final class GainKnob: NSControl {
             p.appendArc(withCenter: c, radius: trackRadius,
                         startAngle: Self.startAngle,
                         endAngle: Self.startAngle - sweep, clockwise: true)
-            p.lineWidth = Self.stroke
+            p.lineWidth = stroke
             p.lineCapStyle = .butt
             return p
         }
 
-        // subdued track + green value arc — the SETTING, not live signal
-        GGTheme.knobTrack.withAlphaComponent(alpha).setStroke()
+        // DARK GRAY unfilled track (the quiet remainder) + the green
+        // value arc — the SETTING, not the live signal. Disabled: a
+        // neutral gray track, no green.
+        let track = enabled ? GGTheme.knobTrack
+            : NSColor(white: 1, alpha: 0.09)
+        track.setStroke()
         arc(Self.sweepAngle).stroke()
         let f = hasValue ? fraction : 0
-        if f > 0.002 {
-            GGTheme.knobArc.withAlphaComponent(alpha).setStroke()
+        if f > 0.002, enabled {
+            GGTheme.knobArc.setStroke()
             arc(CGFloat(f) * Self.sweepAngle).stroke()
         }
 
         guard !isEditing else { return }
 
-        // the number — 12pt centered (gain/trim), or 13pt with a small
-        // "dB" beneath it (the larger monitor knobs)
+        // the number — off-white, tabular, centered. No unit inside: the
+        // knob shows the value only. Disabled: still READABLE.
         let text: NSColor = hasValue
-            ? (valueTint ?? GGTheme.primary)
+            ? (valueTint ?? GGTheme.knobValue)
             : GGTheme.muted
         let value = NSAttributedString(
             string: hasValue ? String(format: "%.0f", doubleValue) : "—",
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: showsUnit ? 13 : 12, weight: .medium),
-                         .foregroundColor: text.withAlphaComponent(enabled ? 1 : 0.5)])
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12 * typeScale, weight: .medium),
+                         .foregroundColor: text.withAlphaComponent(enabled ? 1 : 0.65)])
         let vs = value.size()
-        value.draw(at: NSPoint(x: c.x - vs.width / 2,
-                               y: c.y + (showsUnit ? 4 : 0) - vs.height / 2))
-        if showsUnit, hasValue {
-            let unit = NSAttributedString(
-                string: "dB",
-                attributes: [.font: NSFont.systemFont(ofSize: 8),
-                             .foregroundColor: GGTheme.muted.withAlphaComponent(enabled ? 1 : 0.5)])
-            let us = unit.size()
-            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - 5 - us.height / 2))
-        }
+        value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y - vs.height / 2))
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
@@ -475,21 +751,27 @@ final class GainKnob: NSControl {
     }
 
     // MARK: scroll wheel — hover + scroll adjusts
-    //   mouse wheel: INVERTED direction (wheel down = more), ~1 dB per notch
-    //   trackpad:    natural direction (up = more); precise deltas accumulate
-    //                to a whole step (values are whole numbers)
+    //   natural direction everywhere (scroll up = more, down = less);
+    //   optional INVERTED direction via Settings ▸ General ▸ Knobs
+    //   ("wheel down = more"); trackpad precise deltas accumulate to a
+    //   whole step (values are whole numbers), classic mouse wheels one
+    //   notch ≈ one step
     override func scrollWheel(with event: NSEvent) {
         guard isEnabled, !isEditing else { super.scrollWheel(with: event); return }
         let dy = event.scrollingDeltaY
         guard dy != 0 else { return }
+        // Settings ▸ General ▸ Knobs: optional inverted direction
+        // (wheel down = more, the classic mouse convention).
+        let flip = UserDefaults.standard.bool(forKey: SettingsWindowController.invertScrollKey)
         var threshold = 8.0
         if event.hasPreciseScrollingDeltas {
-            scrollAccum += Double(dy)
+            scrollAccum += Double(flip ? -dy : dy)
         } else {
-            // classic mouse wheel: inverted, and one notch ≈ one step —
-            // wheels report small non-precise deltas, so a low threshold
-            // (not the trackpad's) is what makes the wheel FEEL working
-            let d = Double(-dy)
+            // classic mouse wheel: natural direction (up = more) and one
+            // notch ≈ one step — wheels report small non-precise deltas,
+            // so a low threshold (not the trackpad's) is what makes the
+            // wheel FEEL working
+            let d = Double(flip ? -dy : dy)
             scrollAccum += min(max(d, -3), 3)
             threshold = 1.0
         }
@@ -587,6 +869,9 @@ final class FunctionToggle: FunctionButton {
     let baseTitle: String
     /// Glyph buttons (M / D / ∑) draw larger; text chips keep the default.
     var titleFont: NSFont = NSFont.systemFont(ofSize: 11)
+    /// Corner radius of the chip — the glyph buttons use a SMALLER one
+    /// (their taller box would otherwise read as a pill).
+    var cornerRadius: CGFloat = 6
 
     init(title: String, tag: Int, accent: NSColor,
          target: AnyObject?, action: Selector) {
@@ -604,7 +889,8 @@ final class FunctionToggle: FunctionButton {
         let engaged = isEngaged
         let enabled = isEnabled
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        let path = NSBezierPath(roundedRect: rect,
+                                xRadius: cornerRadius, yRadius: cornerRadius)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
         else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
@@ -730,8 +1016,13 @@ final class TalkbackIconButton: IconButton {
     }
 
     override func drawGlyph(color: NSColor) {
-        // compact microphone silhouette — capsule body, U cradle, stem,
-        // base — ~15pt of ink in the 32pt frame, 1.5 stroke weight to
+        // bundled flaticon artwork (assets/microphone-black-shape.png),
+        // tinted to the state color, aspect-fit in a centered 17pt box
+        GGIconAsset.draw("microphone-black-shape", tint: color,
+                         in: bounds.insetBy(dx: 7.5, dy: 7.5))
+        if GGIconAsset.tinted("microphone-black-shape", color) != nil { return }
+        // fallback: compact microphone silhouette — capsule body, U cradle,
+        // stem, base — ~15pt of ink in the 32pt frame, 1.5 stroke weight to
         // MATCH the speaker (neither dominates), optically centered
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
@@ -762,14 +1053,51 @@ final class TalkbackIconButton: IconButton {
     }
 }
 
+/// Auto Gain — the top-bar chip: one click calibrates the SELECTED
+/// input's preamp. The ANIMATION lives on each input's own Auto Gain
+/// button (so "Auto Gain All" lights every running input); this chip
+/// stays a plain action.
+final class AutoGainIconButton: IconButton {
+    override func drawGlyph(color: NSColor) {
+        // bundled flaticon artwork (assets/equalizer.png — faders), tinted
+        // to the state color, aspect-fit in a centered 18pt box
+        GGIconAsset.draw("equalizer", tint: color, in: bounds.insetBy(dx: 7, dy: 7))
+        if GGIconAsset.tinted("equalizer", color) != nil { return }
+        // fallback: three vertical faders
+        let u = bounds.height / 32
+        let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
+        func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
+        color.setStroke()
+        for (x, y) in [(CGFloat(11), CGFloat(20)), (CGFloat(16), CGFloat(23)), (CGFloat(21), CGFloat(18))] {
+            let track = NSBezierPath()
+            track.move(to: pt(x, 9))
+            track.line(to: pt(x, 23))
+            track.lineWidth = 1.4 * u
+            track.lineCapStyle = .round
+            track.stroke()
+            color.setFill()
+            NSBezierPath(roundedRect: NSRect(x: ox + (x - 2.5) * u, y: oy + (y - 2) * u,
+                                             width: 5 * u, height: 4 * u),
+                         xRadius: 1 * u, yRadius: 1 * u).fill()
+        }
+    }
+}
+
 /// Global mute — one click mutes BOTH monitor outputs (Main Speakers +
 /// Headphones — every hardware mute the app controls), clicking again
 /// unmutes them. Coral red with a SLASHED speaker while all outputs are
 /// muted; plain speaker on a neutral chip otherwise.
 final class MuteAllIconButton: IconButton {
     override func drawGlyph(color: NSColor) {
-        // speaker (housing + cone) with sound waves — the classic volume
-        // glyph, ~15pt wide with breathing room, 1.5 stroke weight
+        // bundled flaticon artwork (assets/unmute.png — speaker with sound
+        // waves — while live, assets/mute.png — speaker with an ✕ — while
+        // all outputs are muted), tinted to the state color, aspect-fit in
+        // a centered 18pt box
+        let name = isEngaged ? "mute" : "unmute"
+        GGIconAsset.draw(name, tint: color, in: bounds.insetBy(dx: 7, dy: 7))
+        if GGIconAsset.tinted(name, color) != nil { return }
+        // fallback: speaker (housing + cone) with sound waves — the classic
+        // volume glyph, ~15pt wide with breathing room, 1.5 stroke weight
         // matching the mic; a diagonal slash is added while muted
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
@@ -800,6 +1128,43 @@ final class MuteAllIconButton: IconButton {
             slash.lineWidth = 2.2 * u
             slash.lineCapStyle = .round
             slash.stroke()
+        }
+    }
+}
+
+/// Settings — opens the Settings window. The same 32-pt icon chip as
+/// its neighbors (Talkback · Mute-All) at the header's top right, but a
+/// plain MOMENTARY button: no engaged state, the click just fires.
+final class SettingsIconButton: IconButton {
+    override func drawGlyph(color: NSColor) {
+        // bundled flaticon artwork (assets/setting.png — gear), tinted to
+        // the state color, aspect-fit in a centered 18pt box
+        GGIconAsset.draw("setting", tint: color, in: bounds.insetBy(dx: 7, dy: 7))
+        if GGIconAsset.tinted("setting", color) != nil { return }
+        // fallback: a simple gear — circle + notched rim
+        let u = bounds.height / 32
+        let c = NSPoint(x: bounds.midX, y: bounds.midY)
+        color.setStroke()
+        let gear = NSBezierPath()
+        gear.appendArc(withCenter: c, radius: 8 * u,
+                       startAngle: 0, endAngle: 360, clockwise: false)
+        gear.lineWidth = 2 * u
+        gear.stroke()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: c.x - 3 * u, y: c.y - 3 * u,
+                                    width: 6 * u, height: 6 * u)).fill()
+    }
+
+    /// Momentary: fire the action WITHOUT toggling state — the chip has
+    /// no engaged appearance (settings is a plain action, not a toggle).
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        while true {
+            guard let ev = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { return }
+            guard ev.type == .leftMouseUp else { continue }
+            let p = convert(ev.locationInWindow, from: nil)
+            if bounds.contains(p) { _ = sendAction(action, to: target) }
+            return
         }
     }
 }
@@ -862,14 +1227,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // Auto Gain status (shown in the footer's feedback strip)
     private var autoGainStatus: String?
+    /// The readings behind the strip's short message — shown in the
+    /// expandable detail popover.
+    private var autoGainDetail: String?
+    /// Seconds left in the running measurement (the countdown beside
+    /// Cancel) — nil when nothing is counting.
+    private var autoGainRemaining: Double?
     private var autoGainStatusTimer: Timer?
 
-    /// Feedback-strip message kinds — the DOT carries the color (blue
-    /// activity, green success, amber warning, red error); the text
-    /// stays neutral and readable.
+    /// Feedback-strip message kinds — the INDICATOR slot carries the
+    /// color (blue activity, green success, amber warning, red error);
+    /// the text stays neutral and readable.
     enum FeedbackKind {
         case idle, activity, success, warning, error
-        var dotColor: NSColor? {
+        /// The color of the indicator's single square (nil = empty slot).
+        var indicatorColor: NSColor? {
             switch self {
             case .idle: return nil
             case .activity: return GGTheme.accent
@@ -887,6 +1259,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     func show() {
         if window == nil { build() }
+        refreshSampleRatePopup()
         if let tree = onSeedTree?() {
             interfaceName = Self.interfaceName(from: tree)
             updateTree(tree)
@@ -909,6 +1282,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard window != nil, feedbackLabel != nil else { return }
         suppressActions = true
         defer { suppressActions = false }
+        // keep the title-bar dropdown on the ACTUAL live hardware rate
+        // (rebuilds only when the advertised list changes)
+        refreshSampleRatePopup()
         let connected = isGlueConnected?() ?? false
         let learning = isLearning
         let autoRunning = AutoGainEngine.shared.runningInputs
@@ -932,16 +1308,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let preampActive = !lineMode
 
             let mineRunning = autoRunning.contains(i)
+            // disabled while ANY calibration runs — the channel button is
+            // an action at rest and a quiet activity display while its own
+            // input is measuring
             autoGainButtons[i].isEnabled = preampActive && connected && !learning
-                && (mineRunning || autoRunning.isEmpty)
-            // Auto Gain is an action, not a persistent state: neutral at
-            // rest; while running it becomes a flat blue "Cancel" chip.
-            let agTitle = mineRunning ? "Cancel" : "Auto Gain"
-            let agColor = mineRunning ? GGTheme.darkText : GGTheme.softGray
-            autoGainButtons[i].bezelColor = mineRunning ? GGTheme.accent : nil
+                && autoRunning.isEmpty
+            // Auto Gain is an ACTION at rest. While THIS input is being
+            // measured, the label clears and the square-character scanner
+            // takes the button's place (the ONE Cancel lives in the
+            // feedback strip below).
+            let agTitle = mineRunning ? "" : "Auto Gain"
+            autoGainButtons[i].bezelColor = nil
             autoGainButtons[i].attributedTitle = NSAttributedString(
                 string: agTitle,
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: GGTheme.softGray])
+            let scanner = autoGainScanners[i]
+            scanner.isHidden = !mineRunning
+            if mineRunning { scanner.startScanning() } else { scanner.setIdle() }
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             gainKnobs[i].isEnabled = preampActive && connected && !learning
@@ -1054,6 +1437,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // BOTH monitor outputs are muted. Tooltips follow the states.
         let tbActive = talkbackState?() ?? false
         let bothMuted = (monitors[0].mute ?? false) && (monitors[1].mute ?? false)
+        // the top-bar Auto Gain chip is a plain action: it calibrates
+        // EVERY Mic/Instrument input at once. The animation lives on each
+        // input's own button, and the footer owns the Cancel.
+        let agRunning = !autoRunning.isEmpty
+        autoGainTopButton?.state = .off
+        autoGainTopButton?.isEnabled = connected && !learning && !agRunning
+        autoGainTopButton?.setAccessibilityLabel(agRunning ? "Auto Gain running" : "Auto Gain all inputs")
+        autoGainTopButton?.toolTip = agRunning
+            ? "Auto Gain — a calibration is running"
+            : "Auto Gain — all inputs"
         talkbackButton?.state = tbActive ? .on : .off
         talkbackButton?.isEnabled = connected && !learning
         talkbackButton?.toolTip = tbActive ? "Talkback active" : "Talkback"
@@ -1098,9 +1491,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             message = "Ready"
         }
 
-        feedbackDot?.layer?.backgroundColor = (kind.dotColor ?? NSColor.clear).cgColor
+        // the status dot carries the message's color
+        feedbackDot?.layer?.backgroundColor = (kind.indicatorColor ?? NSColor.clear).cgColor
+
         if feedbackLabel?.stringValue != message { feedbackLabel?.stringValue = message }
         feedbackLabel?.textColor = kind == .idle ? GGTheme.muted : GGTheme.primary
+
+        // the remaining time sits NEXT TO Cancel — the message text
+        // itself never changes while it counts down
+        if let left = autoGainRemaining {
+            feedbackTime?.stringValue = String(format: "%.0f s left", max(0, left))
+            feedbackTime?.isHidden = false
+        } else {
+            feedbackTime?.isHidden = true
+        }
+
         if let act = action {
             feedbackAction?.title = act.title
             feedbackAction?.isHidden = false
@@ -1124,11 +1529,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// Long messages expand into a popover on click — the footer never
-    /// grows.
+    /// grows. Auto Gain's readings live here, not in the strip.
     private func showFeedbackPopover() {
         let text = feedbackLabel?.stringValue ?? ""
         guard !text.isEmpty, text != "Ready" else { return }
-        let label = NSTextField(wrappingLabelWithString: text)
+        let detail = autoGainDetail ?? ""
+        let body = detail.isEmpty ? text : text + "\n\n" + detail
+        let label = NSTextField(wrappingLabelWithString: body)
         label.font = NSFont.systemFont(ofSize: 12)
         label.textColor = GGTheme.primary
         label.preferredMaxLayoutWidth = 320
@@ -1137,7 +1544,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = vc
-        popover.contentSize = NSSize(width: 340, height: 60)
+        popover.contentSize = NSSize(width: 340, height: detail.isEmpty ? 60 : 96)
         if let feedbackLabel {
             popover.show(relativeTo: feedbackLabel.bounds, of: feedbackLabel, preferredEdge: .maxY)
         }
@@ -1317,7 +1724,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let where_: String
         switch learningColumn {
         case .input(let i): where_ = "Analog In \(i + 1)"
-        case .monitor(let o): where_ = o == 0 ? "Main Speakers" : "Headphones"
+        case .monitor(let o): where_ = o == 0 ? "Speakers" : "Headphones"
         case nil: return nil
         }
         return "Learn (\(learnQueue.count) left) — in Apogee Control 2, wiggle “\(target.label)” " +
@@ -1332,6 +1739,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var meters: [GGLevelMeter] = []
     private var gainKnobs: [GainKnob] = []
     private var autoGainButtons: [NSButton] = []
+    /// The activity display inside each input's Auto Gain button — one
+    /// per channel, so "Auto Gain All" lights every running input.
+    private var autoGainScanners: [GGScanLight] = []
     private var toggles48V: [NSButton] = []
     private var softLimitToggles: [NSButton] = []
     private var polarityToggles: [NSButton] = []
@@ -1353,14 +1763,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var monoToggles: [NSButton] = []
     private var talkbackButton: TalkbackIconButton?
     private var muteAllButton: MuteAllIconButton?
+    /// The top-bar Auto Gain chip (equalizer icon).
+    private var autoGainTopButton: AutoGainIconButton?
 
     // footer feedback strip
     private var feedbackDot: NSView?
     private var feedbackLabel: SelectLabel?
     private var feedbackAction: NSButton?
+    /// The remaining time, next to Cancel (the message text stays steady).
+    private var feedbackTime: NSTextField?
     private var feedbackRunning = false
 
     private var subtitleField: NSTextField!
+    /// Compact sample-rate dropdown at the far right of the title bar —
+    /// a device-wide setting, kept apart from monitoring / Auto Gain.
+    private var sampleRatePopup: NSPopUpButton!
     /// The scroll area's document view (top-scroll on open).
     private var scrollDoc: NSView?
 
@@ -1412,13 +1829,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             blur.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
-        // --- assemble: three regions pinned with autolayout. The header
-        // MUST be fully constrained horizontally (title…settings chain) or
-        // the engine breaks the whole tree — verified by offscreen render.
+        // --- assemble: four regions pinned with autolayout — title bar,
+        // the MONITOR BAR (monitoring + global controls), the scrolling
+        // inputs/outputs, and the feedback strip at the bottom.
         let header = makeHeader()
-        let monitor = makeMonitorStrip()
+        let monitorBar = makeMonitorBar()
         let scroll = makeScrollArea()
+        let monitor = makeMonitorStrip()
         content.addSubview(header)
+        content.addSubview(monitorBar)
         content.addSubview(scroll)
         content.addSubview(monitor)
 
@@ -1426,9 +1845,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             header.topAnchor.constraint(equalTo: content.topAnchor),
             header.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 60),
+            header.heightAnchor.constraint(equalToConstant: 44),
 
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 0),
+            monitorBar.topAnchor.constraint(equalTo: header.bottomAnchor),
+            monitorBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            monitorBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            monitorBar.heightAnchor.constraint(equalToConstant: 72),
+
+            scroll.topAnchor.constraint(equalTo: monitorBar.bottomAnchor, constant: 0),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: monitor.topAnchor),
@@ -1454,12 +1878,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.delegate = self
         // minimum: all four 240-pt strips + rules + margins must fit —
         // the pinned strip widths are hard requirements, not wishes
-        w.minSize = NSSize(width: 1060, height: 520)
+        w.minSize = NSSize(width: 1060, height: 420)
         window = w
-        // default size = the minimal width, measured no-scroll height —
+        // default size = the minimal width, and the height that fits the
+        // content EXACTLY (the sections hug their content — no dead
+        // vertical space, no scrollbar at the default size) —
         // NSWindow sizes to the contentView's fitting size otherwise,
         // and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1060, height: 632))
+        w.setContentSize(NSSize(width: 1060, height: 566))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -1470,9 +1896,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
     }
 
-    /// Unified title bar: title + quiet device name on the left, a
-    /// native toolbar-style settings button on the right — the same
-    /// window material throughout, framed by a hairline at its bottom.
+    /// Unified title bar: title + quiet device name on the left — the
+    /// same window material throughout, framed by a hairline at its
+    /// bottom. The global controls (Talkback · Mute-All · Settings) live
+    /// in the monitor bar right below.
     private func makeHeader() -> NSView {
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -1490,34 +1917,235 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         header.addSubview(subtitle)
         subtitleField = subtitle
 
-        let settings = NSButton(title: "⚙︎", target: self, action: #selector(settingsClicked(_:)))
-        settings.bezelStyle = .rounded
-        settings.font = NSFont.systemFont(ofSize: 15)
-        settings.toolTip = "Settings…"
-        settings.translatesAutoresizingMaskIntoConstraints = false
-        header.addSubview(settings)
-
         let divider = Hairline()
         header.addSubview(divider)
 
+        // FAR RIGHT — the device-wide sample rate: value + unit only
+        // ("48 kHz ▾"), no permanent label, same compact dropdown
+        // styling as the rest of the app. Vertically centered in the
+        // bar, right edge aligned with the Settings button below.
+        let rate = NSPopUpButton()
+        rate.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        rate.controlSize = .small
+        rate.autoenablesItems = true
+        rate.translatesAutoresizingMaskIntoConstraints = false
+        rate.toolTip = "Sample rate"
+        rate.setAccessibilityLabel("Sample rate")
+        rate.target = self
+        rate.action = #selector(sampleRateChanged(_:))
+        header.addSubview(rate)
+        sampleRatePopup = rate
+
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
-            title.topAnchor.constraint(equalTo: header.topAnchor, constant: 7),
+            title.topAnchor.constraint(equalTo: header.topAnchor, constant: 5),
             subtitle.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
-            settings.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -14),
-            settings.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            // REQUIRED: close the horizontal chain (title…settings) — an
-            // underconstrained header breaks the whole window's layout.
-            settings.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
-            // comfortably-sized settings button (32 × 26)
-            settings.widthAnchor.constraint(equalToConstant: 32),
-            settings.heightAnchor.constraint(equalToConstant: 26),
+            rate.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
+            rate.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            rate.widthAnchor.constraint(equalToConstant: 96),
             divider.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: header.bottomAnchor),
         ])
         return header
+    }
+
+    /// "48000" → "48 kHz" (one decimal when needed, e.g. 44.1 / 88.2).
+    private static func rateLabel(_ r: Double) -> String {
+        let khz = r / 1000
+        let text = khz.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", khz) : String(format: "%.1f", khz)
+        return "\(text) kHz"
+    }
+
+    /// (Re)build the sample-rate menu from the rates the device
+    /// advertises, selecting the ACTUAL live hardware rate — never just
+    /// the last requested one. Rebuilds only when the list changes so
+    /// an open menu is never disturbed.
+    private func refreshSampleRatePopup() {
+        guard let popup = sampleRatePopup else { return }
+        // Source of truth = the LIVE CoreAudio hardware rate — it follows the
+        // clock directly. The glue tree is only a fallback: lastTree is
+        // refreshed on full-tree syncs only, NOT on setProperty echoes, so a
+        // tree-sourced rate is STALE right after our own write (the popup
+        // would "snap back" to the pre-write rate — live-tested Oct 21 2026).
+        let treeRate = onSeedTree?().flatMap { tree -> Double? in
+            guard let serial = GlueClient.quartetSerial(in: tree) else { return nil }
+            func find(_ n: [String: Any]) -> [String: Any]? {
+                if n["type"] as? String == serial { return n }
+                for c in n["children"] as? [[String: Any]] ?? [] {
+                    if let r = find(c) { return r }
+                }
+                return nil
+            }
+            return find(tree).flatMap { GlueClient.doubleProp($0, "samplerate") }
+        }
+        let live = InsertServer.deviceSampleRate() ?? treeRate ?? InsertServer.shared.currentRate()
+        var rates = InsertServer.availableSampleRates()
+        if !rates.contains(live) { rates = ([live] + rates).sorted() }
+        let current = popup.itemArray.compactMap { ($0.representedObject as? NSNumber)?.doubleValue }
+        if current != rates {
+            // Rebuild through the popup's OWN item API (exactly like
+            // popupLabel does for the working dropdowns): addItem +
+            // representedObject, NO per-item target/action (item actions
+            // shadow the button's and dispatch with the ITEM as sender —
+            // the popup's action then never fires and the selection just
+            // snaps back), and autoenablesItems on.
+            popup.removeAllItems()
+            for r in rates {
+                popup.addItem(withTitle: Self.rateLabel(r))
+                popup.lastItem?.representedObject = NSNumber(value: r)
+            }
+        }
+        if let idx = popup.itemArray.firstIndex(where: { ($0.representedObject as? NSNumber)?.doubleValue == live }) {
+            popup.selectItem(at: idx)
+        }
+    }
+
+    @objc func sampleRateChanged(_ sender: Any?) {
+        QBLog.log("control: sampleRateChanged fired")
+        // The popup routes the action with the button as sender — but read
+        // through the stored handle anyway, robust to either dispatch.
+        let popup = (sender as? NSPopUpButton) ?? sampleRatePopup
+        guard !suppressActions,
+              let popup,
+              let requested = (popup.selectedItem?.representedObject as? NSNumber)?.doubleValue,
+              requested != InsertServer.deviceSampleRate() else {
+            refreshSampleRatePopup()
+            return
+        }
+        // Preferred path: the Quartet's OWN control protocol — setProperty on
+        // the device node's `samplerate` (path-id = java31 hash, var-tag 4
+        // double; live-verified Oct 21 2026, see docs/protocol-notes.md).
+        // Fallback when Glue is offline: the plain CoreAudio property write.
+        if isGlueConnected?() == true, let serial = PathIds.activeSerial {
+            let id = PathIds.hash("/dev/\(serial)/samplerate")
+            onWriteDouble?(id, requested)
+            QBLog.log("control: setProperty samplerate \(Int(requested)) Hz via glue (id \(id.map { String(format: "%02x", $0) }.joined()))")
+        } else {
+            InsertServer.setDeviceSampleRate(requested)
+            QBLog.log("control: setProperty samplerate \(Int(requested)) Hz via CoreAudio (glue offline)")
+        }
+        // The device re-locks its clock asynchronously — hold the requested
+        // selection while polling, until the live rate CONFIRMS it (or the
+        // poll times out and we resync to whatever is actually active).
+        pollSampleRate(0, requested: requested)
+    }
+
+    /// ~4 s of 0.3 s checks after a rate request. While the clock is
+    /// re-locking, CoreAudio may still report the OLD rate — don't let the
+    /// popup snap back to it; hold the requested selection, and only resync
+    /// from the live hardware once it confirms (or on timeout).
+    private func pollSampleRate(_ attempt: Int, requested: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self, let popup = self.sampleRatePopup else { return }
+            let live = InsertServer.deviceSampleRate()
+            if let live, live == requested {
+                // confirmed — show the truth and resync the insert's cache
+                self.refreshSampleRatePopup()
+                InsertServer.shared.refreshRate()
+                return
+            }
+            if attempt >= 12 {
+                // never settled — resync to whatever is actually active
+                self.refreshSampleRatePopup()
+                InsertServer.shared.refreshRate()
+                return
+            }
+            self.pollSampleRate(attempt + 1, requested: requested)
+        }
+    }
+
+    /// The MONITOR BAR — a compact strip directly below the title bar:
+    /// the two monitor groups (Speakers · Headphones) together on the
+    /// LEFT, the global controls (Talkback · Mute-All · Settings) on the
+    /// RIGHT. One hairline under it; no card, no new background.
+    private func makeMonitorBar() -> NSView {
+        let bar = NSView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 0
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        // LEFT — the two monitor groups, identical in size and layout,
+        // separated by a short, low-contrast rule with space on both
+        // sides. The cluster stays CONTENT-SIZED (the middle of the bar
+        // is left empty on purpose).
+        row.addArrangedSubview(makeMonitorGroup(0))
+        let sepGap1 = NSView()
+        sepGap1.translatesAutoresizingMaskIntoConstraints = false
+        sepGap1.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        row.addArrangedSubview(sepGap1)
+        let sep = NSView()
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        sep.wantsLayer = true
+        sep.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+        sep.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        sep.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        row.addArrangedSubview(sep)
+        let sepGap2 = NSView()
+        sepGap2.translatesAutoresizingMaskIntoConstraints = false
+        sepGap2.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        row.addArrangedSubview(sepGap2)
+        row.addArrangedSubview(makeMonitorGroup(1))
+
+        // flexible slack — the global controls sit at the far right
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        row.addArrangedSubview(spacer)
+        // breathing room before the utility buttons
+        let trioGap = NSView()
+        trioGap.translatesAutoresizingMaskIntoConstraints = false
+        trioGap.widthAnchor.constraint(equalToConstant: 20).isActive = true
+        row.addArrangedSubview(trioGap)
+
+        // RIGHT — the global controls
+        let ag = AutoGainIconButton(tag: 0, accent: GGTheme.green,
+                                     target: self, action: #selector(autoGainTopClicked(_:)))
+        ag.toolTip = "Auto Gain — all inputs"
+        ag.setAccessibilityLabel("Auto Gain all inputs")
+        autoGainTopButton = ag
+
+        let mic = TalkbackIconButton(tag: 0, accent: GGTheme.green,
+                                     target: self, action: #selector(talkbackToggled(_:)))
+        mic.toolTip = "Talkback"
+        mic.setAccessibilityLabel("Talkback")
+        mic.hold = { [weak self] on in self?.onTalkback?(on) }
+        talkbackButton = mic
+
+        let mute = MuteAllIconButton(tag: 0, accent: GGTheme.red,
+                                      target: self, action: #selector(muteAllToggled(_:)))
+        mute.toolTip = "Mute all outputs"
+        mute.setAccessibilityLabel("Mute all outputs")
+        muteAllButton = mute
+
+        let settings = SettingsIconButton(tag: 0, accent: GGTheme.accent,
+                                          target: self, action: #selector(settingsClicked(_:)))
+        settings.toolTip = "Settings…"
+        settings.setAccessibilityLabel("Settings")
+
+        let trio = NSStackView(views: [ag, mic, mute, settings])
+        trio.spacing = 6
+        trio.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(trio)
+
+        bar.addSubview(row)
+        let divider = Hairline()
+        bar.addSubview(divider)
+
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
+            row.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            row.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            divider.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+        return bar
     }
 
     /// Scroll view: the inputs + outputs sections scroll together; the
@@ -1531,27 +2159,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 12
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 0, bottom: 8, right: 0)
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 6, right: 0)
         doc.addSubview(stack)
 
-        // INPUTS section header: title left; Target / Duration / Auto Gain
-        // All right (the batch action lives with the settings it uses).
-        let autoGainAll = NSButton(title: "Auto Gain All", target: self,
-                                   action: #selector(autoGainAllClicked(_:)))
-        autoGainAll.bezelStyle = .rounded
-        autoGainAll.controlSize = .small
-        autoGainAll.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        autoGainAll.toolTip = "Calibrate every Mic/Instrument input with the Target/Duration settings above"
+        // INPUTS section header: title left; the Auto Gain Target /
+        // Duration settings right (the batch action lives in the top
+        // bar now).
         let inputsHeader = sectionHeader(
             title: "Inputs",
             trailingViews: [
-                popupLabel("Target", items: AutoGainEngine.targetOptions.map {
+                popupLabel("Auto Gain Target", items: AutoGainEngine.targetOptions.map {
                     (String(format: "%.0f dBFS peak", $0), $0) }, action: #selector(targetChanged(_:))),
                 popupLabel("Duration", items: AutoGainEngine.listenOptions.map {
                     (String(format: "%.0f s", $0), $0) }, action: #selector(timeChanged(_:))),
-                autoGainAll,
             ])
         stack.addArrangedSubview(inputsHeader)
 
@@ -1562,19 +2184,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let sectionRule = Hairline()
         stack.addArrangedSubview(sectionRule)
 
-        // OUTPUTS & ROUTING header: title + supporting label.
-        let outHeader = NSStackView()
-        outHeader.orientation = .vertical
-        outHeader.alignment = .leading
-        outHeader.spacing = 2
+        // OUTPUTS & ROUTING header: title only — no explanatory
+        // subtitle (the visible controls say it all).
         let outTitle = NSTextField(labelWithString: "Outputs & Routing")
         outTitle.font = GGTheme.sectionFont
         outTitle.textColor = GGTheme.primary
-        let outSupport = NSTextField(labelWithString: "Choose a source, apply processing, and set output trim.")
-        outSupport.font = NSFont.systemFont(ofSize: 11)
-        outSupport.textColor = GGTheme.muted
+        let outHeader = NSStackView()
+        outHeader.orientation = .horizontal
+        outHeader.alignment = .centerY
+        outHeader.spacing = 10
+        outHeader.translatesAutoresizingMaskIntoConstraints = false
         outHeader.addArrangedSubview(outTitle)
-        outHeader.addArrangedSubview(outSupport)
+        let outSpacer = NSView()
+        outSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        outHeader.addArrangedSubview(outSpacer)
         stack.addArrangedSubview(outHeader)
 
         let outGrid = makeRoutingGrid()
@@ -1595,7 +2218,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             stack.topAnchor.constraint(equalTo: doc.topAnchor),
             stackLeading,
             stackTrailing,
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: doc.bottomAnchor, constant: -8),
+            // EQUALITY both ends: the doc is exactly as tall as its
+            // content — the sections hug their content (no stretched
+            // empty bands); the scroll view handles overflow.
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
             inputsHeader.widthAnchor.constraint(equalTo: stack.widthAnchor),
             // full-width header (internal .leading alignment) so the
             // "Outputs & Routing" title sits left, aligned with "Inputs"
@@ -1613,12 +2239,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
-        // doc tracks the clip view's width (no h-scroll) and is at least
-        // as tall — v-scroll when the window is short.
+        // doc tracks the clip view's width (no h-scroll) and HUGS its
+        // content's height — the sections size to their content instead
+        // of being stretched to fill the window (that stretch was the
+        // big empty band under every strip). The scroll view scrolls
+        // when the content is taller than the window.
         let clip = scroll.contentView
         NSLayoutConstraint.activate([
             doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
-            doc.heightAnchor.constraint(greaterThanOrEqualTo: clip.heightAnchor),
+            doc.heightAnchor.constraint(equalTo: stack.heightAnchor),
         ])
         scrollDoc = doc
         return scroll
@@ -1699,10 +2328,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
                 col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
                 col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -10),
             ])
 
             // HEADER — the channel NAME is the selector: clicking it
@@ -1759,8 +2388,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             meters.append(meter)
 
             // CONTROL ROW — compact knob left, Auto Gain + chips right.
-            // The knob's height EQUALS the Auto Gain + toggle block:
-            // 24 (Auto Gain) + 6 (gap) + 22 (chips) = 52.
+            // The knob is the standard 60-pt size (one component, two
+            // sizes in the app) and shows the value only — no unit.
             let knob = GainKnob()
             knob.minValue = 0
             knob.maxValue = 75
@@ -1769,8 +2398,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             knob.action = #selector(gainSlid(_:))
             knob.tag = 200 + i
             knob.sendsContinuously = true
-            knob.widthAnchor.constraint(equalToConstant: 52).isActive = true
-            knob.heightAnchor.constraint(equalToConstant: 52).isActive = true
+            knob.widthAnchor.constraint(equalToConstant: 60).isActive = true
+            knob.heightAnchor.constraint(equalToConstant: 60).isActive = true
             gainKnobs.append(knob)
 
             // precise entry: the knob's inline editor carries the numeric
@@ -1785,15 +2414,33 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             ag.controlSize = .small
             ag.font = NSFont.systemFont(ofSize: 11)
             ag.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            ag.toolTip = "Auto Gain — measure this input's loudest level and set the preamp"
             autoGainButtons.append(ag)
 
-            // one compact row of toggles — 48V / SL / Ø (amber / cyan /
-            // system accent when engaged; small intrinsic chips).
+            // the ACTIVITY DISPLAY lives in this button: while THIS input
+            // is being measured, the label clears and the square-block
+            // scanner FILLS the button (its height, its width, its rounded
+            // corners — nothing around it moves). "Auto Gain All" lights
+            // every running input's button at once.
+            let scanner = GGScanLight(frame: .zero)
+            scanner.translatesAutoresizingMaskIntoConstraints = false
+            scanner.isHidden = true
+            ag.addSubview(scanner)
+            NSLayoutConstraint.activate([
+                scanner.leadingAnchor.constraint(equalTo: ag.leadingAnchor),
+                scanner.trailingAnchor.constraint(equalTo: ag.trailingAnchor),
+                scanner.topAnchor.constraint(equalTo: ag.topAnchor),
+                scanner.bottomAnchor.constraint(equalTo: ag.bottomAnchor),
+            ])
+            autoGainScanners.append(scanner)
+
+            // one compact row of toggles — 48V / SL / Ø (red / cyan /
+            // purple when engaged; small intrinsic chips).
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
             row.translatesAutoresizingMaskIntoConstraints = false
-            let tv = toggle("48V", 300 + i, GGTheme.amber)
+            let tv = toggle("48V", 300 + i, GGTheme.red)
             tv.toolTip = "+48V phantom power"
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
@@ -1801,7 +2448,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             soft.toolTip = "Soft Limit"
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = toggle("Ø", 500 + i, GGTheme.accent)
+            let pol = toggle("Ø", 500 + i, GGTheme.purple)
             pol.toolTip = "Invert polarity"
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
@@ -1889,10 +2536,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
                 col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
                 col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -10),
             ])
 
             // HEADER — the output NAME as a title. It defaults to the
@@ -1933,16 +2580,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             sp.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             sourcePopups.append(sp)
 
-            // "Include" — the linked/mirrored-routing chip: system accent
-            // when engaged. Constant-height row (hidden for direct
-            // sources) keeps every strip's geometry identical.
-            let inc = FunctionToggle(title: "Include", tag: 2200 + i,
-                                     accent: GGTheme.accent,
-                                     target: self, action: #selector(includeChanged(_:)))
-            inc.toolTip = "Include source processing — mirror after the source’s plug-in"
+            // "Include source processing" — a real CHECKBOX in its own
+            // reserved option row, the SAME height in all four columns,
+            // so the processing selectors and trim knobs below line up.
+            // (Direct sources keep the row empty — it never collapses.)
+            let inc = NSButton(checkboxWithTitle: "Include source processing", target: self,
+                               action: #selector(includeChanged(_:)))
+            inc.tag = 2200 + i
+            inc.font = NSFont.systemFont(ofSize: 11)
+            inc.controlSize = .small
+            inc.toolTip = "Mirror this output AFTER the source’s plug-in"
             let incRow = NSView()
             incRow.translatesAutoresizingMaskIntoConstraints = false
-            incRow.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            incRow.heightAnchor.constraint(equalToConstant: 20).isActive = true
             incRow.addSubview(inc)
             NSLayoutConstraint.activate([
                 inc.leadingAnchor.constraint(equalTo: incRow.leadingAnchor),
@@ -1960,35 +2610,27 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tsl.action = #selector(trimSlid(_:))
             tsl.tag = 2600 + i
             tsl.sendsContinuously = true
-            tsl.widthAnchor.constraint(equalToConstant: 52).isActive = true
-            tsl.heightAnchor.constraint(equalToConstant: 52).isActive = true
+            tsl.widthAnchor.constraint(equalToConstant: 60).isActive = true
+            tsl.heightAnchor.constraint(equalToConstant: 60).isActive = true
             trimKnobs.append(tsl)
 
             // precise entry — the old trim field's tag + delegate
             tsl.valueField.tag = 2650 + i
             tsl.valueField.delegate = self
 
-            // the "Trim" caption sits ABOVE the number now
-            let trimCaption = NSTextField(labelWithString: "Trim")
-            trimCaption.font = GGTheme.labelFont
-            trimCaption.textColor = GGTheme.muted
+            // the trim knob — alone in its column
             let knobCol = NSStackView()
             knobCol.orientation = .vertical
             knobCol.alignment = .centerX
-            knobCol.spacing = 3
+            knobCol.spacing = 0
             knobCol.translatesAutoresizingMaskIntoConstraints = false
-            knobCol.addArrangedSubview(trimCaption)
             knobCol.addArrangedSubview(tsl)
 
-            // processing column — label, plug-in selector, power + Open.
+            // processing column — plug-in selector, power + Open.
             // Everything stays in place in BOTH states: the selector
             // always shows (None = the empty slot — picking a plug-in
             // adds it), and the power + Open buttons gray out instead of
             // hiding when no plug-in is loaded.
-            let procLbl = NSTextField(labelWithString: "Processing")
-            procLbl.font = GGTheme.labelFont
-            procLbl.textColor = GGTheme.softGray
-
             let pp = NSPopUpButton()
             pp.target = self
             pp.action = #selector(pluginChanged(_:))
@@ -2026,11 +2668,45 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let procCol = NSStackView()
             procCol.orientation = .vertical
             procCol.alignment = .leading
-            procCol.spacing = 4
+            procCol.spacing = 6
             procCol.translatesAutoresizingMaskIntoConstraints = false
-            procCol.addArrangedSubview(procLbl)
             procCol.addArrangedSubview(pp)
             procCol.addArrangedSubview(row2)
+
+            // ONE header row for the two columns — "Processing" over the
+            // plug-in area, "Trim" over the knob — so the two columns
+            // line up across all four strips.
+            let procLbl = NSTextField(labelWithString: "Processing")
+            procLbl.font = GGTheme.labelFont
+            procLbl.textColor = GGTheme.softGray
+            let trimCaption = NSTextField(labelWithString: "Trim")
+            trimCaption.font = GGTheme.labelFont
+            trimCaption.textColor = GGTheme.muted
+            // the caption sits in a 60-pt slot — the knob's width — so it
+            // is centered exactly over the knob below it
+            let trimSlot = NSView()
+            trimSlot.translatesAutoresizingMaskIntoConstraints = false
+            trimSlot.addSubview(trimCaption)
+            trimCaption.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                trimSlot.widthAnchor.constraint(equalToConstant: 60),
+                trimCaption.centerXAnchor.constraint(equalTo: trimSlot.centerXAnchor),
+                trimCaption.centerYAnchor.constraint(equalTo: trimSlot.centerYAnchor),
+            ])
+            let colHeader = NSStackView()
+            colHeader.orientation = .horizontal
+            colHeader.spacing = 12
+            colHeader.alignment = .centerY
+            colHeader.translatesAutoresizingMaskIntoConstraints = false
+            colHeader.addArrangedSubview(procLbl)
+            let headerSpacer = NSView()
+            headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            colHeader.addArrangedSubview(headerSpacer)
+            colHeader.addArrangedSubview(trimSlot)
+            col.addArrangedSubview(colHeader)
+            // the header row spans the card's width, so its "Trim" slot
+            // sits exactly over the knob column below
+            colHeader.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
             // the trim knob comes AFTER the plug-in area
             let body = NSStackView()
@@ -2045,7 +2721,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(body)
             body.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             procCol.widthAnchor.constraint(equalTo: body.widthAnchor,
-                                           constant: -(52 + 12)).isActive = true
+                                           constant: -(60 + 12)).isActive = true
             pp.widthAnchor.constraint(equalTo: procCol.widthAnchor).isActive = true
 
             strip.addArrangedSubview(card)
@@ -2055,12 +2731,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: footer — monitor controls above, feedback strip below
 
-    /// The fixed two-row footer. TOP row: the two monitor groups
-    /// adjacent on the left (each: small speaker/headphones glyph +
-    /// title, the 64-pt level knob, M/D/∑ beneath the title), a fine
-    /// vertical rule between them, and Talkback + Mute-All at the far
-    /// right, vertically centered. BOTTOM row: a slim, full-width
-    /// RESERVED feedback strip (status dot + message + optional
+    /// The footer is now ONLY the feedback strip: a slim, full-width
+    /// RESERVED row (status dot + message + optional
     /// Cancel/Dismiss) — messages never move the monitor controls.
     private func makeMonitorStrip() -> NSView {
         let footer = NSStackView()
@@ -2072,31 +2744,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let topDivider = Hairline()
         footer.addSubview(topDivider)
 
-        // --- monitor controls row
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.spacing = 10
-        row.alignment = .centerY
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.addArrangedSubview(makeMonitorGroup(0))
-        // fine vertical rule between the two monitor groups
-        let vDivider = NSView()
-        vDivider.wantsLayer = true
-        vDivider.layer?.backgroundColor = NSColor.separatorColor.cgColor
-        vDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        row.addArrangedSubview(vDivider)
-        row.addArrangedSubview(makeMonitorGroup(1))
-        // flexible gap, then the global utility pair at the far right
-        let rowSpacer = NSView()
-        rowSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        row.addArrangedSubview(rowSpacer)
-        row.addArrangedSubview(makeUtilityPair())
-        footer.addArrangedSubview(row)
+        // --- the feedback strip is now the ONLY thing in the footer
+        // (the monitor controls live in the bar under the title bar)
 
-        // --- slim feedback strip below the controls
-        let rule = Hairline()
-        footer.addArrangedSubview(rule)
-
+        // the quiet status dot — it carries the message's color (blue
+        // activity, green success, amber warning, red error)
         feedbackDot = NSView()
         feedbackDot?.translatesAutoresizingMaskIntoConstraints = false
         feedbackDot?.wantsLayer = true
@@ -2110,6 +2762,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         feedbackLabel?.onClick = { [weak self] in
             self?.showFeedbackPopover()
         }
+
+        // the remaining time — sits NEXT TO Cancel, so the instruction
+        // text itself stays steady while it counts down
+        feedbackTime = NSTextField(labelWithString: "")
+        feedbackTime?.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        feedbackTime?.textColor = GGTheme.muted
+        feedbackTime?.isHidden = true
 
         feedbackAction = NSButton(title: "Cancel", target: self,
                                   action: #selector(feedbackActionClicked(_:)))
@@ -2128,6 +2787,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let feedbackSpacer = NSView()
         feedbackSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
         feedbackRow.addArrangedSubview(feedbackSpacer)
+        if let time = feedbackTime { feedbackRow.addArrangedSubview(time) }
         if let action = feedbackAction { feedbackRow.addArrangedSubview(action) }
         footer.addArrangedSubview(feedbackRow)
 
@@ -2135,15 +2795,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             topDivider.topAnchor.constraint(equalTo: footer.topAnchor),
             topDivider.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
-            row.topAnchor.constraint(equalTo: footer.topAnchor, constant: 10),
-            row.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16),
-            row.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16),
-            vDivider.topAnchor.constraint(equalTo: row.topAnchor),
-            vDivider.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            rule.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
-            rule.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
-            // fixed, reserved height — messages NEVER shift the controls
-            feedbackRow.heightAnchor.constraint(equalToConstant: 30),
+            // fixed, reserved height — messages NEVER move anything
+            feedbackRow.heightAnchor.constraint(equalToConstant: 28),
             feedbackRow.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16),
             feedbackRow.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16),
             feedbackRow.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -4),
@@ -2151,35 +2804,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         return footer
     }
 
-    /// The bottom-right utility pair: Talkback mic + global Mute-All.
-    private func makeUtilityPair() -> NSView {
-        let mic = TalkbackIconButton(tag: 0, accent: GGTheme.green,
-                                     target: self, action: #selector(talkbackToggled(_:)))
-        mic.toolTip = "Talkback"
-        mic.setAccessibilityLabel("Talkback")
-        mic.hold = { [weak self] on in self?.onTalkback?(on) }
-        talkbackButton = mic
-
-        let mute = MuteAllIconButton(tag: 0, accent: GGTheme.red,
-                                     target: self, action: #selector(muteAllToggled(_:)))
-        mute.toolTip = "Mute all outputs"
-        mute.setAccessibilityLabel("Mute all outputs")
-        muteAllButton = mute
-
-        let pair = NSStackView(views: [mic, mute])
-        pair.spacing = 6
-        pair.translatesAutoresizingMaskIntoConstraints = false
-        return pair
-    }
-
     private func makeMonitorGroup(_ o: Int) -> NSView {
-        let heading: String = o == 0 ? "Main Speakers" : "Headphones"
-
-        // the LARGER 64-pt level knob — value AND a small "dB" inside —
-        // with the title row and M/D/∑ directly beneath the title
+        // ONE balanced, FIXED-WIDTH group (both outputs are identical):
+        //
+        //     ( −32 )  Speakers             │   ( −36 )  Headphones
+        //             [ M ] [ D ] [ ∑ ]     │             [ M ] [ D ] [ ∑ ]
+        //
+        // The knob is the volume control (the value only — no unit); the
+        // title and the buttons below it share ONE left edge in both
+        // groups.
         let body = NSStackView()
         body.orientation = .horizontal
-        body.spacing = 12
+        body.spacing = 14
         body.alignment = .centerY
         body.translatesAutoresizingMaskIntoConstraints = false
 
@@ -2191,9 +2827,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         sl.action = #selector(monSlid(_:))
         sl.tag = 700 + o
         sl.sendsContinuously = true
-        sl.showsUnit = true
-        sl.widthAnchor.constraint(equalToConstant: 64).isActive = true
-        sl.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        // the value only — no unit inside the knob
+        sl.toolTip = o == 0 ? "Speakers level (dB)" : "Headphones level (dB)"
+        sl.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        sl.heightAnchor.constraint(equalToConstant: 60).isActive = true
         body.addArrangedSubview(sl)
         monKnobs.append(sl)
 
@@ -2201,37 +2838,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         sl.valueField.tag = 750 + o
         sl.valueField.delegate = self
 
-        let right = NSStackView()
-        right.orientation = .vertical
-        right.alignment = .leading
-        right.spacing = 6
-        right.translatesAutoresizingMaskIntoConstraints = false
-        body.addArrangedSubview(right)
+        // the TEXT column — the title on top (clicking it opens the
+        // "Learn Control…" menu), the three tiny chips below it, all
+        // starting at the same left edge. Its width is FIXED, so the two
+        // groups are exactly the same width.
+        let textCol = NSStackView()
+        textCol.orientation = .vertical
+        textCol.alignment = .leading
+        textCol.spacing = 6
+        textCol.translatesAutoresizingMaskIntoConstraints = false
+        textCol.widthAnchor.constraint(equalToConstant: 82).isActive = true
 
-        // title row: small monochrome output glyph + the group title.
-        // Clicking the title opens the "Learn Control…" menu (the old
-        // permanent Learn button is gone).
-        let titleRow = NSStackView()
-        titleRow.orientation = .horizontal
-        titleRow.alignment = .centerY
-        titleRow.spacing = 6
-        titleRow.translatesAutoresizingMaskIntoConstraints = false
-        titleRow.addArrangedSubview(TinyGlyphView(o == 0 ? .speaker : .headphones))
-        let head = SelectLabel(frame: .zero)
-        head.stringValue = heading
-        head.font = GGTheme.nameFont
-        head.textColor = GGTheme.primary
-        head.onClick = { [weak self] in self?.showLearnMenu(for: o, from: head) }
-        titleRow.addArrangedSubview(head)
-        right.addArrangedSubview(titleRow)
+        let name = SelectLabel(frame: .zero)
+        name.stringValue = o == 0 ? "Speakers" : "Headphones"
+        name.font = GGTheme.nameFont
+        name.textColor = GGTheme.primary
+        name.onClick = { [weak self] in self?.showLearnMenu(for: o, from: name) }
+        textCol.addArrangedSubview(name)
 
-        // M / D / ∑ — equal square glyph buttons directly beneath the
-        // title: Mute (coral red), DIM (amber), Sum to mono (system
-        // accent) when active; neutral dark gray at rest. Full names
-        // live in tooltips + accessibility.
+        // M / D / ∑ — TINY chips under the name: Mute (coral red), DIM
+        // (amber), Sum to mono (system accent) when active; neutral dark
+        // gray at rest. Full names live in tooltips + accessibility.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
-        btnRow.spacing = 5
+        btnRow.spacing = 6
+        btnRow.alignment = .centerY
         btnRow.translatesAutoresizingMaskIntoConstraints = false
         let mute = glyphToggle("M", 800 + o, GGTheme.red, "Mute")
         btnRow.addArrangedSubview(mute)
@@ -2242,12 +2873,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let mono = glyphToggle("∑", 1000 + o, GGTheme.accent, "Sum to mono")
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
-        right.addArrangedSubview(btnRow)
+        textCol.addArrangedSubview(btnRow)
+
+        // the text column (the icon lives inside it, trailing the name)
+        body.addArrangedSubview(textCol)
 
         return body
     }
 
-    /// The group title's menu — hardware mapping lives here now, not in
+    /// The group icon's menu — hardware mapping lives here now, not in
     /// a permanent third row. "Learn Control…" starts the capture (or
     /// skips the current target while one runs); disabled when there's
     /// nothing to learn.
@@ -2308,21 +2942,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         startAutoGain(for: [i])
     }
 
+    /// The keyboard shortcut's "calibrate every input" — the same batch
+    /// the top-bar chip runs (the section's button is gone).
     @objc private func autoGainAllClicked(_ sender: NSButton) {
         if AutoGainEngine.shared.isRunning {
             AutoGainEngine.shared.cancelAll(reason: "cancelled")
             return
         }
-        let calibratable = (0..<4).filter { i in
-            if let rl = inputs[i].refLevel { return rl == 1 || rl == 4 }
-            return false
-        }
-        guard !calibratable.isEmpty else {
-            showAutoStatus("Auto Gain All — no inputs in Mic/Instrument mode", clearAfter: 8,
-                           kind: .warning)
-            return
-        }
-        startAutoGain(for: calibratable)
+        startAutoGainAll()
     }
 
     @objc private func targetChanged(_ sender: NSPopUpButton) {
@@ -2373,21 +3000,101 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         refresh()
     }
 
-    /// Show an Auto Gain line in the status area.
+    /// Show an Auto Gain line in the status area. `detail` carries the
+    /// READINGS (preamp, peak) — they live in the expandable detail
+    /// popover, not in the strip itself. `remaining` is the countdown
+    /// shown NEXT TO Cancel (the message text itself stays steady).
     func showAutoStatus(_ line: String, clearAfter seconds: TimeInterval?,
-                       kind: FeedbackKind = .activity) {
+                        detail: String? = nil, remaining: Double? = nil,
+                        kind: FeedbackKind = .activity) {
         autoGainStatus = line
+        autoGainDetail = detail
+        autoGainRemaining = remaining
         autoGainKind = kind
         autoGainStatusTimer?.invalidate()
         if let seconds {
             autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: seconds,
                                                        repeats: false) { [weak self] _ in
                 self?.autoGainStatus = nil
+                self?.autoGainDetail = nil
+                self?.autoGainRemaining = nil
                 self?.autoGainStatusTimer = nil
                 self?.refresh()
             }
         }
+        // each running input's OWN button shows the activity display
+        // (refresh() syncs the per-input scanners)
         refresh()
+    }
+
+    /// The calibration ENDED — the button restores itself, the footer
+    /// explains the outcome:
+    ///   success  → the footer says "Setting gain…" then "Gain set to
+    ///              X dB."
+    ///   cancelled→ the footer says "Auto Gain cancelled."
+    ///   failed   → the footer states the problem
+    /// (the per-input buttons restore themselves — refresh() syncs them)
+    func showAutoGainResult(_ line: String, detail: String?, gain: Double?,
+                            outcome: AutoGainEngine.Outcome) {
+        autoGainDetail = detail
+        autoGainRemaining = nil
+        autoGainStatusTimer?.invalidate()
+        autoGainStatusTimer = nil
+
+        switch outcome {
+        case .success:
+            // APPLYING — the footer says so while the gain lands
+            autoGainStatus = "Auto Gain · Setting gain…"
+            autoGainKind = .activity
+            refresh()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                guard let self else { return }
+                let value = gain.map { String(format: "%.1f dB", $0) } ?? "the new value"
+                self.autoGainStatus = "Auto Gain · Gain set to \(value)."
+                self.autoGainKind = .success
+                self.refresh()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    // …and the result line lingers a while (with a Dismiss
+                    // action) before it clears
+                    guard let self else { return }
+                    self.autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
+                                                                     repeats: false) { [weak self] _ in
+                        self?.autoGainStatus = nil
+                        self?.autoGainDetail = nil
+                        self?.autoGainStatusTimer = nil
+                        self?.refresh()
+                    }
+                    self.refresh()
+                }
+            }
+
+        case .cancelled:
+            autoGainStatus = "Auto Gain cancelled."
+            autoGainKind = .idle
+            autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 4,
+                                                       repeats: false) { [weak self] _ in
+                self?.autoGainStatus = nil
+                self?.autoGainDetail = nil
+                self?.autoGainRemaining = nil
+                self?.autoGainStatusTimer = nil
+                self?.refresh()
+            }
+            refresh()
+
+        case .failed:
+            // the specific problem, in the footer
+            autoGainStatus = line
+            autoGainKind = .warning
+            refresh()
+            autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
+                                                       repeats: false) { [weak self] _ in
+                self?.autoGainStatus = nil
+                self?.autoGainDetail = nil
+                self?.autoGainRemaining = nil
+                self?.autoGainStatusTimer = nil
+                self?.refresh()
+            }
+        }
     }
 
     /// +48V / Soft Limit / Polarity toggles (per input).
@@ -2503,6 +3210,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     @objc private func talkbackToggled(_ sender: NSButton) {
         guard !suppressActions else { return }
         onTalkback?(sender.state == .on)
+    }
+
+    /// The top-bar Auto Gain chip: calibrate EVERY Mic/Instrument input
+    /// at once (each running input's own button lights up). While a
+    /// calibration runs the button is dimmed — the footer's Cancel owns
+    /// that action.
+    @objc private func autoGainTopClicked(_ sender: NSButton) {
+        guard !suppressActions, !isLearning else { return refresh() }
+        guard !AutoGainEngine.shared.isRunning else { return }
+        startAutoGainAll()
+    }
+
+    /// Calibrate every input that can be calibrated (Mic / Instrument
+    /// mode) in one batch.
+    private func startAutoGainAll() {
+        let calibratable = (0..<4).filter { i in
+            if let rl = inputs[i].refLevel { return rl == 1 || rl == 4 }
+            return false
+        }
+        guard !calibratable.isEmpty else {
+            showAutoStatus("Auto Gain — no inputs in Mic/Instrument mode", clearAfter: 8,
+                           kind: .warning)
+            return
+        }
+        startAutoGain(for: calibratable)
     }
 
     /// Global mute — one click flips BOTH monitor outputs together
@@ -2631,9 +3363,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func glyphToggle(_ glyph: String, _ tag: Int,
                              _ accent: NSColor, _ name: String) -> FunctionToggle {
         let t = toggle(glyph, tag, accent)
-        t.titleFont = NSFont.systemFont(ofSize: 13, weight: .medium)
-        t.widthAnchor.constraint(equalToConstant: 28).isActive = true
-        t.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        t.titleFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+        // TINY chips — the same size as the per-input Ø (phase) button,
+        // so they fit UNDER the output's name beside the knob
+        t.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        t.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        t.cornerRadius = 4
         t.toolTip = name
         t.setAccessibilityLabel(name)
         return t
@@ -2831,8 +3566,9 @@ extension QuartetControlController {
     }
 
     func shortcutCancelAutoGain() {
+        // the engine's cancel path reports the outcome (and fades the
+        // scanning light) — no extra status line here
         AutoGainEngine.shared.cancelAll(reason: "cancelled")
-        showAutoStatus("Auto Gain cancelled", clearAfter: 4, kind: .idle)
     }
 
     func shortcutToggleSoftLimit() {
