@@ -209,15 +209,23 @@ final class TinyGlyphView: NSView {
         color.setStroke()
         switch glyph {
         case .speaker:
-            NSBezierPath(rect: NSRect(x: ox + 2 * u, y: oy + 6 * u,
-                                      width: 2.5 * u, height: 4 * u)).fill()
+            // classic speaker + one sound wave (after flaticon
+            // speaker_650504), optically centered in the 16-space
+            NSBezierPath(rect: NSRect(x: ox + 2.5 * u, y: oy + 6 * u,
+                                      width: 3 * u, height: 4 * u)).fill()
             let cone = NSBezierPath()
-            cone.move(to: pt(4.5, 6.5))
-            cone.line(to: pt(4.5, 9.5))
-            cone.line(to: pt(8, 11.5))
-            cone.line(to: pt(8, 4.5))
+            cone.move(to: pt(5.5, 6.5))
+            cone.line(to: pt(5.5, 9.5))
+            cone.line(to: pt(9, 11.5))
+            cone.line(to: pt(9, 4.5))
             cone.close()
             cone.fill()
+            let wave = NSBezierPath()
+            wave.appendArc(withCenter: pt(9.5, 8), radius: 3.5 * u,
+                           startAngle: -35, endAngle: 35, clockwise: false)
+            wave.lineWidth = 1.3 * u
+            wave.lineCapStyle = .round
+            wave.stroke()
         case .headphones:
             // band over the top + two ear pads
             let band = NSBezierPath()
@@ -678,7 +686,9 @@ class IconButton: FunctionButton {
         let engaged = isEngaged
         let enabled = isEnabled
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        // radius 4 — crisper than the chips (6), so these read as small
+        // utility controls, not toolbar tiles
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
         else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
@@ -720,32 +730,33 @@ final class TalkbackIconButton: IconButton {
     }
 
     override func drawGlyph(color: NSColor) {
-        // classic solid microphone silhouette — capsule body, U cradle,
-        // stem, base (after flaticon's "microphone-black-shape")
+        // compact microphone silhouette — capsule body, U cradle, stem,
+        // base — ~15pt of ink in the 32pt frame, 1.5 stroke weight to
+        // MATCH the speaker (neither dominates), optically centered
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
         func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
         color.setFill()
-        NSBezierPath(roundedRect: NSRect(x: ox + 12 * u, y: oy + 11 * u,
-                                         width: 8 * u, height: 12 * u),
-                     xRadius: 4 * u, yRadius: 4 * u).fill()
+        NSBezierPath(roundedRect: NSRect(x: ox + 12.5 * u, y: oy + 13 * u,
+                                         width: 7 * u, height: 10 * u),
+                     xRadius: 3.5 * u, yRadius: 3.5 * u).fill()
         color.setStroke()
         let cradle = NSBezierPath()
-        cradle.appendArc(withCenter: pt(16, 16), radius: 8.5 * u,
+        cradle.appendArc(withCenter: pt(16, 17.5), radius: 7 * u,
                          startAngle: 180, endAngle: 0, clockwise: false)
-        cradle.lineWidth = 2 * u
+        cradle.lineWidth = 1.5 * u
         cradle.lineCapStyle = .round
         cradle.stroke()
         let stem = NSBezierPath()
-        stem.move(to: pt(16, 7.5))
-        stem.line(to: pt(16, 5))
-        stem.lineWidth = 2 * u
+        stem.move(to: pt(16, 10.5))
+        stem.line(to: pt(16, 8))
+        stem.lineWidth = 1.5 * u
         stem.lineCapStyle = .round
         stem.stroke()
         let base = NSBezierPath()
-        base.move(to: pt(11.5, 5))
-        base.line(to: pt(20.5, 5))
-        base.lineWidth = 2 * u
+        base.move(to: pt(12.5, 8))
+        base.line(to: pt(19.5, 8))
+        base.lineWidth = 1.5 * u
         base.lineCapStyle = .round
         base.stroke()
     }
@@ -758,33 +769,34 @@ final class TalkbackIconButton: IconButton {
 final class MuteAllIconButton: IconButton {
     override func drawGlyph(color: NSColor) {
         // speaker (housing + cone) with sound waves — the classic volume
-        // glyph; a diagonal slash is added while everything is muted
+        // glyph, ~15pt wide with breathing room, 1.5 stroke weight
+        // matching the mic; a diagonal slash is added while muted
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
         func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
         color.setFill()
-        NSBezierPath(rect: NSRect(x: ox + 8 * u, y: oy + 12.5 * u,
-                                  width: 4 * u, height: 7 * u)).fill()
+        NSBezierPath(rect: NSRect(x: ox + 9 * u, y: oy + 13 * u,
+                                  width: 3.5 * u, height: 6 * u)).fill()
         let cone = NSBezierPath()
-        cone.move(to: pt(12, 13))
-        cone.line(to: pt(12, 19))
-        cone.line(to: pt(17, 22.5))
-        cone.line(to: pt(17, 9.5))
+        cone.move(to: pt(12.5, 13.5))
+        cone.line(to: pt(12.5, 18.5))
+        cone.line(to: pt(16.5, 21))
+        cone.line(to: pt(16.5, 11))
         cone.close()
         cone.fill()
         color.setStroke()
-        for r in [CGFloat(5), CGFloat(8.5)] {
+        for r in [CGFloat(4.5), CGFloat(7.5)] {
             let wave = NSBezierPath()
-            wave.appendArc(withCenter: pt(18, 16), radius: r * u,
-                           startAngle: -32, endAngle: 32, clockwise: false)
-            wave.lineWidth = 1.6 * u
+            wave.appendArc(withCenter: pt(17, 16), radius: r * u,
+                           startAngle: -30, endAngle: 30, clockwise: false)
+            wave.lineWidth = 1.5 * u
             wave.lineCapStyle = .round
             wave.stroke()
         }
         if isEngaged {
             let slash = NSBezierPath()
-            slash.move(to: pt(7, 25))
-            slash.line(to: pt(25, 7))
+            slash.move(to: pt(8, 24))
+            slash.line(to: pt(24, 8))
             slash.lineWidth = 2.2 * u
             slash.lineCapStyle = .round
             slash.stroke()
