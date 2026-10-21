@@ -49,8 +49,9 @@ import AppKit
 /// gain, output trim, monitor level): a LAYERED flat dial — a thick
 /// subdued 270° charcoal track with the opening at the bottom, a flat
 /// value arc riding on it clockwise from 7:30, a solid center disk a
-/// clear step lighter than the panel carrying a short dark position
-/// notch, and the signed whole-number value with its "dB" unit inside.
+/// clear step lighter than the panel, and the signed whole-number value
+/// with its "dB" unit inside. No pointer, no notch: the arc's end is
+/// the position.
 /// Color is meaning:
 /// system accent for focus/selection and the neutral functions (Ø, SUM,
 /// Include, plug-in enable); green only for Soft Limit + the live value
@@ -144,9 +145,6 @@ enum GGTheme {
     /// real and applied, but NOT a hardware reading: neutral, so green
     /// stays reserved for live values.
     static let knobSavedArc = NSColor(white: 1, alpha: 0.34)
-    /// The position notch on the center disk — near-black, dark
-    /// against the lighter disk.
-    static let knobMark = darkText
     /// The numeric value inside the knob — off-white, tabular numerals.
     static let knobValue = NSColor(white: 0.94, alpha: 1)
     /// The unit inside the knob ("dB") — the value's own color, dimmed.
@@ -668,12 +666,12 @@ final class GGLevelMeter: NSView {
 /// from the lower-left as the value rises (midpoint = 12 o'clock, full =
 /// the whole track — the arc is the fraction of the FULL RANGE from the
 /// minimum). Inside the track: a SOLID center disk a clear step
-/// lighter than the panel, carrying a short dark radial POSITION notch
-/// near its edge pointing at the value, and the value itself — the
-/// signed whole number ("+19", "-5", bare "0") with its "dB" unit
-/// UNDER it — 12pt tabular numerals. Depth is contrasting flat surfaces
-/// only: no gradients, bevels, glow or decorative shadows; the whole
-/// control area is the drag target.
+/// lighter than the panel, carrying the value itself — the signed whole
+/// number ("+19", "-5", bare "0") with its "dB" unit UNDER it — 12pt
+/// tabular numerals. There is NO pointer or notch on the dial: the arc's
+/// end IS the position. Depth is contrasting flat surfaces only: no
+/// gradients, bevels, glow or decorative shadows; the whole control
+/// area is the drag target.
 ///
 /// WHAT the value is decides how it is drawn (see `ValueKind`): a LIVE
 /// hardware reading gets the green arc, a SAVED app-side setting gets a
@@ -832,20 +830,9 @@ final class GainKnob: NSControl {
             arc(CGFloat(f) * Self.sweepAngle).stroke()
         }
 
-        // LAYER 3 — the POSITION MARKER: a short dark radial notch ON the
-        // disk, near its edge, pointing at the value — the arc's end
-        // point, to the degree. No known value: no notch.
-        if hasValue {
-            let a = (Self.startAngle - CGFloat(f) * Self.sweepAngle) * .pi / 180
-            let notch = NSBezierPath()
-            let inner = diskRadius * 0.62, outer = diskRadius * 0.94
-            notch.move(to: NSPoint(x: c.x + inner * cos(a), y: c.y + inner * sin(a)))
-            notch.line(to: NSPoint(x: c.x + outer * cos(a), y: c.y + outer * sin(a)))
-            notch.lineWidth = max(1.5, bounds.width * 0.04)
-            notch.lineCapStyle = .butt
-            GGTheme.knobMark.withAlphaComponent(enabled ? 1 : 0.45).setStroke()
-            notch.stroke()
-        }
+        // LAYER 3 — the VALUE, inside the disk. There is no pointer or
+        // notch on the dial: the arc's end IS the position, and the
+        // number in the middle says what it is.
 
         guard !isEditing else { return }
 
