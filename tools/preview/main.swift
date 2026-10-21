@@ -84,6 +84,8 @@ controller.updateTree(tree)
 for (i, v) in [0.0, -6.0, 3.0, -24.0].enumerated() {
     InsertServer.shared.setTrim(i, v, notify: false)
 }
+// pair 1 mirrors pair 0 — the "Include source processing" row shows
+InsertServer.shared.setSource(1, .copy(0))
 controller.refresh()
 RunLoop.main.run(until: Date().addingTimeInterval(0.6))
 render(outPrefix + "-connected.png")

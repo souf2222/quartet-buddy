@@ -197,6 +197,9 @@ enum GGSpace {
     static let knob: CGFloat = 14
     static let heading: CGFloat = 16
     static let section: CGFloat = 22
+    /// A section heading and the first row of its strips — the strip's
+    /// own padding adds the rest of the gap.
+    static let sectionHead: CGFloat = 8
 }
 
 /// A borderless channel-strip container. Native direction: channels are
@@ -1014,8 +1017,8 @@ final class FlowArrow: NSView {
 
     override var intrinsicContentSize: NSSize {
         switch direction {
-        case .down: return NSSize(width: 16, height: 12)
-        case .right: return NSSize(width: 20, height: 12)
+        case .down: return NSSize(width: 14, height: 9)
+        case .right: return NSSize(width: 18, height: 8)
         }
     }
 
@@ -3127,10 +3130,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // rules) and center — pinning them to the stack width would
             // over-constrain the fixed strip widths
         ])
-        // the spacing scale: a section heading sits 16 pt from its
-        // content; the two sections are separated by a little more
-        stack.setCustomSpacing(GGSpace.heading, after: inputsHeader)
-        stack.setCustomSpacing(GGSpace.heading, after: outHeader)
+        // the spacing scale: a section heading sits close above its
+        // strips, and the two sections are separated by a little more
+        stack.setCustomSpacing(GGSpace.sectionHead, after: inputsHeader)
+        stack.setCustomSpacing(GGSpace.sectionHead, after: outHeader)
         stack.setCustomSpacing(GGSpace.knob, after: inputGrid)
         stack.setCustomSpacing(GGSpace.knob, after: sectionRule)
 
@@ -3234,10 +3237,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
                 col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
                 col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -8),
             ])
 
             // HEADER — the channel NAME is the selector: clicking it
@@ -3456,10 +3459,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
                 col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
                 col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -8),
             ])
 
             // HEADER — the output NAME as a title. It defaults to the
@@ -3519,7 +3522,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // beneath the source selector, in a reserved option row of
             // the SAME height in all four columns, so the processing
             // stages below line up. (Direct sources keep the row empty —
-            // it never collapses.)
+            // it never collapses.) The reserved height is the CHECKBOX's
+            // own height — no magic number.
             let inc = NSButton(checkboxWithTitle: "Include source processing", target: self,
                                action: #selector(includeChanged(_:)))
             inc.tag = 2200 + i
@@ -3528,12 +3532,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             inc.toolTip = "Mirror this output AFTER the source’s plug-in"
             let incRow = NSView()
             incRow.translatesAutoresizingMaskIntoConstraints = false
-            incRow.heightAnchor.constraint(equalToConstant: 20).isActive = true
             incRow.addSubview(inc)
             NSLayoutConstraint.activate([
                 inc.leadingAnchor.constraint(equalTo: incRow.leadingAnchor),
                 inc.centerYAnchor.constraint(equalTo: incRow.centerYAnchor),
             ])
+            // the reservation follows the checkbox, so the row is
+            // exactly as tall as it needs to be — in every column
+            incRow.heightAnchor.constraint(equalTo: inc.heightAnchor).isActive = true
             col.addArrangedSubview(incRow)
             includeChecks.append(inc)
 
@@ -3541,7 +3547,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // processing stages. Thin and quiet: a hairline, no box. It
             // hangs under the MIDDLE of the source selector — the same
             // axis as the plug-in slot below it, so the chain reads
-            // straight down.
+            // straight down. It is SHORT: a connector between nearby
+            // stages, not a row of its own.
             let dropIn = FlowArrow(.down)
             let dropHolder = NSView()
             dropHolder.translatesAutoresizingMaskIntoConstraints = false
@@ -3608,7 +3615,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             // ONE header row for the two stages — "Audio FX" over the
             // plug-in area, "Trim" over the knob — so the two columns
-            // line up across all four strips.
+            // line up across all four strips. The two captions share
+            // ONE baseline, and "saved" sits BESIDE "Trim" in smaller
+            // text (it is a note, not a second line).
             let procLbl = NSTextField(labelWithString: "Audio FX")
             procLbl.font = GGTheme.labelFont
             procLbl.textColor = GGTheme.softGray
@@ -3622,20 +3631,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             savedCaption.font = NSFont.systemFont(ofSize: 9)
             savedCaption.textColor = GGTheme.muted
             savedCaption.toolTip = "Saved setting — applied by the plug-in insert"
-            let trimSlot = NSStackView()
-            trimSlot.orientation = .vertical
-            trimSlot.alignment = .centerX
-            trimSlot.spacing = 1
+            // the caption pair sits in a 60-pt slot — the knob's width —
+            // so it is centered exactly over the knob below it
+            let trimSlot = NSStackView(views: [trimCaption, savedCaption])
+            trimSlot.orientation = .horizontal
+            trimSlot.alignment = .firstBaseline
+            trimSlot.spacing = 5
+            trimSlot.edgeInsets = NSEdgeInsets(top: 0, left: 3, bottom: 0, right: 3)
             trimSlot.translatesAutoresizingMaskIntoConstraints = false
-            trimSlot.addArrangedSubview(trimCaption)
-            trimSlot.addArrangedSubview(savedCaption)
-            // the caption sits in a 60-pt slot — the knob's width — so it
-            // is centered exactly over the knob below it
             trimSlot.widthAnchor.constraint(equalToConstant: 60).isActive = true
             let colHeader = NSStackView()
             colHeader.orientation = .horizontal
             colHeader.spacing = GGSpace.knob
-            colHeader.alignment = .centerY
+            colHeader.alignment = .firstBaseline
             colHeader.translatesAutoresizingMaskIntoConstraints = false
             colHeader.addArrangedSubview(procLbl)
             let headerSpacer = NSView()
@@ -3647,15 +3655,29 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // sits exactly over the knob column below
             colHeader.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
-            // the two stages, joined by the connector
+            // the two stages, joined by the connector. The slot and the
+            // knob share the row's TOP edge, so the slot sits directly
+            // under its caption; the short arrow rides the slot's
+            // centre line, level with the slot it leaves.
             let body = NSStackView()
             body.orientation = .horizontal
             body.spacing = GGSpace.tight
-            body.alignment = .centerY
+            body.alignment = .top
             body.translatesAutoresizingMaskIntoConstraints = false
             body.addArrangedSubview(procCol)
             let stageArrow = FlowArrow(.right)
-            body.addArrangedSubview(stageArrow)
+            // the arrow rides in a slot-height holder, so it lines up
+            // with the plug-in slot's middle
+            let arrowHolder = NSView()
+            arrowHolder.translatesAutoresizingMaskIntoConstraints = false
+            arrowHolder.widthAnchor.constraint(equalToConstant: 18).isActive = true
+            arrowHolder.heightAnchor.constraint(equalToConstant: slot.intrinsicContentSize.height).isActive = true
+            arrowHolder.addSubview(stageArrow)
+            NSLayoutConstraint.activate([
+                stageArrow.centerXAnchor.constraint(equalTo: arrowHolder.centerXAnchor),
+                stageArrow.centerYAnchor.constraint(equalTo: arrowHolder.centerYAnchor),
+            ])
+            body.addArrangedSubview(arrowHolder)
             body.addArrangedSubview(knobCol)
             // join the hierarchy BEFORE cross-view constraints (common
             // ancestor required at activation time)
@@ -3669,7 +3691,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             // DESTINATION — the hardware output pair, at the END of the
             // path. It sits under the trim column, exactly where the
-            // signal leaves, so the chain reads straight down.
+            // signal leaves, so the chain reads straight down — and it
+            // hugs the knob: the arrow and the label are one small
+            // block, right beneath it.
             let dest = NSTextField(labelWithString: InsertServer.pairNames[i])
             dest.font = NSFont.systemFont(ofSize: 11, weight: .medium)
             dest.textColor = GGTheme.softGray
@@ -3678,7 +3702,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let destBlock = NSStackView()
             destBlock.orientation = .vertical
             destBlock.alignment = .centerX
-            destBlock.spacing = 2
+            destBlock.spacing = 1
             destBlock.translatesAutoresizingMaskIntoConstraints = false
             destBlock.addArrangedSubview(FlowArrow(.down))
             destBlock.addArrangedSubview(dest)
@@ -3695,6 +3719,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             destRow.addArrangedSubview(destBlock)
             col.addArrangedSubview(destRow)
             destRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            // the destination rides right under the knob
+            col.setCustomSpacing(GGSpace.tight, after: body)
 
             strip.addArrangedSubview(card)
         }
