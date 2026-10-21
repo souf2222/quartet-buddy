@@ -1524,14 +1524,17 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
             headerRow.addArrangedSubview(headerSpacer)
             headerRow.addArrangedSubview(p)
-            headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            // join the hierarchy BEFORE constraining against col — a
+            // constraint between views with no common ancestor throws
+            // NSGenericException and aborts the whole window build
             col.addArrangedSubview(headerRow)
+            headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
             // thin signal meter between the header and the controls
             let meter = GGLevelMeter()
             meter.heightAnchor.constraint(equalToConstant: 8).isActive = true
-            meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             col.addArrangedSubview(meter)
+            meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             meters.append(meter)
 
             // CONTROL ROW — knob left, Auto Gain + toggles right
@@ -1603,8 +1606,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             controlRow.translatesAutoresizingMaskIntoConstraints = false
             controlRow.addArrangedSubview(knob)
             controlRow.addArrangedSubview(right)
-            controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            // join the hierarchy BEFORE constraining against col (see
+            // headerRow above — cross-view constraints need a common
+            // ancestor at activation time)
             col.addArrangedSubview(controlRow)
+            controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
             // learn fallback (only when ids are missing)
             let lb = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))

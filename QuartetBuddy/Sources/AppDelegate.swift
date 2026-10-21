@@ -353,6 +353,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 InsertServer.shared.showPluginUI(0)
             }
         }
+        if ProcessInfo.processInfo.environment["QB_AUTO_OPEN"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                QBLog.log("control: AUTO-OPEN debug trigger")
+                QuartetControlController.shared.show()
+            }
+        }
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
