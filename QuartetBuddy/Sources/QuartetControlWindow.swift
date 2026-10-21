@@ -22,12 +22,17 @@ import AppKit
 /// dark standard background material with subtle behind-window blur —
 /// and native popups, buttons, fields everywhere, keeping their system
 /// appearance. Channels are NOT floating cards: four equal columns per
-/// section, separated by thin vertical rules and spacing. The custom
-/// element is the KNOB (input gain, output trim, monitor level): flat,
-/// no body circle — a thin subdued 270° track with the opening at the
-/// bottom, a flat green value arc (the SETTING, not live signal) growing
-/// clockwise from 7:30, and ONLY the whole-number value (12pt) centered
-/// inside — no "dB" — with precise entry by double-click. Color is meaning:
+/// section, separated by thin vertical rules and spacing. Channel
+/// SELECTION is the header: click the name to select the strip — a thin
+/// accent marker appears beside the title; the panel itself never
+/// changes (no border, no tint). The separate "Learn…" button (only
+/// present when ids are missing) stays its own distinct action. The
+/// custom element is the KNOB (input gain, output trim, monitor level):
+/// flat, no body circle — a thin subdued 270° track with the opening at
+/// the bottom, a flat green value arc (the SETTING, not live signal)
+/// growing clockwise from 7:30, and ONLY the whole-number value (12pt)
+/// centered inside — no "dB" — with precise entry by double-click.
+/// Color is meaning:
 /// system accent for focus/selection and the neutral functions (Ø, SUM,
 /// Include, plug-in enable); green only for Soft Limit + the arcs;
 /// amber for 48V/DIM; red for Mute + clipping. Everything else is quiet.
@@ -107,32 +112,9 @@ enum GGTheme {
 
 /// A borderless channel-strip container. Native direction: channels are
 /// separated by thin vertical rules and spacing — no floating cards, no
-/// heavy outlines. The SELECTED strip gets the system-accent treatment:
-/// a soft tint + a thin rounded accent outline. `selected` is set by
-/// the keyboard-shortcut highlight.
-final class CardView: NSView {
-    var selected = false { didSet { restyle() } }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.masksToBounds = true
-        restyle()
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    private func restyle() {
-        if selected {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
-            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.65).cgColor
-            layer?.borderWidth = 1
-        } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
-            layer?.borderWidth = 0
-        }
-    }
-}
+/// heavy outlines. Selection never touches the panel: it's shown by a
+/// thin accent marker beside the strip's header (see updateCardHighlights).
+final class CardView: NSView {}
 
 /// A 1pt hairline divider — the system separator, exactly.
 final class Hairline: NSView {
@@ -149,7 +131,11 @@ final class Hairline: NSView {
 /// A title that becomes an editable field on double-click — NOT a text
 /// box. Plain title text and an arrow cursor until the second click
 /// starts editing (the system focus ring shows the editing state).
+/// A SINGLE click selects the strip (see `onClick`).
 final class TitleField: NSTextField {
+    /// Single-click selects the channel strip.
+    var onClick: (() -> Void)?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         isBordered = false
@@ -160,7 +146,8 @@ final class TitleField: NSTextField {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func mouseDown(with event: NSEvent) {
-        guard event.clickCount >= 2 else { return }   // single click: it's a title
+        onClick?()   // single click: select the strip
+        guard event.clickCount >= 2 else { return }   // double click: edit
         isEditable = true
         isSelectable = true
         super.mouseDown(with: event)   // begins editing
@@ -176,6 +163,24 @@ final class TitleField: NSTextField {
         isEditable = false
         isSelectable = false
     }
+}
+
+/// A read-only channel title that SELECTS its strip on any click
+/// (input names — they come from the hardware, so there's nothing to
+/// edit; the click is pure selection).
+final class SelectLabel: NSTextField {
+    var onClick: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        drawsBackground = false
+        isEditable = false
+        isSelectable = false
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
 /// A compact horizontal signal meter: 20 square segments, green → amber →
@@ -614,31 +619,32 @@ final class TalkbackIconButton: IconButton {
     }
 
     override func drawGlyph(color: NSColor) {
-        // simple microphone silhouette — capsule body, U cradle, stem, base
+        // classic solid microphone silhouette — capsule body, U cradle,
+        // stem, base (after flaticon's "microphone-black-shape")
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
         func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
         color.setFill()
-        NSBezierPath(roundedRect: NSRect(x: ox + 12.5 * u, y: oy + 11 * u,
-                                         width: 7 * u, height: 11 * u),
-                     xRadius: 3.5 * u, yRadius: 3.5 * u).fill()
+        NSBezierPath(roundedRect: NSRect(x: ox + 12 * u, y: oy + 11 * u,
+                                         width: 8 * u, height: 12 * u),
+                     xRadius: 4 * u, yRadius: 4 * u).fill()
         color.setStroke()
         let cradle = NSBezierPath()
-        cradle.appendArc(withCenter: pt(16, 16), radius: 8 * u,
+        cradle.appendArc(withCenter: pt(16, 16), radius: 8.5 * u,
                          startAngle: 180, endAngle: 0, clockwise: false)
-        cradle.lineWidth = 1.8 * u
+        cradle.lineWidth = 2 * u
         cradle.lineCapStyle = .round
         cradle.stroke()
         let stem = NSBezierPath()
-        stem.move(to: pt(16, 8))
+        stem.move(to: pt(16, 7.5))
         stem.line(to: pt(16, 5))
-        stem.lineWidth = 1.8 * u
+        stem.lineWidth = 2 * u
         stem.lineCapStyle = .round
         stem.stroke()
         let base = NSBezierPath()
-        base.move(to: pt(12, 5))
-        base.line(to: pt(20, 5))
-        base.lineWidth = 1.8 * u
+        base.move(to: pt(11.5, 5))
+        base.line(to: pt(20.5, 5))
+        base.lineWidth = 2 * u
         base.lineCapStyle = .round
         base.stroke()
     }
@@ -650,24 +656,34 @@ final class TalkbackIconButton: IconButton {
 /// muted; plain speaker on a neutral chip otherwise.
 final class MuteAllIconButton: IconButton {
     override func drawGlyph(color: NSColor) {
-        // speaker: filled housing + cone; a diagonal slash when muted
+        // speaker (housing + cone) with sound waves — the classic volume
+        // glyph; a diagonal slash is added while everything is muted
         let u = bounds.height / 32
         let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
         func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
         color.setFill()
-        NSBezierPath(rect: NSRect(x: ox + 10 * u, y: oy + 12.5 * u,
+        NSBezierPath(rect: NSRect(x: ox + 8 * u, y: oy + 12.5 * u,
                                   width: 4 * u, height: 7 * u)).fill()
         let cone = NSBezierPath()
-        cone.move(to: pt(14, 13))
-        cone.line(to: pt(14, 19))
-        cone.line(to: pt(20, 22.5))
-        cone.line(to: pt(20, 9.5))
+        cone.move(to: pt(12, 13))
+        cone.line(to: pt(12, 19))
+        cone.line(to: pt(17, 22.5))
+        cone.line(to: pt(17, 9.5))
         cone.close()
         cone.fill()
+        color.setStroke()
+        for r in [CGFloat(5), CGFloat(8.5)] {
+            let wave = NSBezierPath()
+            wave.appendArc(withCenter: pt(18, 16), radius: r * u,
+                           startAngle: -32, endAngle: 32, clockwise: false)
+            wave.lineWidth = 1.6 * u
+            wave.lineCapStyle = .round
+            wave.stroke()
+        }
         if isEngaged {
             let slash = NSBezierPath()
-            slash.move(to: pt(8, 24))
-            slash.line(to: pt(24, 8))
+            slash.move(to: pt(7, 25))
+            slash.line(to: pt(25, 7))
             slash.lineWidth = 2.2 * u
             slash.lineCapStyle = .round
             slash.stroke()
@@ -1147,12 +1163,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: keyboard-shortcut selection state (see extension at file end)
 
-    /// Card views for the input / routing grids (index 0…3) — the shortcut
-    /// selection highlight drives their `selected` state (CardView owns
-    /// the blue border + lifted surface).
-    var inputCards: [CardView] = []
-    var outputCards: [CardView] = []
-    /// The card each "selected…" shortcut acts on (gain, trim, processing).
+    /// Selection markers (index 0…3) — a thin accent bar beside each
+    /// strip's header, visible only on the selected strip.
+    private var inputMarkers: [NSView] = []
+    private var outputMarkers: [NSView] = []
+    /// The strip each "selected…" shortcut acts on (gain, trim, processing).
     var selectedInputIndex = 0
     var selectedOutputIndex = 0
 
@@ -1481,7 +1496,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
             card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
-            inputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
@@ -1495,12 +1509,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
             ])
 
-            // HEADER — input name left, compact native dropdown right
-            let head = NSTextField(labelWithString: "Analog In \(i + 1)")
+            // HEADER — the channel NAME is the selector: clicking it
+            // selects this strip (a thin accent marker beside the title
+            // shows the selection; the panel itself never changes).
+            // The compact type dropdown sits at the right.
+            let head = SelectLabel(frame: .zero)
+            head.stringValue = "Analog In \(i + 1)"
             head.font = GGTheme.nameFont
             head.textColor = GGTheme.primary
             head.lineBreakMode = .byTruncatingTail
+            head.onClick = { [weak self] in self?.selectInput(i) }
             inputHeaders.append(head)
+
+            let marker = makeMarker()
+            inputMarkers.append(marker)
 
             let p = NSPopUpButton()
             p.addItem(withTitle: "—")
@@ -1521,6 +1543,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             headerRow.alignment = .centerY
             headerRow.spacing = 6
             headerRow.translatesAutoresizingMaskIntoConstraints = false
+            headerRow.addArrangedSubview(marker)
             headerRow.addArrangedSubview(head)
             let headerSpacer = NSView()
             headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
@@ -1663,7 +1686,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
             card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
-            outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
@@ -1678,8 +1700,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             ])
 
             // HEADER — the output NAME as a title. It defaults to the
-            // physical pair ("Out 1–2") and renames on double-click; the
-            // phys label is gone (the name IS the identity now).
+            // physical pair ("Out 1–2"), renames on double-click, and a
+            // SINGLE click selects this strip (the accent marker beside
+            // the title shows the selection).
             let nf = TitleField(frame: .zero)
             nf.font = GGTheme.nameFont
             nf.textColor = GGTheme.primary
@@ -1688,8 +1711,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             nf.tag = 2050 + i
             nf.delegate = self
             nf.toolTip = "Destination name — double-click to rename"
+            nf.onClick = { [weak self] in self?.selectOutput(i) }
             nameFields.append(nf)
-            col.addArrangedSubview(nf)
+
+            let marker = makeMarker()
+            outputMarkers.append(marker)
+            let headerRow = NSStackView()
+            headerRow.orientation = .horizontal
+            headerRow.alignment = .centerY
+            headerRow.spacing = 6
+            headerRow.translatesAutoresizingMaskIntoConstraints = false
+            headerRow.addArrangedSubview(marker)
+            headerRow.addArrangedSubview(nf)
+            col.addArrangedSubview(headerRow)
             nf.widthAnchor.constraint(lessThanOrEqualTo: col.widthAnchor).isActive = true
 
             // Source — full-width native dropdown, no separate label
@@ -2453,16 +2487,31 @@ extension QuartetControlController {
         selectOutput((selectedOutputIndex + delta + 4) % 4)
     }
 
-    /// Selection visual: the selected panel gets the thin square blue
-    /// outline and a slightly lighter flat surface — CardView owns the
-    /// styling; selection should look deliberate, not like every panel
-    /// competing for attention.
+    /// The thin vertical selection marker beside a strip's header —
+    /// 2×14pt, space always reserved, invisible until selected (so
+    /// selecting never shifts the layout).
+    private func makeMarker() -> NSView {
+        let m = NSView()
+        m.translatesAutoresizingMaskIntoConstraints = false
+        m.wantsLayer = true
+        m.layer?.backgroundColor = NSColor.clear.cgColor
+        m.layer?.cornerRadius = 1
+        m.widthAnchor.constraint(equalToConstant: 2).isActive = true
+        m.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        return m
+    }
+
+    /// Selection visual: a thin accent marker beside the SELECTED
+    /// strip's header — the panel itself never changes (no border, no
+    /// tint, no dimming; unselected strips simply have no marker).
     func updateCardHighlights() {
-        for (i, card) in inputCards.enumerated() {
-            card.selected = i == selectedInputIndex
+        for (i, m) in inputMarkers.enumerated() {
+            m.layer?.backgroundColor = (i == selectedInputIndex
+                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
         }
-        for (i, card) in outputCards.enumerated() {
-            card.selected = i == selectedOutputIndex
+        for (i, m) in outputMarkers.enumerated() {
+            m.layer?.backgroundColor = (i == selectedOutputIndex
+                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
         }
     }
 
