@@ -1257,6 +1257,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: show / refresh
 
+    /// Coalesced refresh for the 10 Hz status bursts: with ALL inputs
+    /// calibrating, each tick fires onStatus once per input (four, and the
+    /// footer shows only ONE message anyway). Setting the fields is cheap;
+    /// the full refresh is not — so batch every burst in this runloop turn
+    /// into a single refresh. (Refreshes from other paths are untouched.)
+    private var autoGainRefreshQueued = false
+    private func scheduleAutoGainRefresh() {
+        guard !autoGainRefreshQueued else { return }
+        autoGainRefreshQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.autoGainRefreshQueued = false
+            self.refresh()
+        }
+    }
+
     func show() {
         if window == nil { build() }
         refreshSampleRatePopup()
@@ -3005,8 +3021,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// popover, not in the strip itself. `remaining` is the countdown
     /// shown NEXT TO Cancel (the message text itself stays steady).
     func showAutoStatus(_ line: String, clearAfter seconds: TimeInterval?,
-                        detail: String? = nil, remaining: Double? = nil,
-                        kind: FeedbackKind = .activity) {
+                       detail: String? = nil, remaining: Double? = nil,
+                       kind: FeedbackKind = .activity) {
+        // FAST PATH: the message and readings are unchanged — only the
+        // countdown ticked. Re-render the feedback strip (dot, text, the
+        // seconds and the Cancel button) and skip the full window refresh,
+        // which rebuilds every button's title/tooltip/accessibility and
+        // costs orders of magnitude more.
+        if autoGainStatus == line, autoGainDetail == detail,
+           autoGainKind == kind, seconds == nil,
+           let connected = isGlueConnected?() {
+            autoGainRemaining = remaining
+            updateFeedback(connected: connected, insertLive: InsertServer.shared.running)
+            return
+        }
         autoGainStatus = line
         autoGainDetail = detail
         autoGainRemaining = remaining
@@ -3023,8 +3051,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
         }
         // each running input's OWN button shows the activity display
-        // (refresh() syncs the per-input scanners)
-        refresh()
+        // (refresh() syncs the per-input scanners) — coalesced, so a
+        // four-input burst costs ONE full refresh
+        scheduleAutoGainRefresh()
     }
 
     /// The calibration ENDED — the button restores itself, the footer
@@ -3079,13 +3108,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 self?.autoGainStatusTimer = nil
                 self?.refresh()
             }
-            refresh()
+            scheduleAutoGainRefresh()
 
         case .failed:
             // the specific problem, in the footer
             autoGainStatus = line
             autoGainKind = .warning
-            refresh()
+            scheduleAutoGainRefresh()
             autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
                                                        repeats: false) { [weak self] _ in
                 self?.autoGainStatus = nil

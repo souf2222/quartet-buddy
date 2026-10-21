@@ -105,6 +105,10 @@ final class AutoGainEngine {
         var winRmsDBFS: Double?
         var sawClip = false
         var attempts = 0
+        /// Whole-second countdown already reported for the current phase
+        /// (−1 forces the first status). Status fires at most ~1 Hz per
+        /// input, not every 100 ms tick.
+        var lastStatusWhole: Int = -1
         init(params: StartParams) {
             self.params = params
             self.originalGain = params.currentGain
@@ -286,14 +290,20 @@ final class AutoGainEngine {
                 } else {
                     // SHORT, STEADY message for the strip; the countdown
                     // travels separately (next to Cancel), the readings go
-                    // to the detail popover.
+                    // to the detail popover. Fire only when the displayed
+                    // text would change — phase/gain/whole-second — so the
+                    // window refreshes ~1 Hz, not every 100 ms tick.
                     let left = Self.listenSeconds - now.timeIntervalSince(s.listenStart)
-                    onStatus?(i, String(
-                        format: "Auto Gain · Input %d — Play or sing at your loudest level.",
-                        i + 1),
-                        String(format: "preamp %.1f dB · target %.0f dBFS",
-                               s.lastWrittenGain, target),
-                        left)
+                    let whole = max(0, Int(ceil(left - 0.001)))
+                    if whole != s.lastStatusWhole {
+                        s.lastStatusWhole = whole
+                        onStatus?(i, String(
+                            format: "Auto Gain · Input %d — Play or sing at your loudest level.",
+                            i + 1),
+                            String(format: "preamp %.1f dB · target %.0f dBFS",
+                                   s.lastWrittenGain, target),
+                            Double(whole))
+                    }
                 }
             case .verifying:
                 if s.sawClip {
@@ -305,12 +315,16 @@ final class AutoGainEngine {
                     finishVerifying(s, i, target: target)
                 } else {
                     let left = cfg.verifySeconds - now.timeIntervalSince(s.verifyStart)
-                    onStatus?(i, String(
-                        format: "Auto Gain · Input %d — Hold your level, verifying…",
-                        i + 1),
-                        String(format: "preamp %.1f dB · target %.0f dBFS",
-                               s.lastWrittenGain, target),
-                        left)
+                    let whole = max(0, Int(ceil(left - 0.001)))
+                    if whole != s.lastStatusWhole {
+                        s.lastStatusWhole = whole
+                        onStatus?(i, String(
+                            format: "Auto Gain · Input %d — Hold your level, verifying…",
+                            i + 1),
+                            String(format: "preamp %.1f dB · target %.0f dBFS",
+                                   s.lastWrittenGain, target),
+                            Double(whole))
+                    }
                 }
             case .idle:
                 break
@@ -365,6 +379,7 @@ final class AutoGainEngine {
         s.listenStart = Date()
         s.lastNudge = s.listenStart
         s.activeSeconds = 0
+        s.lastStatusWhole = -1
         s.resetWindow()
     }
 
@@ -380,6 +395,7 @@ final class AutoGainEngine {
         s.verifyStart = Date()
         s.appliedGain = s.lastWrittenGain
         s.activeSeconds = 0
+        s.lastStatusWhole = -1
         s.resetWindow()
         onStatus?(i, String(format: "Auto Gain · Input %d — Hold your level, verifying…", i + 1),
                   String(format: "preamp %.1f dB", s.lastWrittenGain), nil)
