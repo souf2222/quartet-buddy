@@ -147,8 +147,11 @@ enum GGTheme {
     static let knobSavedArc = NSColor(white: 1, alpha: 0.34)
     /// The numeric value inside the knob — off-white, tabular numerals.
     static let knobValue = NSColor(white: 0.94, alpha: 1)
-    /// The unit inside the knob ("dB") — the value's own color, dimmed.
-    static let knobUnit = NSColor(white: 0.94, alpha: 0.55)
+
+    /// The flow connectors — a hairline in a quiet, but VISIBLE, gray:
+    /// enough to read as a path, never louder than the controls it
+    /// joins.
+    static let flowLine = NSColor(white: 1, alpha: 0.32)
 
     // Idle custom controls — quiet, system-adjacent neutrals.
 
@@ -670,11 +673,13 @@ final class GGLevelMeter: NSView {
 /// the whole track — the arc is the fraction of the FULL RANGE from the
 /// minimum). Inside the track: a SOLID center disk a clear step
 /// lighter than the panel, carrying the value itself — the signed whole
-/// number ("+19", "-5", bare "0") with its "dB" unit UNDER it — 12pt
-/// tabular numerals. There is NO pointer or notch on the dial: the arc's
-/// end IS the position. Depth is contrasting flat surfaces only: no
-/// gradients, bevels, glow or decorative shadows; the whole control
-/// area is the drag target.
+/// number ("+19", "-5", bare "0"), 12pt tabular numerals, CENTERED in
+/// the disk. No unit inside: the dial shows the number only, and the
+/// unit lives in the caption above ("Trim (dB)") and in the tooltip.
+/// There is NO pointer or notch on the dial: the arc's end IS the
+/// position. Depth is contrasting flat surfaces only: no gradients,
+/// bevels, glow or decorative shadows; the whole control area is the
+/// drag target.
 ///
 /// WHAT the value is decides how it is drawn (see `ValueKind`): a LIVE
 /// hardware reading gets the green arc, a SAVED app-side setting gets a
@@ -705,12 +710,12 @@ final class GainKnob: NSControl {
         case unknown
     }
 
-    var minValue: Double = 0 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true } }
-    var maxValue: Double = 75 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true } }
+    var minValue: Double = 0 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true; updateAccessibility() } }
+    var maxValue: Double = 75 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true; updateAccessibility() } }
     var sendsContinuously = true
     /// What the value represents — live, saved, or unknown.
     var valueKind: ValueKind = .live {
-        didSet { needsDisplay = true }
+        didSet { needsDisplay = true; updateAccessibility() }
     }
     /// True when a value is known (live or saved).
     private var hasValue: Bool { valueKind != .unknown }
@@ -720,12 +725,38 @@ final class GainKnob: NSControl {
     /// neutral for a saved setting. The number inside the knob always
     /// stays off-white: the ARC is the color carrier.
     var arcColor: NSColor? { didSet { needsDisplay = true } }
+    /// The control's name — the tooltip and the accessibility label
+    /// read "Preamp gain: +19 dB".
+    var controlName: String = "Level" { didSet { updateAccessibility() } }
+    /// The unit — in the tooltip and the accessibility label only; the
+    /// dial itself shows the number alone.
+    var unit: String = "dB" { didSet { updateAccessibility() } }
 
     private var _value: Double = 0
     /// Values are WHOLE numbers — the setter rounds (display + writes).
     override var doubleValue: Double {
         get { _value }
-        set { _value = (min(max(newValue, minValue), maxValue)).rounded(); needsDisplay = true }
+        set {
+            _value = (min(max(newValue, minValue), maxValue)).rounded()
+            needsDisplay = true
+            updateAccessibility()
+        }
+    }
+
+    /// The value in words: "+19 dB" (or "—" when nothing is known).
+    private var valueText: String {
+        guard hasValue else { return "—" }
+        let n = Int(doubleValue)
+        return "\(n > 0 ? "+" : "")\(n) \(unit)"
+    }
+
+    /// The full value and unit live here — the tooltip and the
+    /// accessibility label — because the dial itself shows the number
+    /// only.
+    private func updateAccessibility() {
+        let shown = hasValue ? valueText : "unknown"
+        toolTip = "\(controlName): \(shown) — double-click to type an exact value"
+        setAccessibilityLabel(hasValue ? "\(controlName), \(shown)" : "\(controlName), unknown")
     }
 
     /// The inline precise-entry field (double-click). The controller
@@ -847,9 +878,11 @@ final class GainKnob: NSControl {
         guard !isEditing else { return }
 
         // LAYER 4 — the value: off-white, tabular, with an EXPLICIT sign
-        // (+ positive, - negative, bare 0 at zero) and its "dB" unit
-        // UNDER it. No value known: "—" alone, no unit. The number
-        // never changes color — the ARC is the color carrier.
+        // (+ positive, - negative, bare 0 at zero). The NUMBER only —
+        // the unit lives in the caption above and in the tooltip. It is
+        // CENTERED in the disk: horizontally on the dial's axis, and
+        // vertically on the ink itself (the font's cap height), not on
+        // the line box. No value known: "—". Disabled: still READABLE.
         let text: NSColor = hasValue ? GGTheme.knobValue : GGTheme.muted
         let n = Int(doubleValue)   // whole numbers only — the setter rounds
         let valueString = hasValue
@@ -862,25 +895,12 @@ final class GainKnob: NSControl {
                          .foregroundColor: text.withAlphaComponent(enabled ? 1 : 0.8)])
         let vs = value.size()
         if hasValue {
-            // The value and its unit, stacked and centered on the disk.
-            // The BASELINES are placed from the fonts' own metrics (the
-            // ink of a digit stands on the baseline, the ink of "dB"
-            // rises from it) — so the block sits centered in the disk
-            // instead of riding high on the line boxes.
-            let unitFont = NSFont.systemFont(ofSize: 8.5 * typeScale)
-            let unit = NSAttributedString(
-                string: "dB",
-                attributes: [.font: unitFont,
-                             .foregroundColor: GGTheme.knobUnit.withAlphaComponent(enabled ? 1 : 0.7)])
-            let us = unit.size()
-            let valueCenterY = c.y + 4.5
-            let unitCenterY = c.y - 6.5
+            // the digits stand ON the baseline: the baseline sits half a
+            // cap height below the ink's centre
             value.draw(at: NSPoint(x: c.x - vs.width / 2,
-                                   y: valueCenterY - valueFont.capHeight / 2))
-            unit.draw(at: NSPoint(x: c.x - us.width / 2,
-                                  y: unitCenterY - unitFont.ascender / 2))
+                                   y: c.y - valueFont.capHeight / 2))
         } else {
-            // The em dash is a bar a little above the baseline — put the
+            // the em dash is a bar a little above the baseline — put the
             // BAR (not the line box) in the middle of the disk.
             value.draw(at: NSPoint(x: c.x - vs.width / 2,
                                    y: c.y - valueFont.capHeight * 0.25))
@@ -1004,8 +1024,8 @@ final class FlowArrow: NSView {
     enum Direction { case down, right }
 
     private let direction: Direction
-    /// The arrowhead's size.
-    private static let head: CGFloat = 4.5
+    /// The arrowhead's size — the SAME for every connector.
+    private static let head: CGFloat = 3.5
     private static let lineWidth: CGFloat = 1
 
     init(_ direction: Direction) {
@@ -1017,13 +1037,13 @@ final class FlowArrow: NSView {
 
     override var intrinsicContentSize: NSSize {
         switch direction {
-        case .down: return NSSize(width: 14, height: 9)
-        case .right: return NSSize(width: 18, height: 8)
+        case .down: return NSSize(width: 12, height: 8)
+        case .right: return NSSize(width: 16, height: 8)
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.separatorColor.setStroke()
+        GGTheme.flowLine.setStroke()
         let p = NSBezierPath()
         p.lineWidth = Self.lineWidth
         p.lineCapStyle = .butt
@@ -3320,6 +3340,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             knob.action = #selector(gainSlid(_:))
             knob.tag = 200 + i
             knob.sendsContinuously = true
+            knob.controlName = "Preamp gain"
             knob.widthAnchor.constraint(equalToConstant: 60).isActive = true
             knob.heightAnchor.constraint(equalToConstant: 60).isActive = true
             gainKnobs.append(knob)
@@ -3560,8 +3581,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 dropIn.topAnchor.constraint(equalTo: dropHolder.topAnchor),
                 dropIn.bottomAnchor.constraint(equalTo: dropHolder.bottomAnchor),
             ])
-            col.setCustomSpacing(GGSpace.tight, after: incRow)
-            col.setCustomSpacing(GGSpace.tight, after: dropHolder)
+            col.setCustomSpacing(3, after: incRow)
+            col.setCustomSpacing(3, after: dropHolder)
 
             // BODY — the two processing stages, side by side: Audio FX
             // (the plug-in slot) on the left, Trim (the knob) on the
@@ -3574,6 +3595,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tsl.action = #selector(trimSlid(_:))
             tsl.tag = 2600 + i
             tsl.sendsContinuously = true
+            tsl.controlName = "Trim"
             tsl.widthAnchor.constraint(equalToConstant: 60).isActive = true
             tsl.heightAnchor.constraint(equalToConstant: 60).isActive = true
             trimKnobs.append(tsl)
@@ -3614,32 +3636,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             procCol.addArrangedSubview(slot)
 
             // ONE header row for the two stages — "Audio FX" over the
-            // plug-in area, "Trim" over the knob — so the two columns
-            // line up across all four strips. The two captions share
-            // ONE baseline, and "saved" sits BESIDE "Trim" in smaller
-            // text (it is a note, not a second line).
+            // plug-in area, "Trim (dB)" over the knob — so the two
+            // columns line up across all four strips. The two captions
+            // share ONE baseline.
             let procLbl = NSTextField(labelWithString: "Audio FX")
             procLbl.font = GGTheme.labelFont
             procLbl.textColor = GGTheme.softGray
-            // The trim value is a SAVED app-side setting, not a hardware
-            // reading — the caption says so, so the neutral arc and the
-            // plain number are never mistaken for a live value.
-            let trimCaption = NSTextField(labelWithString: "Trim")
+            // The unit rides in the caption, not inside the dial. The
+            // trim is also a SAVED app-side setting, not a hardware
+            // reading — that note lives in the caption's tooltip, out of
+            // the label row.
+            let trimCaption = NSTextField(labelWithString: "Trim (dB)")
             trimCaption.font = GGTheme.labelFont
             trimCaption.textColor = GGTheme.muted
-            let savedCaption = NSTextField(labelWithString: "saved")
-            savedCaption.font = NSFont.systemFont(ofSize: 9)
-            savedCaption.textColor = GGTheme.muted
-            savedCaption.toolTip = "Saved setting — applied by the plug-in insert"
-            // the caption pair sits in a 60-pt slot — the knob's width —
-            // so it is centered exactly over the knob below it
-            let trimSlot = NSStackView(views: [trimCaption, savedCaption])
-            trimSlot.orientation = .horizontal
-            trimSlot.alignment = .firstBaseline
-            trimSlot.spacing = 5
-            trimSlot.edgeInsets = NSEdgeInsets(top: 0, left: 3, bottom: 0, right: 3)
+            trimCaption.toolTip = "Saved setting — applied by the plug-in insert"
+            // the caption sits in a 60-pt slot — the knob's width — so it
+            // is centered exactly over the knob below it
+            let trimSlot = NSView()
             trimSlot.translatesAutoresizingMaskIntoConstraints = false
-            trimSlot.widthAnchor.constraint(equalToConstant: 60).isActive = true
+            trimSlot.addSubview(trimCaption)
+            trimCaption.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                trimSlot.widthAnchor.constraint(equalToConstant: 60),
+                trimCaption.centerXAnchor.constraint(equalTo: trimSlot.centerXAnchor),
+                trimCaption.centerYAnchor.constraint(equalTo: trimSlot.centerYAnchor),
+            ])
             let colHeader = NSStackView()
             colHeader.orientation = .horizontal
             colHeader.spacing = GGSpace.knob
@@ -3654,30 +3675,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // the header row spans the card's width, so its "Trim" slot
             // sits exactly over the knob column below
             colHeader.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            // the captions sit close above the control row
+            col.setCustomSpacing(4, after: colHeader)
 
-            // the two stages, joined by the connector. The slot and the
-            // knob share the row's TOP edge, so the slot sits directly
-            // under its caption; the short arrow rides the slot's
-            // centre line, level with the slot it leaves.
+            // The two stages, joined by the connector. The plug-in slot,
+            // the arrow and the knob share ONE horizontal centre line —
+            // that is what makes the path read as a path.
             let body = NSStackView()
             body.orientation = .horizontal
             body.spacing = GGSpace.tight
-            body.alignment = .top
+            body.alignment = .centerY
             body.translatesAutoresizingMaskIntoConstraints = false
             body.addArrangedSubview(procCol)
             let stageArrow = FlowArrow(.right)
-            // the arrow rides in a slot-height holder, so it lines up
-            // with the plug-in slot's middle
-            let arrowHolder = NSView()
-            arrowHolder.translatesAutoresizingMaskIntoConstraints = false
-            arrowHolder.widthAnchor.constraint(equalToConstant: 18).isActive = true
-            arrowHolder.heightAnchor.constraint(equalToConstant: slot.intrinsicContentSize.height).isActive = true
-            arrowHolder.addSubview(stageArrow)
-            NSLayoutConstraint.activate([
-                stageArrow.centerXAnchor.constraint(equalTo: arrowHolder.centerXAnchor),
-                stageArrow.centerYAnchor.constraint(equalTo: arrowHolder.centerYAnchor),
-            ])
-            body.addArrangedSubview(arrowHolder)
+            body.addArrangedSubview(stageArrow)
             body.addArrangedSubview(knobCol)
             // join the hierarchy BEFORE cross-view constraints (common
             // ancestor required at activation time)
@@ -3686,7 +3697,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // the plug-in area takes the rest of the row: the row is the
             // slot + the connector + the 60-pt knob column
             procCol.widthAnchor.constraint(equalTo: body.widthAnchor,
-                                           constant: -(60 + 20 + 6 + 6)).isActive = true
+                                           constant: -(60 + 16 + 6 + 6)).isActive = true
             slot.widthAnchor.constraint(equalTo: procCol.widthAnchor).isActive = true
 
             // DESTINATION — the hardware output pair, at the END of the
@@ -3720,7 +3731,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(destRow)
             destRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             // the destination rides right under the knob
-            col.setCustomSpacing(GGSpace.tight, after: body)
+            col.setCustomSpacing(2, after: body)
 
             strip.addArrangedSubview(card)
         }
@@ -3825,8 +3836,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         sl.action = #selector(monSlid(_:))
         sl.tag = 700 + o
         sl.sendsContinuously = true
-        // the value and its "dB" unit live inside the knob
-        sl.toolTip = o == 0 ? "Speakers level (dB)" : "Headphones level (dB)"
+        // the number only — the unit lives in the tooltip
+        sl.controlName = o == 0 ? "Speakers level" : "Headphones level"
         sl.widthAnchor.constraint(equalToConstant: 60).isActive = true
         sl.heightAnchor.constraint(equalToConstant: 60).isActive = true
         body.addArrangedSubview(sl)
