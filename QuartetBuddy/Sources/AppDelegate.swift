@@ -1028,6 +1028,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
+        // Talkback chip in the monitor strip — same path as the hotkeys.
+        control.onTalkback = { [weak self] on in self?.setTalkback(on) }
+        control.talkbackState = { [weak self] in self?.talkbackOn ?? false }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
