@@ -98,6 +98,8 @@ enum GGTheme {
     /// The trail behind the head — medium blue, fading by OPACITY into
     /// the background (no glow, no blur).
     static let scanTrail = hex("3FA9F5")
+    /// Off-white — the bright end of the breathing "Measuring…" label.
+    static let offWhite = hex("E6E8EB")
     /// The row when the gain is applied — the app's green.
     static let scanDone = green
     /// The row when something went wrong — the app's amber.
@@ -253,189 +255,246 @@ enum GGIconAsset {
     }
 }
 
-/// The Auto Gain SCANNING LIGHT — ONE thick row of square blocks across
-/// the button, with a small bright head travelling over them. The blocks
-/// FADE: each one lights up as the head reaches it and dims again as it
-/// moves on, so the light fades to the right and then fades back to the
-/// left. Flat and crisp — the "light" is only color + opacity: no glow,
-/// no blur, no gradients, no image assets.
+/// The Auto Gain activity display — a RESTRAINED animated border on the
+/// button: while the input is being measured, a short blue light segment
+/// travels CLOCKWISE around the button's actual perimeter — a bright
+/// head with a subtle fading tail riding behind it. The stroke is thin
+/// and clipped to the outline: no outer glow, no animated background,
+/// and the button's dimensions, corner shape and flat dark fill are left
+/// untouched. Inside, the label "Measuring…" breathes its brightness
+/// between soft gray and off-white (no size, position or weight change);
+/// on success the outline turns green with "Done" for a beat before the
+/// button returns to normal.
 ///
-/// The whole thing runs on CORE ANIMATION (GPU-composited) — there is
-/// no timer and no per-frame redraw, so it costs (almost) no CPU.
-final class GGScanLight: NSView {
+/// Everything runs on CORE ANIMATION (GPU-composited) — there is no
+/// timer and no per-frame redraw, so it costs (almost) no CPU.
+final class GGBorderScanLight: NSView {
 
-    enum Mode { case idle, scanning }
+    enum Mode { case idle, measuring, done }
 
-    /// The gap between blocks.
-    private static let gap: CGFloat = 1.5
-    private static let cornerRadius: CGFloat = 5
-    /// One there-and-back sweep, in seconds.
-    private static let cycle: CFTimeInterval = 2.0
-    /// How long a block takes to fade out after the head passes it.
-    private static let decay: CFTimeInterval = 0.5
-    /// The dim level of a block the head hasn't reached.
-    private static let dim: CGFloat = 0.12
+    /// The recessed bezel's corner radius — the outline follows it.
+    private static let cornerRadius: CGFloat = 4
+    /// A thin, quiet stroke.
+    private static let lineWidth: CGFloat = 1.5
+    /// One full lap around the perimeter, in seconds.
+    private static let lap: CFTimeInterval = 2.6
+    /// The bright head's length along the perimeter.
+    private static let headLength: CGFloat = 7
+    /// The dim tail's length behind the head.
+    private static let tailLength: CGFloat = 26
+    /// One bright-dim-bright TICK of the streak, in seconds — the streak
+    /// itself is the ticker (the label stays perfectly still).
+    private static let tick: CFTimeInterval = 1.1
 
     private var mode: Mode = .idle
-    private var cellLayers: [CALayer] = []
-    private var headLayer: CALayer?
-    private var cellImage: CGImage?
-    private var headImage: CGImage?
+    private let glow = CAShapeLayer()   // the halo UNDER the stroke
+    private let tail = CAShapeLayer()
+    private let head = CAShapeLayer()
+    private let text = CATextLayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = true
         layer?.cornerRadius = Self.cornerRadius
+        // the halo first (UNDER the stroke), then the stroke itself
+        glow.fillColor = nil
+        layer?.addSublayer(glow)
+        for l in [tail, head] {
+            l.fillColor = nil
+            l.lineWidth = Self.lineWidth
+            l.lineCap = .round
+            layer?.addSublayer(l)
+        }
+        text.alignmentMode = .center
+        layer?.addSublayer(text)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// Purely visual — clicks belong to the button underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     // MARK: - geometry
 
-    /// ONE thick row: the blocks are square and chunky, sized from the
-    /// button's height.
-    private var blockSize: CGFloat { max(6, min(16, bounds.height * 0.58)) }
-    private var headSize: CGFloat { blockSize * 0.6 }
-    private var pitch: CGFloat { blockSize + Self.gap }
-    /// How many blocks fit across the button.
-    private var cellCount: Int { max(3, Int((bounds.width + Self.gap) / pitch)) }
-    /// How far the head travels (the button's width).
-    private var travel: CGFloat { max(1, bounds.width - headSize) }
+    /// The stroke sits INSIDE the bezel's corner, so the outline follows
+    /// the button's own shape, shrunk by half the stroke.
+    private var outlineRadius: CGFloat { max(0, Self.cornerRadius - Self.lineWidth / 2) }
 
-    // MARK: - artwork
-
-    /// A single square block.
-    private func renderBlock(size: CGFloat, color: NSColor) -> CGImage? {
-        guard size > 0 else { return nil }
-        let img = NSImage(size: NSSize(width: size, height: size))
-        img.lockFocus()
-        color.setFill()
-        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: size, height: size),
-                     xRadius: 1.5, yRadius: 1.5).fill()
-        img.unlockFocus()
-        return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    /// The button's actual outline, traced CLOCKWISE on screen (top →
+    /// right → bottom → left) — the direction the light travels.
+    private func outlinePath() -> CGPath {
+        let r = outlineRadius
+        let rect = bounds.insetBy(dx: Self.lineWidth / 2, dy: Self.lineWidth / 2)
+        let minX = rect.minX, minY = rect.minY, maxX = rect.maxX, maxY = rect.maxY
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: minX + r, y: maxY))
+        p.addLine(to: CGPoint(x: maxX - r, y: maxY))
+        p.addArc(tangent1End: CGPoint(x: maxX, y: maxY),
+                 tangent2End: CGPoint(x: maxX, y: maxY - r), radius: r)
+        p.addLine(to: CGPoint(x: maxX, y: minY + r))
+        p.addArc(tangent1End: CGPoint(x: maxX, y: minY),
+                 tangent2End: CGPoint(x: maxX - r, y: minY), radius: r)
+        p.addLine(to: CGPoint(x: minX + r, y: minY))
+        p.addArc(tangent1End: CGPoint(x: minX, y: minY),
+                 tangent2End: CGPoint(x: minX, y: minY + r), radius: r)
+        p.addLine(to: CGPoint(x: minX, y: maxY - r))
+        p.addArc(tangent1End: CGPoint(x: minX, y: maxY),
+                 tangent2End: CGPoint(x: minX + r, y: maxY), radius: r)
+        p.closeSubpath()
+        return p
     }
 
-    override func layout() {
-        super.layout()
-        guard let host = layer else { return }
-        host.cornerRadius = Self.cornerRadius
+    /// The outline's exact length (straight runs + quarter circles) —
+    /// the dash pattern's period, so the sweep loops without a seam.
+    private var perimeter: CGFloat {
+        let r = outlineRadius
+        let w = bounds.width - Self.lineWidth, h = bounds.height - Self.lineWidth
+        return max(2 * (w + h) - 8 * r + 2 * CGFloat.pi * r,
+                   Self.headLength + Self.tailLength + 8)
+    }
 
-        cellImage = renderBlock(size: blockSize, color: GGTheme.scanTrail)
-        headImage = renderBlock(size: headSize, color: GGTheme.scanHead)
-
-        // the blocks — ONE row, evenly pitched across the button
-        while cellLayers.count > cellCount {
-            cellLayers.removeLast().removeFromSuperlayer()
-        }
-        while cellLayers.count < cellCount {
-            let l = CALayer()
-            host.addSublayer(l)
-            cellLayers.append(l)
-        }
-        let y = (bounds.height - blockSize) / 2
-        for (i, l) in cellLayers.enumerated() {
-            l.contents = cellImage
-            l.anchorPoint = CGPoint(x: 0, y: 0.5)
-            l.frame = CGRect(x: CGFloat(i) * pitch, y: y, width: blockSize, height: blockSize)
-            l.opacity = Float(Self.dim)
-        }
-
-        // the head — a small bright square on top
-        if headLayer == nil {
-            let h = CALayer()
-            host.addSublayer(h)
-            headLayer = h
-        }
-        headLayer?.contents = headImage
-        headLayer?.anchorPoint = CGPoint(x: 0, y: 0.5)
-        headLayer?.frame = CGRect(x: 0, y: (bounds.height - headSize) / 2,
-                                  width: headSize, height: headSize)
-
-        if mode == .scanning { startAnimations() }
+    private func dash(_ lengths: [CGFloat]) -> [NSNumber] {
+        lengths.map { NSNumber(value: Double($0)) }
     }
 
     // MARK: - states
 
-    /// Start (or keep) the sweep. Idempotent — the engine reports status
-    /// ~10×/s, and restarting the sweep each time would jump the head
-    /// back to the start.
-    func startScanning() {
-        guard mode != .scanning else { return }
-        mode = .scanning
+    /// Start (or keep) the sweep — idempotent: the engine reports status
+    /// ~10×/s, and restarting each time would jump the head back.
+    func startMeasuring() {
         layer?.opacity = 1
-        startAnimations()
+        guard mode != .measuring else { return }
+        mode = .measuring
+        rebuild()
     }
 
-    /// Dark — the light is off (the button shows its normal surface).
+    /// The beat of green after a successful run — solid outline + "Done".
+    func showDone() {
+        layer?.opacity = 1
+        guard mode != .done else { return }
+        mode = .done
+        rebuild()
+    }
+
+    /// Dark — the button shows its normal surface again.
     func setIdle() {
         guard mode != .idle else { return }
         mode = .idle
-        for l in cellLayers { l.removeAnimation(forKey: "fade") }
-        headLayer?.removeAnimation(forKey: "travel")
+        head.removeAllAnimations()
+        tail.removeAllAnimations()
+        glow.removeAllAnimations()
+        text.removeAllAnimations()
         layer?.opacity = 0
     }
 
-    var isScanning: Bool { mode == .scanning }
+    // MARK: - the animation (all on the render server)
 
-    // MARK: - the animations (all on the render server)
+    override func layout() {
+        super.layout()
+        guard bounds.width > 8, bounds.height > 8 else { return }
+        text.contentsScale = window?.backingScaleFactor ?? 2
+        text.fontSize = 11
+        text.font = NSFont.systemFont(ofSize: 11)
+        rebuild()
+    }
 
-    /// The head travels across and back at a constant speed, and every
-    /// block fades UP as the head reaches it and back DOWN as it leaves —
-    /// so the light fades to the right, then fades back to the left.
-    private func startAnimations() {
-        let half = Self.cycle / 2
-        let travel = Double(self.travel)
+    /// Size the label to its string and CENTER the layer in the button —
+    /// CATextLayer's own contentsGravity centering is unreliable, so the
+    /// frame itself is placed on center (crisp: rounded to whole pixels).
+    private func centerText(_ string: String) {
+        let font = NSFont.systemFont(ofSize: 11)
+        text.string = string
+        let size = NSAttributedString(string: string,
+                                      attributes: [.font: font]).size()
+        let w = ceil(size.width), h = ceil(size.height)
+        text.frame = CGRect(x: ((bounds.width - w) / 2).rounded(),
+                            y: ((bounds.height - h) / 2).rounded(),
+                            width: w, height: h)
+    }
 
-        // the head's sweep (linear, so the arrival times below are exact)
-        let move = CAKeyframeAnimation(keyPath: "position.x")
-        move.values = [0, travel, 0]
-        move.keyTimes = [0, 0.5, 1]
-        move.duration = Self.cycle
-        move.repeatCount = .infinity
-        move.isRemovedOnCompletion = false
-        move.fillMode = .forwards
-        headLayer?.add(move, forKey: "travel")
+    /// (Re)build the layers for the current mode. The dash pattern's
+    /// period EQUALS the perimeter, so animating the phase by exactly
+    /// one period loops seamlessly — the light travels round and round
+    /// with no seam, no jump, nothing but the outline.
+    private func rebuild() {
+        head.path = outlinePath()
+        tail.path = outlinePath()
+        glow.path = outlinePath()
+        glow.lineWidth = Self.lineWidth * 2.6       // the halo — wider + soft
+        glow.lineCap = .round
+        head.removeAllAnimations()
+        tail.removeAllAnimations()
+        glow.removeAllAnimations()
+        text.removeAllAnimations()
+        switch mode {
+        case .idle:
+            head.strokeColor = nil
+            tail.strokeColor = nil
+            glow.strokeColor = nil
+        case .measuring:
+            let per = perimeter
+            head.strokeColor = GGTheme.scanHead.cgColor
+            tail.strokeColor = GGTheme.scanTrail.withAlphaComponent(0.45).cgColor
+            // the halo UNDER the stroke — the head's own color, low alpha
+            glow.strokeColor = GGTheme.scanHead.withAlphaComponent(0.35).cgColor
+            // the label sits STILL — the streak is the ticker, the text
+            // never animates (no fade-in, no breathing, no fade-out)
+            centerText("Measuring…")
+            text.foregroundColor = GGTheme.offWhite.cgColor
+            head.lineDashPattern = dash([Self.headLength, per - Self.headLength])
+            tail.lineDashPattern = dash([Self.tailLength, per - Self.tailLength])
+            glow.lineDashPattern = dash([Self.headLength, per - Self.headLength])
 
-        // each block's fade — bright at the moment the head passes it
-        for (i, l) in cellLayers.enumerated() {
-            let x = Double(i) * Double(pitch)
-            let tRight = min(half, (x / travel) * half)     // going right
-            let tLeft = Self.cycle - tRight                  // coming back
-            var times: [Double] = []
-            var values: [CGFloat] = []
-            // a BRIGHT key at the same instant wins over a dim one
-            func addBright(_ t: Double) {
-                let c = min(max(t, 0), Self.cycle)
-                if let last = times.last, c <= last + 0.0001 {
-                    values[values.count - 1] = 1.0
-                    return
-                }
-                times.append(c)
-                values.append(1.0)
+            // the glow — shadows bloom off the light segments themselves
+            for l in [head, tail, glow] {
+                l.shadowColor = GGTheme.scanHead.cgColor
+                l.shadowOpacity = 0.9
+                l.shadowRadius = 4
+                l.shadowOffset = .zero
             }
-            func addDim(_ t: Double) {
-                let c = min(max(t, 0), Self.cycle)
-                if let last = times.last, c <= last + 0.0001 { return }
-                times.append(c)
-                values.append(Self.dim)
-            }
-            addDim(0)
-            addBright(tRight)
-            addDim(min(tRight + Self.decay, tLeft))
-            addBright(tLeft)
-            addDim(min(tLeft + Self.decay, Self.cycle))
-            if times.last ?? 0 < Self.cycle - 0.0001 { addDim(Self.cycle) }
 
-            let anim = CAKeyframeAnimation(keyPath: "opacity")
-            anim.values = values
-            anim.keyTimes = times.map { NSNumber(value: $0 / Self.cycle) }
-            anim.duration = Self.cycle
-            anim.repeatCount = .infinity
-            anim.isRemovedOnCompletion = false
-            anim.fillMode = .forwards
-            anim.calculationMode = .linear
-            l.add(anim, forKey: "fade")
+            // the sweep: phase 0 → −perimeter moves the dash FORWARD
+            // along the path (clockwise); the tail's phase starts a
+            // tail-length back, so it rides just behind the head.
+            let travel = CABasicAnimation(keyPath: "lineDashPhase")
+            travel.duration = Self.lap
+            travel.repeatCount = .infinity
+            travel.isRemovedOnCompletion = false
+            travel.fromValue = 0
+            travel.toValue = -per
+            head.add(travel, forKey: "travel")
+            glow.add(travel, forKey: "travel")
+            travel.fromValue = Self.tailLength
+            travel.toValue = Self.tailLength - per
+            tail.add(travel, forKey: "travel")
+
+            // THE TICKER — the streak itself blinks its beat: the head
+            // + halo swell bright and settle dim, once per tick, in
+            // time with the sweep's laps. The label never moves.
+            for l in [head, glow] {
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1.0
+                pulse.toValue = 0.35
+                pulse.duration = Self.tick / 2
+                pulse.autoreverses = true
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                pulse.repeatCount = .infinity
+                pulse.isRemovedOnCompletion = false
+                l.add(pulse, forKey: "tick")
+            }
+        case .done:
+            head.strokeColor = GGTheme.scanDone.cgColor
+            head.lineDashPattern = nil          // the whole outline, solid
+            tail.strokeColor = nil
+            // the success halo — green, wider, softly shadowed
+            glow.strokeColor = GGTheme.scanDone.withAlphaComponent(0.4).cgColor
+            glow.lineDashPattern = nil
+            glow.shadowColor = GGTheme.scanDone.cgColor
+            glow.shadowOpacity = 0.9
+            glow.shadowRadius = 5
+            glow.shadowOffset = .zero
+            centerText("Done")
+            text.foregroundColor = GGTheme.scanDone.cgColor
         }
     }
 }
@@ -1330,17 +1389,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons[i].isEnabled = preampActive && connected && !learning
                 && autoRunning.isEmpty
             // Auto Gain is an ACTION at rest. While THIS input is being
-            // measured, the label clears and the square-character scanner
-            // takes the button's place (the ONE Cancel lives in the
-            // feedback strip below).
-            let agTitle = mineRunning ? "" : "Auto Gain"
+            // measured (or in its beat of green after a success), the
+            // label clears and the animated BORDER owns the button's
+            // own outline — "Measuring…" breathing inside while it runs,
+            // "Done" in green for a beat after (the ONE Cancel lives in
+            // the feedback strip below).
+            let done = !mineRunning && autoGainDoneInput == i
+            let agTitle = (mineRunning || done) ? "" : "Auto Gain"
             autoGainButtons[i].bezelColor = nil
             autoGainButtons[i].attributedTitle = NSAttributedString(
                 string: agTitle,
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: GGTheme.softGray])
-            let scanner = autoGainScanners[i]
-            scanner.isHidden = !mineRunning
-            if mineRunning { scanner.startScanning() } else { scanner.setIdle() }
+            let border = autoGainBorders[i]
+            border.isHidden = !mineRunning && !done
+            if mineRunning { border.startMeasuring() }
+            else if done { border.showDone() }
+            else { border.setIdle() }
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             gainKnobs[i].isEnabled = preampActive && connected && !learning
@@ -1755,9 +1819,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var meters: [GGLevelMeter] = []
     private var gainKnobs: [GainKnob] = []
     private var autoGainButtons: [NSButton] = []
-    /// The activity display inside each input's Auto Gain button — one
+    /// The animated border inside each input's Auto Gain button — one
     /// per channel, so "Auto Gain All" lights every running input.
-    private var autoGainScanners: [GGScanLight] = []
+    private var autoGainBorders: [GGBorderScanLight] = []
+    /// The input whose run just SUCCEEDED — its button holds a beat of
+    /// green ("Done") before returning to normal.
+    private var autoGainDoneInput: Int?
     private var toggles48V: [NSButton] = []
     private var softLimitToggles: [NSButton] = []
     private var polarityToggles: [NSButton] = []
@@ -2434,21 +2501,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons.append(ag)
 
             // the ACTIVITY DISPLAY lives in this button: while THIS input
-            // is being measured, the label clears and the square-block
-            // scanner FILLS the button (its height, its width, its rounded
-            // corners — nothing around it moves). "Auto Gain All" lights
-            // every running input's button at once.
-            let scanner = GGScanLight(frame: .zero)
-            scanner.translatesAutoresizingMaskIntoConstraints = false
-            scanner.isHidden = true
-            ag.addSubview(scanner)
+            // is being measured, a thin blue light segment travels around
+            // the button's OWN outline and "Measuring…" breathes inside —
+            // the button's size, corners and flat fill never move. "Auto
+            // Gain All" lights every running input's button at once.
+            let border = GGBorderScanLight(frame: .zero)
+            border.translatesAutoresizingMaskIntoConstraints = false
+            border.isHidden = true
+            ag.addSubview(border)
             NSLayoutConstraint.activate([
-                scanner.leadingAnchor.constraint(equalTo: ag.leadingAnchor),
-                scanner.trailingAnchor.constraint(equalTo: ag.trailingAnchor),
-                scanner.topAnchor.constraint(equalTo: ag.topAnchor),
-                scanner.bottomAnchor.constraint(equalTo: ag.bottomAnchor),
+                border.leadingAnchor.constraint(equalTo: ag.leadingAnchor),
+                border.trailingAnchor.constraint(equalTo: ag.trailingAnchor),
+                border.topAnchor.constraint(equalTo: ag.topAnchor),
+                border.bottomAnchor.constraint(equalTo: ag.bottomAnchor),
             ])
-            autoGainScanners.append(scanner)
+            autoGainBorders.append(border)
 
             // one compact row of toggles — 48V / SL / Ø (red / cyan /
             // purple when engaged; small intrinsic chips).
@@ -2585,15 +2652,37 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(headerRow)
             nf.widthAnchor.constraint(lessThanOrEqualTo: col.widthAnchor).isActive = true
 
-            // Source — full-width native dropdown, no separate label
+            // Source — the full-width native dropdown, with the physical
+            // pair this card feeds spelled out beside it ("→ Out 1–2"):
+            // the dropdown names the SOURCE, the label names the DEST.
             let sp = NSPopUpButton()
             sp.target = self
             sp.action = #selector(sourceChanged(_:))
             sp.tag = 2100 + i
             sp.font = NSFont.systemFont(ofSize: 11)
             sp.controlSize = .small
-            col.addArrangedSubview(sp)
-            sp.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            let outPair = NSTextField(labelWithString: "→ \(InsertServer.pairNames[i])")
+            outPair.font = NSFont.systemFont(ofSize: 11)
+            outPair.textColor = GGTheme.muted
+            outPair.toolTip = "Feeds physical output pair \(InsertServer.pairNames[i])"
+            outPair.setContentHuggingPriority(.required, for: .horizontal)
+            outPair.setContentCompressionResistancePriority(.required, for: .horizontal)
+            let srcRow = NSStackView()
+            srcRow.orientation = .horizontal
+            srcRow.alignment = .centerY
+            srcRow.spacing = 6
+            srcRow.translatesAutoresizingMaskIntoConstraints = false
+            srcRow.addArrangedSubview(sp)
+            // flexible spacer pushes the "→ Out n" label to the strip's
+            // right edge while the dropdown keeps its intrinsic width.
+            let srcGap = NSView()
+            srcGap.translatesAutoresizingMaskIntoConstraints = false
+            srcGap.setContentHuggingPriority(.init(1), for: .horizontal)
+            srcGap.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+            srcRow.addArrangedSubview(srcGap)
+            srcRow.addArrangedSubview(outPair)
+            col.addArrangedSubview(srcRow)
+            srcRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             sourcePopups.append(sp)
 
             // "Include source processing" — a real CHECKBOX in its own
@@ -3051,7 +3140,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
         }
         // each running input's OWN button shows the activity display
-        // (refresh() syncs the per-input scanners) — coalesced, so a
+        // (refresh() syncs the per-input borders) — coalesced, so a
         // four-input burst costs ONE full refresh
         scheduleAutoGainRefresh()
     }
@@ -3062,9 +3151,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     ///              X dB."
     ///   cancelled→ the footer says "Auto Gain cancelled."
     ///   failed   → the footer states the problem
-    /// (the per-input buttons restore themselves — refresh() syncs them)
+    /// The per-input buttons restore themselves — refresh() syncs them,
+    /// and a successful input's button holds a beat of green ("Done")
+    /// before it returns to normal.
     func showAutoGainResult(_ line: String, detail: String?, gain: Double?,
-                            outcome: AutoGainEngine.Outcome) {
+                            input: Int, outcome: AutoGainEngine.Outcome) {
         autoGainDetail = detail
         autoGainRemaining = nil
         autoGainStatusTimer?.invalidate()
@@ -3072,6 +3163,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         switch outcome {
         case .success:
+            // the button's beat of green — outline + "Done" — before it
+            // returns to its normal surface
+            autoGainDoneInput = input
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+                guard let self, self.autoGainDoneInput == input,
+                      !AutoGainEngine.shared.runningInputs.contains(input) else { return }
+                self.autoGainDoneInput = nil
+                self.refresh()
+            }
             // APPLYING — the footer says so while the gain lands
             autoGainStatus = "Auto Gain · Setting gain…"
             autoGainKind = .activity
@@ -3098,6 +3198,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
 
         case .cancelled:
+            autoGainDoneInput = nil
             autoGainStatus = "Auto Gain cancelled."
             autoGainKind = .idle
             autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 4,
@@ -3112,6 +3213,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         case .failed:
             // the specific problem, in the footer
+            autoGainDoneInput = nil
             autoGainStatus = line
             autoGainKind = .warning
             scheduleAutoGainRefresh()

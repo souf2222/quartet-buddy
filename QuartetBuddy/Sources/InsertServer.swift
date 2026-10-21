@@ -491,7 +491,7 @@ final class InsertServer: NSObject {
     static func sourceLabel(_ src: PairSource, for i: Int) -> String {
         if src == .off { return "Silence" }
         if src == .systemMix { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
-        if let j = src.copyIndex { return "Mirror Out \(2 * j + 1)–\(2 * j + 2)" }
+        if let j = src.copyIndex { return "Playback \(2 * j + 1)–\(2 * j + 2)" }
         return "Silence"
     }
 

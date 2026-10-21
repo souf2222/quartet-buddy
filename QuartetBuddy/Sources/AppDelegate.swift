@@ -1044,9 +1044,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QuartetControlController.shared.showAutoStatus(line, clearAfter: nil, detail: detail,
                                                            remaining: remaining)
         }
-        engine.onFinished = { _, line, detail, gain, outcome in
+        engine.onFinished = { input, line, detail, gain, outcome in
             QuartetControlController.shared.showAutoGainResult(line, detail: detail,
-                                                               gain: gain, outcome: outcome)
+                                                               gain: gain, input: input,
+                                                               outcome: outcome)
         }
     }
 
