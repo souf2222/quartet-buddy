@@ -59,13 +59,11 @@ enum GGTheme {
 
     /// Cyan — Soft Limit engaged.
     static let cyan = hex("50D8F4")
-    /// Green — healthy-signal meters.
+    /// Green — healthy-signal meters; Talkback active.
     static let green = hex("46C58A")
     /// Amber — 48V + DIM engaged.
     static let amber = hex("E7AE49")
-    /// Orange — Talkback active.
-    static let orange = hex("FF9500")
-    /// Red — Mute engaged + clipping warnings.
+    /// Red — Mute engaged, global mute, clipping warnings.
     static let red = hex("E3636D")
     static let warning = red
 
@@ -471,8 +469,7 @@ class FunctionButton: NSButton {
 /// the shared flat neutral treatment, ON = the function's flat accent
 /// fill + near-black label — the color IS the state indicator (no
 /// checkmark). Compact, rounded like a native small button.
-/// (Non-final: TalkbackButton adds momentary press-and-hold.)
-class FunctionToggle: FunctionButton {
+final class FunctionToggle: FunctionButton {
     let baseTitle: String
     /// Glyph buttons (M / D / ∑) draw larger; text chips keep the default.
     var titleFont: NSFont = NSFont.systemFont(ofSize: 11)
@@ -561,17 +558,50 @@ final class PowerToggle: FunctionButton {
     }
 }
 
-/// The Talkback chip — orange when active. In momentary mode it's
-/// press-and-hold (mouse down = talk, mouse up = stop) via `hold`;
-/// in toggle mode it behaves like any function chip (click to switch).
-final class TalkbackButton: FunctionToggle {
-    /// Momentary mode is read live (the Settings pane can change it).
-    var momentary: () -> Bool = { UserDefaults.standard.bool(forKey: "momentary") }
-    /// Press/release path for momentary mode.
+// MARK: - Icon utility buttons (Talkback mic · global Mute-All speaker)
+
+/// A compact square ICON utility button (32×32) — the same flat dark
+/// surfaces, corner radius, hover lift and focus treatment as the M/D/∑
+/// chips, but drawing a centered glyph instead of a letter. Engaged =
+/// flat accent fill + near-black glyph; idle = neutral fill, light-gray
+/// glyph, hairline border. Subclasses implement drawGlyph.
+class IconButton: FunctionButton {
+    override var intrinsicContentSize: NSSize { NSSize(width: 32, height: 32) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let engaged = isEngaged
+        let enabled = isEnabled
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        let fill: NSColor
+        if !enabled { fill = GGTheme.subduedFill }
+        else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
+        else { fill = hovering ? GGTheme.hoverFill : GGTheme.idleFill }
+        fill.setFill()
+        path.fill()
+        if enabled, !engaged {
+            GGTheme.idleBorder.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        let color: NSColor = !enabled ? .disabledControlTextColor
+            : engaged ? GGTheme.darkText : GGTheme.idleLabel
+        drawGlyph(color: color)
+    }
+
+    /// Subclasses draw their centered glyph in the given color.
+    func drawGlyph(color: NSColor) {}
+}
+
+/// Talkback — HOLD to talk, release to stop (a quick tap is a blip).
+/// Latched talkback via the hotkey/MIDI still works; the chip mirrors
+/// the live state either way. Solid green with a near-black microphone
+/// while talking.
+final class TalkbackIconButton: IconButton {
     var hold: ((Bool) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
-        guard isEnabled, momentary() else { super.mouseDown(with: event); return }
+        guard isEnabled else { return }
         state = .on
         hold?(true)
         var keep = true
@@ -581,6 +611,67 @@ final class TalkbackButton: FunctionToggle {
         }
         state = .off
         hold?(false)
+    }
+
+    override func drawGlyph(color: NSColor) {
+        // simple microphone silhouette — capsule body, U cradle, stem, base
+        let u = bounds.height / 32
+        let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
+        func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: ox + 12.5 * u, y: oy + 11 * u,
+                                         width: 7 * u, height: 11 * u),
+                     xRadius: 3.5 * u, yRadius: 3.5 * u).fill()
+        color.setStroke()
+        let cradle = NSBezierPath()
+        cradle.appendArc(withCenter: pt(16, 16), radius: 8 * u,
+                         startAngle: 180, endAngle: 0, clockwise: false)
+        cradle.lineWidth = 1.8 * u
+        cradle.lineCapStyle = .round
+        cradle.stroke()
+        let stem = NSBezierPath()
+        stem.move(to: pt(16, 8))
+        stem.line(to: pt(16, 5))
+        stem.lineWidth = 1.8 * u
+        stem.lineCapStyle = .round
+        stem.stroke()
+        let base = NSBezierPath()
+        base.move(to: pt(12, 5))
+        base.line(to: pt(20, 5))
+        base.lineWidth = 1.8 * u
+        base.lineCapStyle = .round
+        base.stroke()
+    }
+}
+
+/// Global mute — one click mutes BOTH monitor outputs (Main Speakers +
+/// Headphones — every hardware mute the app controls), clicking again
+/// unmutes them. Coral red with a SLASHED speaker while all outputs are
+/// muted; plain speaker on a neutral chip otherwise.
+final class MuteAllIconButton: IconButton {
+    override func drawGlyph(color: NSColor) {
+        // speaker: filled housing + cone; a diagonal slash when muted
+        let u = bounds.height / 32
+        let ox = bounds.midX - 16 * u, oy = bounds.midY - 16 * u
+        func pt(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: ox + x * u, y: oy + y * u) }
+        color.setFill()
+        NSBezierPath(rect: NSRect(x: ox + 10 * u, y: oy + 12.5 * u,
+                                  width: 4 * u, height: 7 * u)).fill()
+        let cone = NSBezierPath()
+        cone.move(to: pt(14, 13))
+        cone.line(to: pt(14, 19))
+        cone.line(to: pt(20, 22.5))
+        cone.line(to: pt(20, 9.5))
+        cone.close()
+        cone.fill()
+        if isEngaged {
+            let slash = NSBezierPath()
+            slash.move(to: pt(8, 24))
+            slash.line(to: pt(24, 8))
+            slash.lineWidth = 2.2 * u
+            slash.lineCapStyle = .round
+            slash.stroke()
+        }
     }
 }
 
@@ -815,12 +906,17 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
 
         updateCardHighlights()
-        // Talkback chip mirrors the live state (hotkeys/MIDI/menu can all
-        // change it); disabled while offline or learning.
-        if let tb = talkbackButton {
-            tb.state = (talkbackState?() ?? false) ? .on : .off
-            tb.isEnabled = connected && !learning
-        }
+        // Utility pair mirrors the live state: the mic shows Talkback
+        // (hotkeys/MIDI/menu can all change it), the speaker is ON while
+        // BOTH monitor outputs are muted. Tooltips follow the states.
+        let tbActive = talkbackState?() ?? false
+        let bothMuted = (monitors[0].mute ?? false) && (monitors[1].mute ?? false)
+        talkbackButton?.state = tbActive ? .on : .off
+        talkbackButton?.isEnabled = connected && !learning
+        talkbackButton?.toolTip = tbActive ? "Talkback active" : "Talkback"
+        muteAllButton?.state = bothMuted ? .on : .off
+        muteAllButton?.isEnabled = connected && !learning
+        muteAllButton?.toolTip = bothMuted ? "Unmute all outputs" : "Mute all outputs"
 
         // Status line: learn instructions first, then Auto Gain, then the
         // insert hint (routing edits auto-start it — say so while it's off),
@@ -1041,7 +1137,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var dimToggles: [NSButton] = []
     private var monoToggles: [NSButton] = []
     private var monLearnButtons: [NSButton] = []
-    private var talkbackButton: TalkbackButton?
+    private var talkbackButton: TalkbackIconButton?
+    private var muteAllButton: MuteAllIconButton?
 
     private var statusField: NSTextField!
     private var subtitleField: NSTextField!
@@ -1760,13 +1857,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         vDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
         row.addArrangedSubview(vDivider)
         row.addArrangedSubview(makeMonitorGroup(1))
-        // Talkback at the far right — orange while talking (momentary
-        // mode = press and hold)
+        // utility pair at the far right, clearly separate from the
+        // per-output M / D / ∑ chips: Talkback mic (hold to talk) and
+        // the global Mute-All speaker — 32×32 icon buttons, 6pt apart
         let rowSpacer = NSView()
         rowSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
         row.addArrangedSubview(rowSpacer)
-        talkbackButton = makeTalkbackButton()
-        if let tb = talkbackButton { row.addArrangedSubview(tb) }
+        row.addArrangedSubview(makeUtilityPair())
         strip.addSubview(row)
 
         NSLayoutConstraint.activate([
@@ -1783,14 +1880,25 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         return strip
     }
 
-    /// The Talkback chip (bottom right of the monitor strip).
-    private func makeTalkbackButton() -> TalkbackButton {
-        let tb = TalkbackButton(title: "Talkback", tag: 0, accent: GGTheme.orange,
-                                target: self, action: #selector(talkbackToggled(_:)))
-        tb.toolTip = "Talkback — press and hold in momentary mode"
-        tb.setAccessibilityLabel("Talkback")
-        tb.hold = { [weak self] on in self?.onTalkback?(on) }
-        return tb
+    /// The bottom-right utility pair: Talkback mic + global Mute-All.
+    private func makeUtilityPair() -> NSView {
+        let mic = TalkbackIconButton(tag: 0, accent: GGTheme.green,
+                                     target: self, action: #selector(talkbackToggled(_:)))
+        mic.toolTip = "Talkback"
+        mic.setAccessibilityLabel("Talkback")
+        mic.hold = { [weak self] on in self?.onTalkback?(on) }
+        talkbackButton = mic
+
+        let mute = MuteAllIconButton(tag: 0, accent: GGTheme.red,
+                                     target: self, action: #selector(muteAllToggled(_:)))
+        mute.toolTip = "Mute all outputs"
+        mute.setAccessibilityLabel("Mute all outputs")
+        muteAllButton = mute
+
+        let pair = NSStackView(views: [mic, mute])
+        pair.spacing = 6
+        pair.translatesAutoresizingMaskIntoConstraints = false
+        return pair
     }
 
     private func makeMonitorGroup(_ o: Int) -> NSView {
@@ -2098,6 +2206,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     @objc private func talkbackToggled(_ sender: NSButton) {
         guard !suppressActions else { return }
         onTalkback?(sender.state == .on)
+    }
+
+    /// Global mute — one click flips BOTH monitor outputs together
+    /// ("all" = every hardware mute this app controls: Main Speakers +
+    /// Headphones). Not all-muted → mute both; all-muted → unmute both.
+    @objc private func muteAllToggled(_ sender: NSButton) {
+        guard !suppressActions, !isLearning else { return refresh() }
+        let t = PathIds.active
+        let bothMuted = (monitors[0].mute ?? false) && (monitors[1].mute ?? false)
+        let target = !bothMuted
+        for o in 0..<2 {
+            let id = o == 0 ? t.hwout0Mute : t.hwout1Mute
+            guard !id.isEmpty, monitors[o].mute != target else { continue }
+            monitors[o].mute = target
+            onWriteBool?(id, target)
+        }
+        refresh()
     }
 
     /// Learn buttons: start a capture session for the card — or skip the
