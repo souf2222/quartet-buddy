@@ -353,6 +353,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 InsertServer.shared.showPluginUI(0)
             }
         }
+        if ProcessInfo.processInfo.environment["QB_AUTO_OPEN"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                QBLog.log("control: AUTO-OPEN debug trigger")
+                QuartetControlController.shared.show()
+            }
+        }
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
@@ -1022,6 +1028,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
+        // Talkback chip in the monitor strip — same path as the hotkeys.
+        control.onTalkback = { [weak self] on in self?.setTalkback(on) }
+        control.talkbackState = { [weak self] in self?.talkbackOn ?? false }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
@@ -1031,9 +1040,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (failures auto-clear, the success line lingers a while).
         let engine = AutoGainEngine.shared
         engine.writeGain = { i, v in QuartetControlController.shared.applyAutoGain(i, v) }
-        engine.onStatus = { _, line in QuartetControlController.shared.showAutoStatus(line, clearAfter: nil) }
-        engine.onFinished = { _, line, _ in
-            QuartetControlController.shared.showAutoStatus(line, clearAfter: 12)
+        engine.onStatus = { _, line, detail, remaining in
+            QuartetControlController.shared.showAutoStatus(line, clearAfter: nil, detail: detail,
+                                                           remaining: remaining)
+        }
+        engine.onFinished = { _, line, detail, gain, outcome in
+            QuartetControlController.shared.showAutoGainResult(line, detail: detail,
+                                                               gain: gain, outcome: outcome)
         }
     }
 

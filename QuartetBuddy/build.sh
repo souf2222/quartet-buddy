@@ -12,9 +12,9 @@ echo "building…"
 rm -rf "$BUNDLE" "build/QuartetBuddy.app"   # also remove the legacy pre-rename bundle
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
-# bundle the Apogee logo for the menubar icon
-cp assets/apogee-icon-small.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
-cp assets/apogee-icon.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
+# bundle the icons (menubar Apogee logo + the control window's flaticon
+# glyphs: speaker, headphones, microphone-black-shape, mute, unmute)
+cp assets/*.png "$BUNDLE/Contents/Resources/" 2>/dev/null || true
 
 cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

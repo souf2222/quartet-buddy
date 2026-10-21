@@ -126,12 +126,22 @@ final class AutoGainEngine {
 
     // MARK: - plumbing (wired by AppDelegate.setupConsoleWindow)
 
+    /// How a calibration ended — the window's scanning light keys off it.
+    enum Outcome {
+        case success      // gain applied
+        case cancelled    // user cancel / stream stall
+        case failed       // not enough signal, too hot, …
+    }
+
     /// Engine → hardware: write an input's ACTIVE mode preamp gain (glue).
     var writeGain: ((Int, Double) -> Void)?
-    /// Live status line (input index, "… 3 s · preamp 21 dB").
-    var onStatus: ((Int, String) -> Void)?
-    /// Terminal state: input index, human line, success.
-    var onFinished: ((Int, String, Bool) -> Void)?
+    /// Live status (input index, SHORT message for the strip, optional
+    /// detail line for the expandable detail popover, the SECONDS LEFT
+    /// for the countdown beside Cancel).
+    var onStatus: ((Int, String, String?, Double?) -> Void)?
+    /// Terminal state: input index, SHORT strip message, detail line
+    /// (readings, for the expandable popover), the applied gain, outcome.
+    var onFinished: ((Int, String, String?, Double?, Outcome) -> Void)?
 
     /// Inputs currently calibrating (empty = none).
     private(set) var runningInputs: [Int] = []
@@ -155,12 +165,12 @@ final class AutoGainEngine {
     func start(_ paramsList: [StartParams]) {
         guard sessions.isEmpty else { return }        // one calibration batch
         guard writeGain != nil else {
-            onFinished?(paramsList.first?.input ?? 0, "Auto Gain not wired", false)
+            onFinished?(paramsList.first?.input ?? 0, "Auto Gain not wired", nil, nil, .failed)
             return
         }
         guard let dev = Self.findQuartetDevice() else {
             for p in paramsList {
-                onFinished?(p.input, "Quartet not found in Core Audio", false)
+                onFinished?(p.input, "Quartet not found in Core Audio", nil, nil, .failed)
             }
             return
         }
@@ -172,7 +182,7 @@ final class AutoGainEngine {
                           channels: paramsList.map { $0.input })
         } catch {
             for p in paramsList {
-                onFinished?(p.input, "can't open the input — \(error.localizedDescription)", false)
+                onFinished?(p.input, "can't open the input — \(error.localizedDescription)", nil, nil, .failed)
             }
             return
         }
@@ -211,8 +221,9 @@ final class AutoGainEngine {
         guard let s = sessions[i] else { return }
         QBLog.log("autogain: IN \(i + 1) cancelled — \(reason)")
         finish(session: s,
-               line: "IN \(i + 1) Auto Gain — \(reason); original gain restored",
-               success: false, restore: true)
+               line: String(format: "Auto Gain · Input %d — %@; original gain restored.",
+                            i + 1, reason),
+               outcome: .cancelled, restore: true)
     }
 
     /// Every glue setProperty event while a calibration runs (forwarded by
@@ -273,10 +284,16 @@ final class AutoGainEngine {
                 if now.timeIntervalSince(s.listenStart) >= Self.listenSeconds {
                     finishListening(s, i)
                 } else {
+                    // SHORT, STEADY message for the strip; the countdown
+                    // travels separately (next to Cancel), the readings go
+                    // to the detail popover.
+                    let left = Self.listenSeconds - now.timeIntervalSince(s.listenStart)
                     onStatus?(i, String(
-                        format: "IN %d Auto Gain — play/sing your loudest: %.0f s · preamp %.1f dB",
-                        i + 1, Self.listenSeconds - now.timeIntervalSince(s.listenStart),
-                        s.lastWrittenGain))
+                        format: "Auto Gain · Input %d — Play or sing at your loudest level.",
+                        i + 1),
+                        String(format: "preamp %.1f dB · target %.0f dBFS",
+                               s.lastWrittenGain, target),
+                        left)
                 }
             case .verifying:
                 if s.sawClip {
@@ -287,9 +304,13 @@ final class AutoGainEngine {
                 if now.timeIntervalSince(s.verifyStart) >= cfg.verifySeconds {
                     finishVerifying(s, i, target: target)
                 } else {
+                    let left = cfg.verifySeconds - now.timeIntervalSince(s.verifyStart)
                     onStatus?(i, String(
-                        format: "IN %d Auto Gain — keep it up, verifying: %.0f s left",
-                        i + 1, cfg.verifySeconds - now.timeIntervalSince(s.verifyStart)))
+                        format: "Auto Gain · Input %d — Hold your level, verifying…",
+                        i + 1),
+                        String(format: "preamp %.1f dB · target %.0f dBFS",
+                               s.lastWrittenGain, target),
+                        left)
                 }
             case .idle:
                 break
@@ -325,15 +346,16 @@ final class AutoGainEngine {
         s.attempts += 1
         guard s.attempts <= cfg.maxAttempts else {
             finish(session: s,
-                   line: "IN \(i + 1) Auto Gain — still clipping after \(cfg.maxAttempts) attempts; original gain restored",
-                   success: false, restore: true)
+                   line: String(format: "Auto Gain · Input %d — Still clipping after %d attempts; original gain restored.",
+                                i + 1, cfg.maxAttempts),
+                   outcome: .failed, restore: true)
             return
         }
         let lower = Self.floorStep(max(Self.minGainDB, s.lastWrittenGain - cfg.clipBackoffDB))
         guard lower < s.lastWrittenGain - 0.001 else {
             finish(session: s,
-                   line: "IN \(i + 1) Auto Gain — input overload at minimum gain; original gain restored",
-                   success: false, restore: true)
+                   line: String(format: "Auto Gain · Input %d — Input overload at minimum gain; original gain restored.", i + 1),
+                   outcome: .failed, restore: true)
             return
         }
         QBLog.log(String(format: "autogain: IN %d CLIPPING → %.1f dB, restarting (attempt %d/%d)",
@@ -350,8 +372,8 @@ final class AutoGainEngine {
     private func finishListening(_ s: Session, _ i: Int) {
         guard s.activeSeconds >= cfg.minActiveSeconds else {
             finish(session: s,
-                   line: "IN \(i + 1) Auto Gain — not enough signal; original gain restored",
-                   success: false, restore: true)
+                   line: String(format: "Auto Gain · Input %d — Not enough signal; original gain restored.", i + 1),
+                   outcome: .failed, restore: true)
             return
         }
         s.phase = .verifying
@@ -359,15 +381,16 @@ final class AutoGainEngine {
         s.appliedGain = s.lastWrittenGain
         s.activeSeconds = 0
         s.resetWindow()
-        onStatus?(i, String(format: "IN %d Auto Gain — hold your level, verifying…", i + 1))
+        onStatus?(i, String(format: "Auto Gain · Input %d — Hold your level, verifying…", i + 1),
+                  String(format: "preamp %.1f dB", s.lastWrittenGain), nil)
     }
 
     /// End of the 2 s verify: reduce-only correction, then done.
     private func finishVerifying(_ s: Session, _ i: Int, target: Double) {
         guard s.activeSeconds >= cfg.minVerifyActiveSeconds else {
             finish(session: s,
-                   line: "IN \(i + 1) Auto Gain — went quiet while verifying; original gain restored",
-                   success: false, restore: true)
+                   line: String(format: "Auto Gain · Input %d — Went quiet while verifying; original gain restored.", i + 1),
+                   outcome: .failed, restore: true)
             return
         }
         let peak = s.winPeakDBFS ?? target
@@ -384,14 +407,20 @@ final class AutoGainEngine {
             QBLog.log(String(format: "autogain: IN %d verify peak %.1f dBFS — within tolerance",
                              i + 1, peak))
         }
-        var line = String(format: "IN %d Auto Gain — preamp %.1f dB (%+.1f), peak %.1f dBFS",
-                          i + 1, s.appliedGain, s.appliedGain - s.originalGain, peak)
+        // SHORT strip message; the readings live in the detail popover.
+        var line = String(format: "Auto Gain · Input %d — Done, preamp set to %.0f dB.",
+                          i + 1, s.appliedGain)
+        var detail = String(format: "preamp %.1f dB (%+.1f) · peak %.1f dBFS · target %.0f dBFS",
+                             s.appliedGain, s.appliedGain - s.originalGain, peak, target)
         if s.appliedGain >= Self.maxGainDB - 0.05, peak < target - cfg.toleranceDB {
-            line += " — maximum gain reached, target not met"
+            line = String(format: "Auto Gain · Input %d — Done, but the target was not reached.", i + 1)
+            detail += " · maximum gain reached"
         } else if s.appliedGain <= Self.minGainDB + 0.05, peak > target + cfg.toleranceDB {
-            line += " — minimum gain reached, input too hot"
+            line = String(format: "Auto Gain · Input %d — Done, but the input is too hot.", i + 1)
+            detail += " · minimum gain reached"
         }
-        finish(session: s, line: line, success: true, restore: false)
+        finish(session: s, line: line, detail: detail, gain: s.appliedGain,
+               outcome: .success, restore: false)
     }
 
     // MARK: - write + teardown
@@ -406,7 +435,11 @@ final class AutoGainEngine {
     }
 
     /// Terminal for one session: restore if asked, report, drop it.
-    private func finish(session s: Session, line: String, success: Bool, restore: Bool) {
+    /// `line` is the SHORT strip message, `detail` the readings for the
+    /// expandable detail popover, `gain` the value that was applied.
+    private func finish(session s: Session, line: String, detail: String? = nil,
+                        gain: Double? = nil, outcome: Outcome,
+                        restore: Bool) {
         let i = s.params.input
         if restore {
             let original = Self.floorStep(min(max(s.originalGain, Self.minGainDB), Self.maxGainDB))
@@ -417,8 +450,8 @@ final class AutoGainEngine {
         }
         sessions[i] = nil
         runningInputs = Array(sessions.keys)
-        onFinished?(i, line, success)
-        QBLog.log("autogain: IN \(i + 1) done — \(success ? "ok" : "restored")")
+        onFinished?(i, line, detail, gain, outcome)
+        QBLog.log("autogain: IN \(i + 1) done — \(outcome)")
         if sessions.isEmpty { teardown() }
     }
 

@@ -113,20 +113,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         w.contentView = content
         w.delegate = self
         w.center()
-        // One cohesive dark surface — matches Quartet Control's theme and
-        // keeps the sidebar readable in every system appearance.
+        // Native dark surface — the standard window background, matching
+        // Quartet Control's system-material look in every appearance.
         w.appearance = NSAppearance(named: .darkAqua)
-        w.backgroundColor = NSColor(calibratedWhite: 0.15, alpha: 1)
+        w.backgroundColor = NSColor.windowBackgroundColor
         window = w
     }
 
-    /// Sidebar: same dark family as the content area (a shade darker, like
-    /// System Settings), light text, and a clear selected-row pill.
+    /// Sidebar: the standard under-page background (the system's sidebar
+    /// material, like System Settings), light text, and a clear
+    /// selected-row pill.
     private func makeSidebar() -> NSView {
         let sidebar = NSView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor(calibratedWhite: 0.125, alpha: 1).cgColor
+        sidebar.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -152,7 +153,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             b.alignment = .left
             b.tag = pane.rawValue
             b.font = .systemFont(ofSize: 13, weight: .medium)
-            b.contentTintColor = NSColor(calibratedWhite: 0.92, alpha: 1)
+            b.contentTintColor = GGTheme.primary
             b.translatesAutoresizingMaskIntoConstraints = false
             row.addSubview(b)
             NSLayoutConstraint.activate([
@@ -181,7 +182,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         v.translatesAutoresizingMaskIntoConstraints = false
         let title = NSTextField(labelWithString: pane.title)
         title.font = .systemFont(ofSize: 19, weight: .semibold)
-        title.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
+        title.textColor = GGTheme.primary
         title.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(title)
         NSLayoutConstraint.activate([
@@ -288,12 +289,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     // MARK: - General
 
     private var loginCheck: NSButton!
+    private var invertScrollCheck: NSButton!
+
+    /// UserDefaults key: when true, scrolling DOWN on a knob increases
+    /// the value (classic mouse-wheel convention — "wheel down = more"),
+    /// the reverse of the natural trackpad direction. Read live by
+    /// GainKnob.scrollWheel.
+    static let invertScrollKey = "invertKnobScroll"
 
     private func buildGeneral(into body: NSStackView) {
         body.addArrangedSubview(sectionLabel("Startup"))
         loginCheck = NSButton(checkboxWithTitle: "Launch Quartet Buddy at login", target: self,
                               action: #selector(loginChanged(_:)))
         body.addArrangedSubview(loginCheck)
+        addDivider(to: body)
+        // Knob behavior — the scroll-direction preference, live-read by
+        // the control window's knobs (no restart needed).
+        body.addArrangedSubview(sectionLabel("Knobs"))
+        invertScrollCheck = NSButton(
+            checkboxWithTitle: "Invert scroll direction (wheel down = more)",
+            target: self, action: #selector(invertScrollChanged(_:)))
+        invertScrollCheck.state = UserDefaults.standard.bool(forKey: Self.invertScrollKey) ? .on : .off
+        invertScrollCheck.toolTip = "Reverses scrolling on the gain/trim/level knobs.\n\nOff (natural): scroll up = more.\nOn (classic wheel): scroll down = more."
+        body.addArrangedSubview(invertScrollCheck)
+        let invertSub = NSTextField(labelWithString:
+            "Applies to the scroll wheel on every knob in Quartet Control (gain, trim, monitor level).")
+        invertSub.textColor = .secondaryLabelColor
+        invertSub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(invertSub)
         addDivider(to: body)
         // Debug log lives in its own Troubleshooting group.
         body.addArrangedSubview(sectionLabel("Troubleshooting"))
@@ -716,6 +739,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard !midiSuppress else { return }
         UserDefaults.standard.set(sender.state == .on, forKey: "momentary")
         NotificationCenter.default.post(name: .init("qb.momentaryChanged"), object: nil)
+    }
+
+    /// Knob scroll-direction preference — GainKnob reads the default
+    /// live, so no restart/rebuild is needed.
+    @objc private func invertScrollChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: Self.invertScrollKey)
+        QBLog.log("settings: knob scroll inverted = \(sender.state == .on)")
     }
 
     @objc private func midiLearn(_ sender: NSButton) {
