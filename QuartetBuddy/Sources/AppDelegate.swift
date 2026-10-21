@@ -1041,8 +1041,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let engine = AutoGainEngine.shared
         engine.writeGain = { i, v in QuartetControlController.shared.applyAutoGain(i, v) }
         engine.onStatus = { _, line in QuartetControlController.shared.showAutoStatus(line, clearAfter: nil) }
-        engine.onFinished = { _, line, _ in
-            QuartetControlController.shared.showAutoStatus(line, clearAfter: 12)
+        engine.onFinished = { _, line, success in
+            QuartetControlController.shared.showAutoStatus(line, clearAfter: 12,
+                                                           kind: success ? .success : .warning)
         }
     }
 
