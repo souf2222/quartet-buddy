@@ -539,10 +539,10 @@ final class InsertServer: NSObject {
 
     /// Label for a source option in pair i's picker.
     static func sourceLabel(_ src: PairSource, for i: Int) -> String {
-        if src == .off { return "Silence" }
+        if src == .off { return "—" }
         if src == .systemMix { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
         if let j = src.copyIndex { return "Playback \(2 * j + 1)–\(2 * j + 2)" }
-        return "Silence"
+        return "—"
     }
 
     /// Source options for pair i (own playback + mirrors + silence).
@@ -552,7 +552,7 @@ final class InsertServer: NSObject {
 
     /// Human route summary (mirrors label with the tap point).
     func routeSummary(_ i: Int) -> String {
-        guard let src = routes[i].src else { return "Silence" }
+        guard let src = routes[i].src else { return "—" }
         if routes[i].stage == nil {
             if src == i { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
             return "Mirror Out \(2 * src + 1)–\(2 * src + 2) (raw channels)"
@@ -565,7 +565,7 @@ final class InsertServer: NSObject {
     /// "Playback 1–2 → ARC X → Out 1–2" /
     /// "Playback 1–2 → Out 1–2 plug-in → Out 3–4".
     func flowLine(_ i: Int) -> String {
-        guard let src = routes[i].src else { return "Silence → Out \(2 * i + 1)–\(2 * i + 2)" }
+        guard let src = routes[i].src else { return "— → Out \(2 * i + 1)–\(2 * i + 2)" }
         var parts: [String] = []
         if routes[i].stage != nil {
             let srcPlugin = pairs[src].pluginName.map(Self.shortName) ?? "no plug-in"
