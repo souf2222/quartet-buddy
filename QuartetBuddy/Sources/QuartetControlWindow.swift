@@ -26,8 +26,8 @@ import AppKit
 /// element is the KNOB (input gain, output trim, monitor level): flat,
 /// no body circle — a thin subdued 270° track with the opening at the
 /// bottom, a flat green value arc (the SETTING, not live signal) growing
-/// clockwise from 7:30, whole-number value centered inside with a small
-/// "dB" under it, precise entry by double-click. Color is meaning:
+/// clockwise from 7:30, and ONLY the whole-number value (12pt) centered
+/// inside — no "dB" — with precise entry by double-click. Color is meaning:
 /// system accent for focus/selection and the neutral functions (Ø, SUM,
 /// Include, plug-in enable); green only for Soft Limit + the arcs;
 /// amber for 48V/DIM; red for Mute + clipping. Everything else is quiet.
@@ -71,6 +71,13 @@ enum GGTheme {
 
     /// Near-black label ON flat accent fills.
     static let darkText = hex("101318")
+
+    // Knob — the app's one custom control.
+
+    /// Thin, subdued 270° track — the system separator gray.
+    static let knobTrack = NSColor.separatorColor
+    /// The green value arc — the setting, not the live signal.
+    static let knobArc = hex("65D98B")
 
     // Idle custom controls — quiet, system-adjacent neutrals.
 
@@ -197,15 +204,19 @@ final class GGLevelMeter: NSView {
     }
 }
 
-// MARK: - Value dial (just the number)
+// MARK: - Knob (thin dial arc, just the number inside)
 
-/// The app's one custom control — a flat draggable NUMBER used for
-/// input gain, output trim and monitor level, ONE compact size
-/// everywhere (52pt — as tall as the Auto Gain + toggle block beside
-/// it). No dial, no arc, no "dB": only the whole-number value, tabular
-/// numerals, slightly larger, centered in the control — and the whole
-/// (invisible) control area is the drag target. No gradients, bevels,
-/// glow or decorative shadows.
+/// The app's one custom control — a flat dial used for input gain,
+/// output trim and monitor level, ONE compact size everywhere (52pt —
+/// as tall as the Auto Gain + toggle block beside it): a thin, subdued
+/// 270° track (start 7:30, clockwise through left and top to 4:30 — a
+/// small opening at the bottom) with a flat green value arc growing
+/// clockwise from the lower-left as the value rises (midpoint = 12
+/// o'clock, full = the whole track). The arc shows the SETTING, not
+/// the live signal. Inside: ONLY the whole-number value — 12pt tabular
+/// numerals, centered — no knob body, no "dB". No gradients, bevels,
+/// glow or decorative shadows; the whole control area is the drag
+/// target.
 ///
 /// Interaction: drag vertically (up = more, ⇧ = slower), arrow keys step
 /// ±1, double-click the number to type an exact value into an inline
@@ -264,20 +275,54 @@ final class GainKnob: NSControl {
     @discardableResult
     private func send() -> Bool { sendAction(action, to: target) }
 
-    // MARK: drawing — just the number, centered, slightly larger
+    // MARK: geometry — the 270° dial scales with bounds
+    private var trackRadius: CGFloat { bounds.width / 2 - 1.5 }
+    private static let stroke: CGFloat = 2.5
+    /// Track: start 7:30 (225°), sweep 270° clockwise to 4:30 (-45°).
+    private static let startAngle: CGFloat = 225
+    private static let sweepAngle: CGFloat = 270
+
+    private var fraction: Double {
+        maxValue > minValue ? (doubleValue - minValue) / (maxValue - minValue) : 0
+    }
+
+    // MARK: drawing — the dial arcs + ONLY the number inside (no dB)
     override func draw(_ dirtyRect: NSRect) {
-        guard !isEditing else { return }
         let enabled = isEnabled
+        let alpha: CGFloat = enabled ? 1 : 0.45
+        let c = NSPoint(x: bounds.midX, y: bounds.midY)
+
+        func arc(_ sweep: CGFloat) -> NSBezierPath {
+            let p = NSBezierPath()
+            p.appendArc(withCenter: c, radius: trackRadius,
+                        startAngle: Self.startAngle,
+                        endAngle: Self.startAngle - sweep, clockwise: true)
+            p.lineWidth = Self.stroke
+            p.lineCapStyle = .butt
+            return p
+        }
+
+        // subdued track + green value arc — the SETTING, not live signal
+        GGTheme.knobTrack.withAlphaComponent(alpha).setStroke()
+        arc(Self.sweepAngle).stroke()
+        let f = hasValue ? fraction : 0
+        if f > 0.002 {
+            GGTheme.knobArc.withAlphaComponent(alpha).setStroke()
+            arc(CGFloat(f) * Self.sweepAngle).stroke()
+        }
+
+        guard !isEditing else { return }
+
+        // the number — 12pt, centered in the dial
         let text: NSColor = hasValue
             ? (valueTint ?? GGTheme.primary)
             : GGTheme.muted
         let value = NSAttributedString(
             string: hasValue ? String(format: "%.0f", doubleValue) : "—",
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium),
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
                          .foregroundColor: text.withAlphaComponent(enabled ? 1 : 0.5)])
         let s = value.size()
-        value.draw(at: NSPoint(x: bounds.midX - s.width / 2,
-                                y: bounds.midY - s.height / 2))
+        value.draw(at: NSPoint(x: c.x - s.width / 2, y: c.y - s.height / 2))
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
