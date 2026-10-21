@@ -16,11 +16,14 @@ import AppKit
 /// The Inputs and Outputs sections live in a scroll view; the Monitor strip
 /// is pinned to the bottom so everyday listening controls never scroll away.
 ///
-/// Visual direction: neutral charcoal window and graphite cards (1pt
-/// border, 14pt radius), restrained translucency in the title bar and
-/// monitor strip only. Color appears ONLY as per-function accents:
-/// each toggle owns a muted color family (faint tint when off, richer
-/// fill when engaged) — never decoration.
+/// Visual direction: "Obsidian" — one continuous smoked-black glass
+/// window (cool graphite, desktop bleeding softly through the blur),
+/// slightly lighter graphite cards with fine white borders, soft-white
+/// type. The interface stays quiet: electric blue carries focus,
+/// selection and slider fills; each audio function owns ONE saturated
+/// accent that appears ONLY while engaged (solid vivid fill, near-black
+/// label). Inactive toggles share a single neutral treatment, so
+/// "available" vs "enabled" is always obvious at a glance.
 ///
 /// Plumbing is unchanged from the two windows it replaces: hardware reads
 /// come from the glue tree (live 2 s poll while visible), writes go through
@@ -28,40 +31,75 @@ import AppKit
 /// routing state lives in InsertServer, and Learn mode captures missing
 /// ids by listening to the live event stream.
 
-// MARK: - Theme (neutral graphite; color = state only)
+// MARK: - Theme (Obsidian: smoked black glass, graphite panes, vivid accents)
 
 enum GGTheme {
-    /// Window base — neutral charcoal `#202022` (no warm tint).
-    static let windowTint = NSColor(calibratedWhite: 0.1255, alpha: 0.92)
-    /// Channel cards — a step lighter than the window (`#2B2B2E`), no purple.
-    static let card = NSColor(calibratedWhite: 0.169, alpha: 1)
-    /// Editable / recessed control surface (`#343437`).
-    static let control = NSColor(calibratedWhite: 0.204, alpha: 1)
-    /// One-point quiet card outline (white at 7%).
-    static let cardBorder = NSColor(white: 1, alpha: 0.07)
-    /// Monitor strip — close to the window color; a thin top divider does
-    /// the separation, not a contrast panel.
-    static let monitorStrip = NSColor(calibratedWhite: 0.135, alpha: 1)
-    /// Primary text — names and important values (`#F0F0F2`).
-    static let primary = NSColor(calibratedWhite: 0.945, alpha: 1)
-    /// Secondary text — labels and hardware identifiers (`#A5A5AB`).
-    static let softGray = NSColor(calibratedWhite: 0.647, alpha: 1)
-    /// Restrained red — clipping / warnings in text (a mute is a state,
-    /// not a warning; meter reds live in GGLevelMeter).
-    static let warning = NSColor(calibratedRed: 0.88, green: 0.27, blue: 0.23, alpha: 1)
+    // Base surfaces — dark, translucent, cool. The window composes to
+    // roughly `#101115`-deep charcoal even over a plain black desktop.
 
-    /// Dark text used ON rich active fills.
-    static let darkText = NSColor(srgbRed: 0.11, green: 0.11, blue: 0.12, alpha: 1)
-    /// Neutral fill for DISABLED function controls — subdued gray, clearly
-    /// distinct from an available function that is simply OFF.
-    static let subduedFill = NSColor(calibratedWhite: 0.165, alpha: 1)
+    /// Opaque fallback — the charcoal the glass composes to when there is
+    /// nothing (interesting) behind the window.
+    static let windowFallback = hex("101115")
+    /// Smoked-glass window tint over the blurred desktop — near-black
+    /// with a cool-blue undertone; wallpaper bleeds through softly.
+    static let windowTint = NSColor(srgbRed: 12 / 255, green: 14 / 255, blue: 19 / 255, alpha: 0.78)
+    /// Title bar + monitor strip — subtle framing bands of the same glass.
+    static let headerFooterTint = NSColor(srgbRed: 15 / 255, green: 17 / 255, blue: 23 / 255, alpha: 0.55)
+    /// Channel cards — slightly lighter graphite panes: translucent fills
+    /// over the window glass, not separate frosted-glass tiles.
+    static let card = NSColor(srgbRed: 35 / 255, green: 39 / 255, blue: 49 / 255, alpha: 0.62)
+    /// The selected card — a deliberate surface lift, still graphite.
+    static let cardSelected = NSColor(srgbRed: 48 / 255, green: 53 / 255, blue: 66 / 255, alpha: 0.66)
+    /// Fine card outline — light catching the edge of dark glass.
+    static let cardBorder = NSColor(white: 1, alpha: 0.085)
+    /// Hovered cards / important boundaries.
+    static let cardBorderEmphasized = NSColor(white: 1, alpha: 0.16)
+    /// Recessed areas — plug-in wells, meter beds.
+    static let inset = NSColor(white: 0, alpha: 0.22)
 
-    /// A function-color pair: `off` = faint dark tint (available, not
-    /// engaged), `on` = richer light fill (engaged → dark text).
-    struct FunctionPair {
-        let off: NSColor
-        let on: NSColor
-    }
+    // Text
+
+    /// Primary text — titles, gain values, monitor levels (`#F2F4F8`).
+    /// Values the user must read quickly are always this bright.
+    static let primary = hex("F2F4F8")
+    /// Secondary text — labels like "Source" and "Output Trim" (`#A4ACBA`).
+    static let softGray = hex("A4ACBA")
+    /// Muted text — supporting metadata and inactive indicators only
+    /// (`#747D8D`). Never for anything read at a glance.
+    static let muted = hex("747D8D")
+    /// Coral — clipping warnings in text (a mute is a state, not a
+    /// warning; meter reds live in GGLevelMeter).
+    static let warning = hex("FF637A")
+
+    /// Near-black text used ON vivid engaged fills.
+    static let darkText = hex("101318")
+    /// DISABLED function controls — quieter than idle-but-available.
+    static let subduedFill = NSColor(white: 1, alpha: 0.03)
+
+    // Accents — one interaction color + one semantic color per function.
+    // Concentrated in toggles, indicators and focused controls — never
+    // spread across whole cards.
+
+    /// Electric blue — focus, selection, primary actions, slider fills, SUM.
+    static let electricBlue = hex("438DFF")
+    /// Mint — Soft Limit engaged; healthy signal.
+    static let mint = hex("36E3A0")
+    /// Warm amber — 48V engaged; DIM engaged.
+    static let amber = hex("FFBC47")
+    /// Vivid violet — polarity inversion engaged.
+    static let violet = hex("AC88FF")
+    /// Coral — Mute engaged; clipping.
+    static let coral = hex("FF637A")
+    /// Ice cyan — linked / mirrored routing indicator.
+    static let iceCyan = hex("50D8F4")
+
+    /// The ONE idle treatment every toggle shares — neutral, understated:
+    /// clearly "clickable but off", never mistakable for an engaged function.
+    static let toggleIdleFill = NSColor(white: 1, alpha: 0.055)
+    static let toggleIdleBorder = NSColor(white: 1, alpha: 0.07)
+    static let toggleIdleLabel = hex("929BAA")
+    /// A restrained hover lift, shared by all raised controls.
+    static let hoverSurface = NSColor(white: 1, alpha: 0.105)
 
     /// `#RRGGBB` → NSColor (sRGB).
     static func hex(_ h: String) -> NSColor {
@@ -74,41 +112,101 @@ enum GGTheme {
                        blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 
-    // Per-function muted accents — soft, distinguishable families.
-    // off = faint tint at rest · on = richer fill when engaged.
-    static let f48V       = FunctionPair(off: hex("493C2E"), on: hex("C69B62"))  // warm amber
-    static let fSoftLimit = FunctionPair(off: hex("33433B"), on: hex("83AE93"))  // sage green
-    static let fPolarity  = FunctionPair(off: hex("40394E"), on: hex("A697C7"))  // lavender
-    static let fMute      = FunctionPair(off: hex("4B343B"), on: hex("CB8C99"))  // dusty rose
-    static let fDim       = FunctionPair(off: hex("493D34"), on: hex("C9A07D"))  // muted apricot
-    static let fMono      = FunctionPair(off: hex("363E51"), on: hex("94A5D0"))  // soft periwinkle
-    static let fPlugin    = FunctionPair(off: hex("304442"), on: hex("7EB5AD"))  // muted teal
-    static let fAutoGain  = FunctionPair(off: hex("323E4D"), on: hex("87ADD0"))  // soft blue (running)
-
     static let titleFont = NSFont.systemFont(ofSize: 17, weight: .semibold)
     static let sectionFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
     static let nameFont = NSFont.systemFont(ofSize: 14, weight: .medium)
     static let labelFont = NSFont.systemFont(ofSize: 11)
     static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .medium)
-
-    /// Style a card: graphite surface, 1pt border, 14pt radius, flat.
-    static func applyCardStyle(_ v: NSView) {
-        v.wantsLayer = true
-        v.layer?.backgroundColor = card.cgColor
-        v.layer?.borderColor = cardBorder.cgColor
-        v.layer?.borderWidth = 1
-        v.layer?.cornerRadius = 14
-        v.layer?.masksToBounds = true
-    }
 }
 
-/// A compact horizontal signal meter: 20 segments, green → amber → red.
-/// Level is 0…1; segments light from the left. Quiet at rest.
+/// A graphite pane: translucent fill over the window's glass, a fine
+/// white border, and a faint top-edge light — like light on dark glass.
+/// Hover quietly lifts the border; the SELECTED card gets a thin
+/// electric-blue border at ~55% and a slightly lighter surface — never a
+/// big outer glow. `selected` is set by the keyboard-shortcut highlight.
+final class CardView: NSView {
+    var selected = false { didSet { restyle() } }
+    private var hovering = false
+    private var hoverArea: NSTrackingArea?
+    /// White ≈8% fading down from the top edge — the "light on glass" cue.
+    private let topLight = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.borderWidth = 1
+        layer?.masksToBounds = true
+        topLight.colors = [NSColor(white: 1, alpha: 0.08).cgColor, NSColor.clear.cgColor]
+        topLight.startPoint = CGPoint(x: 0.5, y: 1)
+        topLight.endPoint = CGPoint(x: 0.5, y: 0)
+        layer?.addSublayer(topLight)
+        restyle()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func layout() {
+        super.layout()
+        // bright at the very top, gone by mid-card — barely visible
+        topLight.frame = CGRect(x: 0, y: bounds.height * 0.6,
+                                width: bounds.width, height: bounds.height * 0.4)
+    }
+
+    private func restyle() {
+        layer?.backgroundColor = (selected ? GGTheme.cardSelected : GGTheme.card).cgColor
+        layer?.borderColor = selected
+            ? GGTheme.electricBlue.withAlphaComponent(0.55).cgColor
+            : (hovering ? GGTheme.cardBorderEmphasized : GGTheme.cardBorder).cgColor
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = hoverArea { removeTrackingArea(a) }
+        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
+                               owner: self, userInfo: nil)
+        hoverArea = t
+        addTrackingArea(t)
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true; restyle() }
+    override func mouseExited(with event: NSEvent) { hovering = false; restyle() }
+}
+
+/// A 1pt hairline divider (header bottom, monitor top) — the palette's
+/// standard border, exactly.
+final class Hairline: NSView {
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.backgroundColor = GGTheme.cardBorder.cgColor
+        heightAnchor.constraint(equalToConstant: 1).isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+/// A tiny circular status indicator — the coral "muted" mark, the blue
+/// "plug-in present" mark. Small hits of saturated color, per the theme.
+final class StatusDot: NSView {
+    init(color: NSColor) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
+        wantsLayer = true
+        layer?.backgroundColor = color.cgColor
+        layer?.cornerRadius = 3
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .vertical)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override var intrinsicContentSize: NSSize { NSSize(width: 6, height: 6) }
+}
+
+/// A compact horizontal signal meter: 20 segments, mint → amber → coral,
+/// sitting in a recessed dark bed. Level is 0…1; segments light from the
+/// left. Quiet at rest.
 final class GGLevelMeter: NSView {
     var level: Double = 0 { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {
         let h = bounds.height
-        NSColor(white: 0, alpha: 0.28).setFill()
+        GGTheme.inset.setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: h * 0.35), xRadius: 2, yRadius: 2).fill()
         let lit = Int((min(max(level, 0), 1) * 20).rounded())
         let segs = 20
@@ -116,9 +214,9 @@ final class GGLevelMeter: NSView {
         let w = (bounds.width - gap * CGFloat(segs - 1)) / CGFloat(segs)
         for s in 0..<lit {
             let x = CGFloat(s) * (w + gap)
-            let c: NSColor = s < 13 ? NSColor(calibratedRed: 0.18, green: 0.45, blue: 0.62, alpha: 0.95)
-                : s < 17 ? NSColor(calibratedRed: 0.9, green: 0.62, blue: 0.1, alpha: 0.95)
-                : GGTheme.warning.withAlphaComponent(0.95)
+            let c: NSColor = s < 13 ? GGTheme.mint.withAlphaComponent(0.95)
+                : s < 17 ? GGTheme.amber.withAlphaComponent(0.95)
+                : GGTheme.coral.withAlphaComponent(0.95)
             c.setFill()
             NSBezierPath(roundedRect: NSRect(x: x, y: h * 0.32, width: w, height: h * 0.36),
                          xRadius: 1, yRadius: 1).fill()
@@ -126,17 +224,20 @@ final class GGLevelMeter: NSView {
     }
 }
 
-// MARK: - Neutral slider (gray track, light thumb — no permanent blue)
+// MARK: - Split-track slider (quiet white bed, electric-blue fill)
 
-/// A linear slider with a neutral graphite track, a slightly brighter
-/// filled portion before the knob, and a small light-gray thumb — drawn
-/// from scratch (the system slider is SwiftUI-hosted on this macOS,
-/// ignores cell drawing, and its track is permanently blue).
+/// A linear slider with a split treatment: a subdued white unfilled bed,
+/// an electric-blue filled track, and a small soft-white thumb with a
+/// gentle shadow — drawn from scratch (the system slider is
+/// SwiftUI-hosted on this macOS, ignores cell drawing, and its track
+/// is permanently system-blue).
 ///
-/// A slider's position and numeric value carry its meaning: the track
-/// never looks "enabled". Keyboard focus shows a thin accent ring;
-/// arrow keys adjust (⇧ for fine steps). Optional: double-click resets
-/// to unity (output trim).
+/// The fill sits slightly subdued at rest and snaps to the full accent
+/// while dragging — active controls glow with purpose through vivid
+/// fills and sharp contrast, not big outer glows. The numeric readouts
+/// stay white; the track carries the color. Keyboard focus shows a
+/// thin accent ring; arrow keys adjust (⇧ for fine steps). Optional:
+/// double-click resets to unity (output trim).
 final class NeutralSlider: NSControl {
 
     var minValue: Double = 0 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
@@ -151,9 +252,12 @@ final class NeutralSlider: NSControl {
         set { _value = min(max(newValue, minValue), maxValue); needsDisplay = true }
     }
 
-    static let trackColor = NSColor(calibratedWhite: 0.27, alpha: 1)   // #454549
-    static let fillColor = NSColor(calibratedWhite: 0.38, alpha: 1)    // brighter before the knob
-    static let thumbColor = NSColor(calibratedWhite: 0.89, alpha: 1)    // #E3E3E6
+    static let trackColor = NSColor(white: 1, alpha: 0.12)   // subdued unfilled bed
+    static let thumbColor = GGTheme.primary                    // small soft-white thumb
+    /// Electric blue, slightly subdued at rest — the full accent while dragging.
+    static let fillRest = GGTheme.electricBlue.blended(withFraction: 0.18, of: .black)
+        ?? GGTheme.electricBlue
+    private var isDragging = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -169,20 +273,32 @@ final class NeutralSlider: NSControl {
         let enabled = isEnabled
         let h: CGFloat = 4
         let bar = NSRect(x: 0, y: bounds.midY - h / 2, width: bounds.width, height: h)
-        (enabled ? Self.trackColor : Self.trackColor.withAlphaComponent(0.45)).setFill()
+        (enabled ? Self.trackColor : NSColor(white: 1, alpha: 0.05)).setFill()
         NSBezierPath(roundedRect: bar, xRadius: h / 2, yRadius: h / 2).fill()
         let knobX = bar.minX + CGFloat(fraction) * bar.width
         let w = min(max(knobX - bar.minX, 0), bar.width)
         if w > 2 {
-            (enabled ? Self.fillColor : Self.fillColor.withAlphaComponent(0.45)).setFill()
+            let fill: NSColor
+            if !enabled { fill = Self.fillRest.withAlphaComponent(0.35) }
+            else if isDragging { fill = GGTheme.electricBlue }
+            else { fill = Self.fillRest }
+            fill.setFill()
             NSBezierPath(roundedRect: NSRect(x: bar.minX, y: bar.minY,
                                              width: w, height: h),
                          xRadius: h / 2, yRadius: h / 2).fill()
         }
         let size: CGFloat = 12
-        (enabled ? Self.thumbColor : NSColor(calibratedWhite: 0.55, alpha: 1)).setFill()
+        // thumb with a small, soft black shadow
+        NSGraphicsContext.current?.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 2
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowColor = NSColor(white: 0, alpha: 0.55)
+        shadow.set()
+        (enabled ? Self.thumbColor : NSColor(white: 1, alpha: 0.45)).setFill()
         NSBezierPath(ovalIn: NSRect(x: knobX - size / 2, y: bounds.midY - size / 2,
                                     width: size, height: size)).fill()
+        NSGraphicsContext.current?.restoreGraphicsState()
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
@@ -207,6 +323,8 @@ final class NeutralSlider: NSControl {
             send()
             return
         }
+        isDragging = true
+        needsDisplay = true
         track(at: event)
         if sendsContinuously { send() }
         var keep = true
@@ -216,6 +334,8 @@ final class NeutralSlider: NSControl {
             if ev.type == .leftMouseUp { keep = false }
             if sendsContinuously { send() }
         }
+        isDragging = false
+        needsDisplay = true
         send()
     }
     private func track(at event: NSEvent) {
@@ -241,22 +361,22 @@ final class NeutralSlider: NSControl {
     }
 }
 
-// MARK: - Function-colored controls (off = faint tint, on = rich fill)
+// MARK: - Function-accent controls (idle = neutral, engaged = vivid accent)
 
 /// Base for the per-function controls. Fully custom-drawn NSButtons — the
 /// cell never renders — so all states are ours:
-///   OFF       faint tint of the function color, muted light text, quiet border
-///   HOVER     slightly brighter tint of the SAME family
-///   ON        richer, more saturated fill, dark text — color = state
-///   DISABLED  neutral subdued styling (no function tint at all)
+///   OFF       the ONE shared neutral treatment (quiet fill, muted label)
+///   HOVER     a restrained lift of the same neutral surface
+///   ON        the function's vivid accent as a SOLID fill, near-black text
+///   DISABLED  quieter than idle (no accent at all)
 ///   FOCUS     thin exterior ring (keyboard only)
 class FunctionButton: NSButton {
-    var pair: GGTheme.FunctionPair
+    var accent: NSColor
     var hovering = false
     private var hoverArea: NSTrackingArea?
 
-    init(tag: Int, pair: GGTheme.FunctionPair, target: AnyObject?, action: Selector) {
-        self.pair = pair
+    init(tag: Int, accent: NSColor, target: AnyObject?, action: Selector) {
+        self.accent = accent
         super.init(frame: .zero)
         self.tag = tag
         self.target = target
@@ -271,12 +391,12 @@ class FunctionButton: NSButton {
 
     var isEngaged: Bool { isEnabled && state == .on }
 
-    /// Brighten a color within its family (hover lift).
+    /// Brighten a color (hover lift on engaged fills).
     static func lift(_ c: NSColor, _ fraction: CGFloat) -> NSColor {
         c.blended(withFraction: fraction, of: .white) ?? c
     }
 
-    // hover: slightly brighter tint, same family
+    // hover: a restrained lift, same neutral family when idle
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let a = hoverArea { removeTrackingArea(a) }
@@ -312,17 +432,19 @@ class FunctionButton: NSButton {
     override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
 }
 
-/// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM): OFF = faint
-/// function tint, ON = richer fill + dark text — the color highlight IS
-/// the state indicator (no checkmark).
+/// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM / Include): OFF =
+/// the shared neutral treatment (quiet fill, muted label), ON = the
+/// function's vivid solid accent + near-black label — the color IS the
+/// state indicator (no checkmark). Punchy against the dark shell
+/// precisely because everything around it stays quiet.
 final class FunctionToggle: FunctionButton {
     let baseTitle: String
     static let font = NSFont.systemFont(ofSize: 11)
 
-    init(title: String, tag: Int, pair: GGTheme.FunctionPair,
+    init(title: String, tag: Int, accent: NSColor,
          target: AnyObject?, action: Selector) {
         self.baseTitle = title
-        super.init(tag: tag, pair: pair, target: target, action: action)
+        super.init(tag: tag, accent: accent, target: target, action: action)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
@@ -338,21 +460,21 @@ final class FunctionToggle: FunctionButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
-        else if engaged { fill = hovering ? Self.lift(pair.on, 0.10) : pair.on }
-        else { fill = hovering ? Self.lift(pair.off, 0.20) : pair.off }
+        else if engaged { fill = hovering ? Self.lift(accent, 0.10) : accent }
+        else { fill = hovering ? GGTheme.hoverSurface : GGTheme.toggleIdleFill }
         fill.setFill()
         path.fill()
         if enabled {
             let border = engaged
-                ? (pair.on.blended(withFraction: 0.35, of: .black) ?? pair.on)
-                : NSColor(white: 1, alpha: 0.07)
+                ? (accent.blended(withFraction: 0.30, of: .black) ?? accent)
+                : (hovering ? NSColor(white: 1, alpha: 0.12) : GGTheme.toggleIdleBorder)
             border.setStroke()
             path.lineWidth = 1
             path.stroke()
         }
         let label = baseTitle
         let text: NSColor = !enabled ? .disabledControlTextColor
-            : engaged ? GGTheme.darkText : GGTheme.softGray
+            : engaged ? GGTheme.darkText : GGTheme.toggleIdleLabel
         let attr = NSAttributedString(string: label, attributes: [.font: Self.font, .foregroundColor: text])
         let s = attr.size()
         attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
@@ -360,7 +482,8 @@ final class FunctionToggle: FunctionButton {
     }
 }
 
-/// The small enable/bypass pill switch for plug-ins — muted teal when on.
+/// The small enable/bypass pill switch for plug-ins — neutral graphite
+/// track when off, electric-blue track with a white knob when on.
 final class FunctionSwitch: FunctionButton {
     override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 20) }
 
@@ -371,14 +494,14 @@ final class FunctionSwitch: FunctionButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
-        else if engaged { fill = hovering ? Self.lift(pair.on, 0.10) : pair.on }
-        else { fill = hovering ? Self.lift(pair.off, 0.25) : pair.off }
+        else if engaged { fill = hovering ? Self.lift(accent, 0.10) : accent }
+        else { fill = hovering ? GGTheme.hoverSurface : GGTheme.toggleIdleFill }
         fill.setFill()
         path.fill()
         if enabled {
             let border = engaged
-                ? (pair.on.blended(withFraction: 0.35, of: .black) ?? pair.on)
-                : NSColor(white: 1, alpha: 0.07)
+                ? (accent.blended(withFraction: 0.30, of: .black) ?? accent)
+                : (hovering ? NSColor(white: 1, alpha: 0.12) : GGTheme.toggleIdleBorder)
             border.setStroke()
             path.lineWidth = 1
             path.stroke()
@@ -387,8 +510,8 @@ final class FunctionSwitch: FunctionButton {
         let d = rect.height - inset * 2
         let travel = rect.width - inset * 2 - d
         let x = engaged ? rect.minX + inset + travel : rect.minX + inset
-        let knob = !enabled ? NSColor(calibratedWhite: 0.45, alpha: 1)
-            : NSColor(calibratedWhite: 0.89, alpha: 1)
+        let knob = !enabled ? NSColor(white: 1, alpha: 0.45)
+            : GGTheme.primary
         knob.setFill()
         NSBezierPath(ovalIn: NSRect(x: x, y: rect.minY + inset, width: d, height: d)).fill()
     }
@@ -507,10 +630,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons[i].isEnabled = connected && !learning
                 && (mineRunning || autoRunning.isEmpty)
             // Auto Gain is an action, not a persistent state: neutral at
-            // rest; while running it becomes a soft-blue "Cancel" chip.
+            // rest; while running it becomes an electric-blue "Cancel" chip.
             let agTitle = mineRunning ? "Cancel" : "Auto Gain"
             let agColor = mineRunning ? GGTheme.darkText : GGTheme.softGray
-            autoGainButtons[i].bezelColor = mineRunning ? GGTheme.fAutoGain.on : nil
+            autoGainButtons[i].bezelColor = mineRunning ? GGTheme.electricBlue : nil
             autoGainButtons[i].attributedTitle = NSAttributedString(
                 string: agTitle,
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
@@ -588,12 +711,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             openButtons[i].isHidden = !hasPlugin
             addPluginButtons[i].isHidden = hasPlugin
             addPluginButtons[i].isEnabled = live
+            // the plug-in's small blue presence mark in the processing well
+            pluginDots[i].isHidden = !hasPlugin
 
             let trim = server.trim(i)
             if trimSliders[i].doubleValue != trim { trimSliders[i].doubleValue = trim }
             let text = String(format: "%+.1f dB", trim)
             if trimFields[i].stringValue != text { trimFields[i].stringValue = text }
-            trimFields[i].textColor = trim > 0.01 ? GGTheme.warning : GGTheme.softGray
+            // white readout at rest (values stay readable); coral only as
+            // the clipping warning when the trim is boosted above unity
+            trimFields[i].textColor = trim > 0.01 ? GGTheme.warning : GGTheme.primary
         }
 
         // MONITOR
@@ -615,8 +742,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
             setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil)
 
-            // Mute gets the clearest active state: filled button + badge.
+            // Mute gets the clearest active state: filled coral button,
+            // a coral "Muted" badge and its dot — the section itself
+            // never turns red.
             mutedBadges[o]?.isHidden = !(st.mute ?? false)
+            mutedDots[o].isHidden = !(st.mute ?? false)
             let missing = missingMonitorTargets(o)
             monLearnButtons[o].isHidden = missing.isEmpty && !isLearning
             monLearnButtons[o].isEnabled = (learning && learningColumn == .monitor(o)) || !missing.isEmpty
@@ -833,6 +963,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var enabledChecks: [NSButton] = []
     private var openButtons: [NSButton] = []
     private var addPluginButtons: [NSButton] = []
+    private var pluginDots: [StatusDot] = []
     private var trimSliders: [NeutralSlider] = []
     private var trimFields: [NSTextField] = []
 
@@ -844,6 +975,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var monoToggles: [NSButton] = []
     private var monLearnButtons: [NSButton] = []
     private var mutedBadges: [NSTextField?] = []
+    private var mutedDots: [StatusDot] = []
 
     private var statusField: NSTextField!
     private var subtitleField: NSTextField!
@@ -853,9 +985,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     // MARK: keyboard-shortcut selection state (see extension at file end)
 
     /// Card views for the input / routing grids (index 0…3) — the shortcut
-    /// selection highlight writes their layer borders directly.
-    var inputCards: [NSView] = []
-    var outputCards: [NSView] = []
+    /// selection highlight drives their `selected` state (CardView owns
+    /// the blue border + lifted surface).
+    var inputCards: [CardView] = []
+    var outputCards: [CardView] = []
     /// The card each "selected…" shortcut acts on (gain, trim, processing).
     var selectedInputIndex = 0
     var selectedOutputIndex = 0
@@ -876,8 +1009,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // Window: one resizable 1200×820 workspace.
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 820))
 
-        // Translucency reserved for the title bar + monitor strip: a warm
-        // charcoal tint over the blur carries the Golden Gate tone.
+        // The whole shell is ONE continuous smoked-glass material: the
+        // blur view samples the desktop, the cool near-black tint (78%)
+        // sits on top — wallpaper bleeds through softly, never clearly
+        // enough to distract. Header + monitor add subtle framing bands
+        // of the same glass; cards are translucent fills, not frosted
+        // tiles, so the glass reads as one surface.
         let blur = NSVisualEffectView()
         blur.translatesAutoresizingMaskIntoConstraints = false
         blur.material = .underWindowBackground
@@ -956,11 +1093,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// Title bar: title + interface subtitle on the left, toolbar on the
-    /// right (settings). Lightly translucent, with a
-    /// subtle divider separating it from the controls.
+    /// right (settings). A subtle band of the same glass, framed by a
+    /// hairline at its bottom — it blends into the window, never a
+    /// separate strip.
     private func makeHeader() -> NSView {
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
+        header.wantsLayer = true
+        header.layer?.backgroundColor = GGTheme.headerFooterTint.cgColor
 
         let title = NSTextField(labelWithString: "Quartet Control")
         title.font = GGTheme.titleFont
@@ -982,9 +1122,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         settings.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(settings)
 
-        let divider = NSBox()
-        divider.boxType = .separator
-        divider.translatesAutoresizingMaskIntoConstraints = false
+        let divider = Hairline()
         header.addSubview(divider)
 
         NSLayoutConstraint.activate([
@@ -1161,9 +1299,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         grid.rowSpacing = 12
 
         for i in 0..<4 {
-            let card = NSView()
+            let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
-            GGTheme.applyCardStyle(card)
             inputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
@@ -1252,19 +1389,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(b)
             autoGainButtons.append(b)
 
-            // bottom row: 48V / SL / Ø — independent toggles.
-            // push-on/push-off recessed buttons: the active state is a
-            // filled, tinted button (shape + text, not color alone).
+            // bottom row: 48V / SL / Ø — independent toggles. Neutral
+            // chips at rest; engaged = the function's vivid accent fill
+            // with a near-black label (amber / mint / violet).
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
-            let tv = toggle("48V", 300 + i, GGTheme.f48V)
+            let tv = toggle("48V", 300 + i, GGTheme.amber)
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("SL", 400 + i, GGTheme.fSoftLimit)
+            let soft = toggle("SL", 400 + i, GGTheme.mint)
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = toggle("Ø", 500 + i, GGTheme.fPolarity)
+            let pol = toggle("Ø", 500 + i, GGTheme.violet)
             pol.toolTip = "Invert Polarity"
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
@@ -1296,9 +1433,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         grid.rowSpacing = 12
 
         for i in 0..<4 {
-            let card = NSView()
+            let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
-            GGTheme.applyCardStyle(card)
             outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
@@ -1326,10 +1462,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(nf)
             nameFields.append(nf)
 
-            // physical output label (never hidden by custom naming)
+            // physical output label (never hidden by custom naming) —
+            // supporting metadata, so it takes the muted tone
             let phys = NSTextField(labelWithString: InsertServer.pairNames[i])
             phys.font = GGTheme.labelFont
-            phys.textColor = GGTheme.softGray
+            phys.textColor = GGTheme.muted
             col.addArrangedSubview(phys)
             physLabels.append(phys)
 
@@ -1348,20 +1485,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(sp)
             sourcePopups.append(sp)
 
-            // contextual "Include source processing" (mirrored sources only),
-            // inside a CONSTANT-HEIGHT row: the checkbox hides for direct
-            // sources but the row keeps its height, so Processing and
-            // Output Trim stay aligned across all four cards.
-            let inc = NSButton(checkboxWithTitle: "Include source processing",
-                               target: self, action: #selector(includeChanged(_:)))
-            inc.tag = 2200 + i
-            inc.font = GGTheme.labelFont
+            // "Include" — the linked/mirrored-routing chip: ice cyan when
+            // engaged (the mirrored pair inherits the source's processing).
+            // Inside a CONSTANT-HEIGHT row: it hides for direct sources
+            // but the row keeps its height, so Processing and Output Trim
+            // stay aligned across all four cards.
+            let inc = FunctionToggle(title: "Include", tag: 2200 + i,
+                                     accent: GGTheme.iceCyan,
+                                     target: self, action: #selector(includeChanged(_:)))
+            inc.toolTip = "Include source processing — mirror after the source’s plug-in"
             let incRow = NSView()
             incRow.translatesAutoresizingMaskIntoConstraints = false
             incRow.heightAnchor.constraint(equalToConstant: 22).isActive = true
             incRow.addSubview(inc)
             NSLayoutConstraint.activate([
-                inc.leadingAnchor.constraint(equalTo: incRow.leadingAnchor, constant: -3),
+                inc.leadingAnchor.constraint(equalTo: incRow.leadingAnchor),
                 inc.centerYAnchor.constraint(equalTo: incRow.centerYAnchor),
             ])
             col.addArrangedSubview(incRow)
@@ -1379,7 +1517,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             plugRow.alignment = .centerY
             plugRow.translatesAutoresizingMaskIntoConstraints = false
 
-            let en = FunctionSwitch(tag: 2400 + i, pair: GGTheme.fPlugin,
+            // small blue presence mark for an inserted plug-in
+            let dot = StatusDot(color: GGTheme.electricBlue)
+            dot.isHidden = true
+            plugRow.addArrangedSubview(dot)
+            pluginDots.append(dot)
+
+            let en = FunctionSwitch(tag: 2400 + i, accent: GGTheme.electricBlue,
                                     target: self, action: #selector(enabledChanged(_:)))
             en.toolTip = "Enable / bypass the plug-in"
             plugRow.addArrangedSubview(en)
@@ -1416,11 +1560,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             plugRow.addArrangedSubview(add)
             addPluginButtons.append(add)
 
+            // the processing well: darker than its card, like a recessed
+            // slot; an inserted plug-in reads as a raised graphite pill
+            // (system picker + Open) with the small blue indicator
             let slot = NSView()
             slot.translatesAutoresizingMaskIntoConstraints = false
             slot.wantsLayer = true
-            slot.layer?.backgroundColor = NSColor(white: 0, alpha: 0.18).cgColor
-            slot.layer?.cornerRadius = 8
+            slot.layer?.backgroundColor = GGTheme.inset.cgColor
+            slot.layer?.cornerRadius = 10
             slot.addSubview(plugRow)
             NSLayoutConstraint.activate([
                 plugRow.topAnchor.constraint(equalTo: slot.topAnchor, constant: 6),
@@ -1488,23 +1635,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     // MARK: monitor strip
 
     /// The persistent bottom strip: Main Speakers + Headphones, side by
-    /// side. Background sits close to the window color — a thin top
-    /// divider does the separation, not a contrast panel.
+    /// side. A slightly darker band of the same glass material, framed by
+    /// a thin top hairline — not a contrast panel. Both groups stay
+    /// visually balanced; when headphones are muted only the Mute button
+    /// goes coral (plus the badge + dot), never the whole section.
     private func makeMonitorStrip() -> NSView {
         let strip = NSView()
         strip.translatesAutoresizingMaskIntoConstraints = false
         strip.wantsLayer = true
-        strip.layer?.backgroundColor = GGTheme.monitorStrip.cgColor
+        strip.layer?.backgroundColor = GGTheme.headerFooterTint.cgColor
 
-        // thin top divider (subtle border against the routing area)
-        let topDivider = NSBox()
-        topDivider.boxType = .separator
-        topDivider.translatesAutoresizingMaskIntoConstraints = false
+        // thin top hairline (subtle border against the routing area)
+        let topDivider = Hairline()
         strip.addSubview(topDivider)
 
         let title = NSTextField(labelWithString: "Monitor")
         title.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        title.textColor = GGTheme.softGray
+        title.textColor = GGTheme.muted
         title.translatesAutoresizingMaskIntoConstraints = false
         strip.addSubview(title)
 
@@ -1517,7 +1664,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // subtle vertical divider between the two monitor groups
         let vDivider = NSView()
         vDivider.wantsLayer = true
-        vDivider.layer?.backgroundColor = NSColor(white: 1, alpha: 0.08).cgColor
+        vDivider.layer?.backgroundColor = GGTheme.cardBorder.cgColor
         vDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
         row.addArrangedSubview(vDivider)
         row.addArrangedSubview(makeMonitorGroup(1))
@@ -1549,10 +1696,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         head.textColor = GGTheme.primary
         let badge = NSTextField(labelWithString: "Muted")
         badge.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
-        badge.textColor = GGTheme.fMute.on
+        badge.textColor = GGTheme.coral
         badge.isHidden = true
         mutedBadges.append(badge)
-        let headRow = NSStackView(views: [head, badge])
+        let muteDot = StatusDot(color: GGTheme.coral)
+        muteDot.isHidden = true
+        mutedDots.append(muteDot)
+        let headRow = NSStackView(views: [head, muteDot, badge])
         headRow.spacing = 8
         headRow.alignment = .centerY
         group.addArrangedSubview(headRow)
@@ -1594,17 +1744,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         monFields.append(f)
         group.addArrangedSubview(sliderRow)
 
-        // Mute / Dim / Mono — filled (tinted) when active.
+        // Mute / DIM / SUM — neutral at rest; coral / amber / electric
+        // blue solid fills when engaged.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
         btnRow.spacing = 6
-        let mute = toggle("Mute", 800 + o, GGTheme.fMute)
+        let mute = toggle("Mute", 800 + o, GGTheme.coral)
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("DIM", 900 + o, GGTheme.fDim)
+        let dim = toggle("DIM", 900 + o, GGTheme.amber)
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("SUM", 1000 + o, GGTheme.fMono)
+        let mono = toggle("SUM", 1000 + o, GGTheme.electricBlue)
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
 
@@ -1829,7 +1980,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         suppressActions = true
         let text = String(format: "%+.1f dB", min(6.0, max(-64.0, v)))
         trimFields[i].stringValue = text
-        trimFields[i].textColor = v > 0.01 ? GGTheme.warning : GGTheme.softGray
+        trimFields[i].textColor = v > 0.01 ? GGTheme.warning : GGTheme.primary
         suppressActions = false
     }
 
@@ -1951,13 +2102,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: - helpers
 
-    /// A per-function toggle: OFF = faint tint of its function color, ON =
-    /// richer fill + dark text (the color highlight is the state), DISABLED
-    /// = neutral subdued. The color pair rides with the control
-    /// (FunctionToggle draws all states); `setToggle` only applies live state.
+    /// A per-function toggle: OFF = the shared neutral treatment, ON =
+    /// the function's vivid accent fill + near-black text (the color
+    /// highlight IS the state), DISABLED = quieter than idle. The accent
+    /// rides with the control (FunctionToggle draws all states);
+    /// `setToggle` only applies live state.
     private func toggle(_ title: String, _ tag: Int,
-                        _ pair: GGTheme.FunctionPair) -> FunctionToggle {
-        FunctionToggle(title: title, tag: tag, pair: pair, target: self,
+                        _ accent: NSColor) -> FunctionToggle {
+        FunctionToggle(title: title, tag: tag, accent: accent, target: self,
                        action: tag >= 700 ? #selector(monToggleChanged(_:))
                                           : #selector(inputToggleChanged(_:)))
     }
@@ -2071,16 +2223,16 @@ extension QuartetControlController {
         selectOutput((selectedOutputIndex + delta + 4) % 4)
     }
 
-    /// Selection visual: the selected card gets a brighter border —
-    /// color is state, per the window's theme rules.
+    /// Selection visual: the selected card gets the thin electric-blue
+    /// border (≈55%) and the slightly lighter surface — CardView owns the
+    /// styling; selection should look deliberate, not like every card
+    /// competing for attention.
     func updateCardHighlights() {
         for (i, card) in inputCards.enumerated() {
-            card.layer?.borderColor = (i == selectedInputIndex
-                ? NSColor(white: 1, alpha: 0.35) : GGTheme.cardBorder).cgColor
+            card.selected = i == selectedInputIndex
         }
         for (i, card) in outputCards.enumerated() {
-            card.layer?.borderColor = (i == selectedOutputIndex
-                ? NSColor(white: 1, alpha: 0.35) : GGTheme.cardBorder).cgColor
+            card.selected = i == selectedOutputIndex
         }
     }
 

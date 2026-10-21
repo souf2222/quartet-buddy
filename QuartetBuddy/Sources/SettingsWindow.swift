@@ -113,10 +113,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         w.contentView = content
         w.delegate = self
         w.center()
-        // One cohesive dark surface — matches Quartet Control's theme and
-        // keeps the sidebar readable in every system appearance.
+        // One cohesive dark surface — matches Quartet Control's Obsidian
+        // theme (opaque fallback charcoal) and keeps the sidebar readable
+        // in every system appearance.
         w.appearance = NSAppearance(named: .darkAqua)
-        w.backgroundColor = NSColor(calibratedWhite: 0.15, alpha: 1)
+        w.backgroundColor = GGTheme.windowFallback
         window = w
     }
 
@@ -126,7 +127,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let sidebar = NSView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor(calibratedWhite: 0.125, alpha: 1).cgColor
+        sidebar.layer?.backgroundColor = GGTheme.windowFallback
+            .blended(withFraction: 0.30, of: .black)?.cgColor
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -152,7 +154,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             b.alignment = .left
             b.tag = pane.rawValue
             b.font = .systemFont(ofSize: 13, weight: .medium)
-            b.contentTintColor = NSColor(calibratedWhite: 0.92, alpha: 1)
+            b.contentTintColor = GGTheme.primary
             b.translatesAutoresizingMaskIntoConstraints = false
             row.addSubview(b)
             NSLayoutConstraint.activate([
@@ -181,7 +183,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         v.translatesAutoresizingMaskIntoConstraints = false
         let title = NSTextField(labelWithString: pane.title)
         title.font = .systemFont(ofSize: 19, weight: .semibold)
-        title.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
+        title.textColor = GGTheme.primary
         title.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(title)
         NSLayoutConstraint.activate([
