@@ -22,10 +22,14 @@ import AppKit
 /// corners everywhere — panels, buttons, dropdowns, fields, selection
 /// outlines — with thin #34373C dividers, flat surfaces only slightly
 /// different from the window, no gradients, gloss, glows or decorative
-/// shadows. Color means state and nothing else: blue for focus,
-/// selection and active slider tracks; green ONLY for Soft Limit; amber
-/// ONLY for 48V/DIM; red ONLY for Mute/warnings; every other active
-/// function is blue. Inactive controls are neutral gray.
+/// shadows. Input panels are compact: a header (name + type dropdown)
+/// over one control row — an 80-pt flat rotary knob (value inside, thin
+/// green setting-arc around a 270° dark track) beside Auto Gain and a
+/// row of three equal toggles. Color means state and nothing else:
+/// blue for focus, selection, active slider tracks, DIM and the other
+/// active functions; yellow ONLY for Soft Limit; purple ONLY for
+/// polarity and SUM; red ONLY for 48V, Mute and warnings; green only in
+/// meters and the knob arc. Inactive controls are neutral gray.
 ///
 /// Plumbing is unchanged from the two windows it replaces: hardware reads
 /// come from the glue tree (live 2 s poll while visible), writes go through
@@ -74,19 +78,30 @@ enum GGTheme {
     /// DISABLED function controls — dimmer than idle-but-available.
     static let subduedFill = NSColor(white: 1, alpha: 0.03)
 
-    // Accents — color only where it means something: one blue for focus /
-    // selection / active tracks / every "other" active function, plus
-    // green (Soft Limit), amber (48V, DIM), red (Mute, warnings).
+    // Accents — color only where it means something: blue for focus /
+    // selection / active tracks / DIM / everything "else" active; yellow
+    // only for Soft Limit; purple only for polarity + SUM; red only for
+    // 48V, Mute and warnings; green only in meters and the knob arc.
 
-    /// Clear blue — focus, selection, active slider tracks; every other
-    /// active function (Ø, SUM, Include, plug-in enable, Auto Gain) too.
+    /// Clear blue — focus, selection, active slider tracks, DIM, and the
+    /// remaining active functions (Include, plug-in enable, Auto Gain).
     static let accent = hex("5294E8")
-    /// Green — Soft Limit engaged; healthy signal.
-    static let green = hex("46C58A")
-    /// Amber — 48V + DIM engaged.
+    /// Yellow — Soft Limit engaged.
     static let amber = hex("E7AE49")
-    /// Red — Mute engaged; clipping.
+    /// Purple — polarity (Ø) + SUM engaged.
+    static let violet = hex("AC88FF")
+    /// Red — 48V + Mute engaged; clipping warnings.
     static let red = hex("E3636D")
+    /// Green — healthy signal (meters) only.
+    static let green = hex("46C58A")
+
+    // Knob — the input preamp dial.
+    /// Flat, nearly black knob body.
+    static let knobBody = hex("111315")
+    /// Thin dark-gray track around the body.
+    static let knobTrack = hex("34383C")
+    /// The green value arc — the setting, not the live signal.
+    static let knobArc = hex("65D98B")
 
     /// Idle controls — the flat neutral gray every share: quiet,
     /// clearly "clickable but off", never mistakable for an engaged function.
@@ -297,6 +312,208 @@ final class NeutralSlider: NSControl {
     private func track(at event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         setFraction(Double(p.x / max(bounds.width, 1)))
+    }
+
+    // MARK: keyboard
+    override func keyDown(with event: NSEvent) {
+        guard isEnabled else { super.keyDown(with: event); return }
+        let fine = event.modifierFlags.contains(.shift)
+        let step = fine ? max((maxValue - minValue) / 100, 0.01) : 1.0
+        switch event.specialKey {
+        case .leftArrow, .downArrow:
+            doubleValue -= step
+            send()
+        case .rightArrow, .upArrow:
+            doubleValue += step
+            send()
+        default:
+            super.keyDown(with: event)
+        }
+    }
+}
+
+// MARK: - Gain knob (flat dial: value inside, green arc around)
+
+/// A flat rotary knob — the input preamp control. Nearly black circular
+/// body with a subtle dark-gray outline, the gain value centered inside
+/// (off-white, tabular numerals) and a smaller muted "dB" beneath it.
+/// Around the body, separated by a small consistent gap, a thin 270°
+/// dark-gray track — starting at 7:30, clockwise through the left side
+/// and the top, ending at 4:30 — with a flat green arc that grows
+/// clockwise from the lower-left as the value rises (midpoint = 12
+/// o'clock, full = the whole track). The arc shows the SETTING, not the
+/// live signal. No pointer, tick marks, shadows, gradients or glow.
+///
+/// Interaction: drag vertically (up = more, ⇧ = fine), arrow keys adjust
+/// (⇧ fine), double-click to type an exact value into an inline editor
+/// (`valueField` — same tag + delegate the old numeric field used).
+final class GainKnob: NSControl {
+
+    var minValue: Double = 0 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
+    var maxValue: Double = 75 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
+    var sendsContinuously = true
+    /// False while no gain is known (device offline) — draws "—", no arc.
+    var hasValue = true { didSet { needsDisplay = true } }
+
+    private var _value: Double = 0
+    override var doubleValue: Double {
+        get { _value }
+        set { _value = min(max(newValue, minValue), maxValue); needsDisplay = true }
+    }
+
+    /// The inline precise-entry field (double-click). The controller
+    /// wires it with the old numeric field's tag + delegate.
+    let valueField = NSTextField()
+    private var isEditing = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        focusRingType = .exterior   // thin accent outline, keyboard focus only
+        valueField.isHidden = true
+        valueField.isBordered = false
+        valueField.drawsBackground = false
+        valueField.alignment = .center
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        valueField.textColor = GGTheme.primary
+        valueField.toolTip = "Preamp gain — double-click the knob to type an exact value"
+        valueField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(valueField)
+        NSLayoutConstraint.activate([
+            valueField.centerXAnchor.constraint(equalTo: centerXAnchor),
+            valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 5),
+            valueField.widthAnchor.constraint(equalToConstant: 64),
+            valueField.heightAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 80, height: 80) }
+    override var acceptsFirstResponder: Bool { isEnabled }
+
+    // MARK: geometry
+    private static let bodyRadius: CGFloat = 30
+    private static let trackRadius: CGFloat = 37
+    private static let stroke: CGFloat = 3
+    /// Track: start 7:30 (225°), sweep 270° clockwise to 4:30 (-45°).
+    private static let startAngle: CGFloat = 225
+    private static let sweepAngle: CGFloat = 270
+
+    private var fraction: Double {
+        maxValue > minValue ? (doubleValue - minValue) / (maxValue - minValue) : 0
+    }
+    @discardableResult
+    private func send() -> Bool { sendAction(action, to: target) }
+
+    // MARK: drawing
+    override func draw(_ dirtyRect: NSRect) {
+        let enabled = isEnabled
+        let alpha: CGFloat = enabled ? 1 : 0.45
+        let c = NSPoint(x: bounds.midX, y: bounds.midY)
+
+        func arc(_ sweep: CGFloat) -> NSBezierPath {
+            let p = NSBezierPath()
+            p.appendArc(withCenter: c, radius: Self.trackRadius,
+                        startAngle: Self.startAngle,
+                        endAngle: Self.startAngle - sweep, clockwise: true)
+            p.lineWidth = Self.stroke
+            p.lineCapStyle = .butt
+            return p
+        }
+
+        // surrounding track
+        GGTheme.knobTrack.withAlphaComponent(alpha).setStroke()
+        arc(Self.sweepAngle).stroke()
+
+        // green value arc — clockwise from the lower-left start
+        let f = hasValue ? fraction : 0
+        if f > 0.002 {
+            GGTheme.knobArc.withAlphaComponent(alpha).setStroke()
+            arc(CGFloat(f) * Self.sweepAngle).stroke()
+        }
+
+        // flat body with a subtle dark-gray outline
+        let bodyRect = NSRect(x: c.x - Self.bodyRadius, y: c.y - Self.bodyRadius,
+                               width: Self.bodyRadius * 2, height: Self.bodyRadius * 2)
+        let body = NSBezierPath(ovalIn: bodyRect)
+        GGTheme.knobBody.setFill()
+        body.fill()
+        GGTheme.knobTrack.withAlphaComponent(alpha).setStroke()
+        body.lineWidth = 1
+        body.stroke()
+
+        guard !isEditing else { return }
+
+        if hasValue {
+            let value = NSAttributedString(
+                string: String(format: "%.1f", doubleValue),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+                             .foregroundColor: GGTheme.primary.withAlphaComponent(enabled ? 1 : 0.5)])
+            let vs = value.size()
+            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y + 5 - vs.height / 2))
+            let unit = NSAttributedString(
+                string: "dB",
+                attributes: [.font: NSFont.systemFont(ofSize: 8),
+                             .foregroundColor: GGTheme.muted.withAlphaComponent(enabled ? 1 : 0.5)])
+            let us = unit.size()
+            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - 6 - us.height / 2))
+        } else {
+            let dash = NSAttributedString(
+                string: "—",
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+                             .foregroundColor: GGTheme.muted])
+            let ds = dash.size()
+            dash.draw(at: NSPoint(x: c.x - ds.width / 2, y: c.y - ds.height / 2))
+        }
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
+
+    // MARK: precise entry (double-click the number)
+    func beginEditing() {
+        guard isEnabled, !isEditing, let window else { return }
+        isEditing = true
+        valueField.stringValue = String(format: "%.1f", doubleValue)
+        valueField.isHidden = false
+        needsDisplay = true
+        window.makeFirstResponder(valueField)
+        valueField.selectText(nil)
+    }
+
+    func endEditing() {
+        guard isEditing else { return }
+        isEditing = false
+        if valueField.currentEditor() != nil {
+            window?.makeFirstResponder(nil)
+        }
+        valueField.isHidden = true
+        needsDisplay = true
+    }
+
+    // MARK: mouse (vertical drag; ⇧ = fine; double-click → type a value)
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        if event.clickCount >= 2 {
+            beginEditing()
+            return
+        }
+        var lastY = event.locationInWindow.y
+        var keep = true
+        while keep {
+            guard let ev = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
+            switch ev.type {
+            case .leftMouseDragged:
+                let dy = ev.locationInWindow.y - lastY
+                lastY = ev.locationInWindow.y
+                let fine = ev.modifierFlags.contains(.shift)
+                let step = (maxValue - minValue) / (fine ? 400 : 120)
+                doubleValue += Double(dy) * step
+                if sendsContinuously { send() }
+            default:
+                keep = false
+            }
+        }
+        send()
     }
 
     // MARK: keyboard
@@ -574,10 +791,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
 
             // Mode-dependent controls: the preamp only applies in Mic /
-            // Instrument; the meter + gain block hides at the line levels.
-            gainSectionFields[i]?.isHidden = lineMode
-            gainSliders[i].isHidden = lineMode
-            gainFields[i].isHidden = lineMode
+            // Instrument; the meter + knob hide at the line levels.
+            gainKnobs[i].isHidden = lineMode
             meters[i].isHidden = lineMode
             autoGainButtons[i].isHidden = lineMode
             toggles48V[i].isHidden = lineMode || st.refLevel == 4
@@ -595,11 +810,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
-            gainSliders[i].isEnabled = connected && !learning && micId != nil && instId != nil && autoRunning.isEmpty
+            gainKnobs[i].isEnabled = connected && !learning && micId != nil && instId != nil && autoRunning.isEmpty
             let shown: Double
             if st.refLevel == 4 { shown = st.instGain ?? st.micGain ?? 0 }
             else { shown = st.micGain ?? st.instGain ?? 0 }
-            if gainSliders[i].doubleValue != shown { gainSliders[i].doubleValue = shown }
+            if gainKnobs[i].doubleValue != shown { gainKnobs[i].doubleValue = shown }
+            gainKnobs[i].hasValue = st.micGain != nil || st.instGain != nil
             updateGainField(i)
 
             setToggle(toggles48V[i], st.phantom,
@@ -901,8 +1117,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var inputHeaders: [NSTextField?] = []
     private var levelPopups: [NSPopUpButton] = []
     private var meters: [GGLevelMeter] = []
-    private var gainSectionFields: [NSTextField?] = []
-    private var gainSliders: [NeutralSlider] = []
+    private var gainKnobs: [GainKnob] = []
     private var gainFields: [NSTextField] = []
     private var autoGainButtons: [NSButton] = []
     private var toggles48V: [NSButton] = []
@@ -959,11 +1174,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     //   inputs:  100/200/250/300/400/500/1200/600 + i
     //   routing: 2050/2100/2200/2300/2400/2450/2600/2650 + i
     //   monitor: 700/750/800/900/1000/1100 + o
-    private let cardWidth: CGFloat = 268
+    /// Shared card width for BOTH grids (input panels + routing cards) —
+    /// the knob panel is ~300 px wide; 4 columns + 16-pt gaps must fit
+    /// the window's minimum width.
+    private let cardWidth: CGFloat = 300
 
     private func build() {
         // Window: one resizable 1200×820 workspace.
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 820))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 760))
 
         // The whole shell is ONE flat smoked-glass surface: the blur view
         // samples the desktop behind a strong system blur, the nearly
@@ -1033,11 +1251,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.isMovableByWindowBackground = true
         w.contentView = content
         w.delegate = self
-        w.minSize = NSSize(width: 900, height: 680)
+        // minimum: all four 300-pt panels + gaps + margins must fit —
+        // the pinned column widths are hard requirements, not wishes
+        w.minSize = NSSize(width: 1290, height: 620)
         window = w
-        // default size 1,200 × 820 — NSWindow sizes to the contentView's
+        // default size 1,300 × 760 — NSWindow sizes to the contentView's
         // fitting size otherwise, and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1200, height: 820))
+        w.setContentSize(NSSize(width: 1300, height: 760))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -1104,7 +1324,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Scroll view: the inputs + outputs sections scroll together; the
     /// monitor strip stays pinned below.
     private func makeScrollArea() -> NSScrollView {
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900))
+        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 900))
         // TIFA=false: the doc's edges are driven by the stack constraints
         // below, NOT by the clip view's autoresizing — leaving the default
         // over-constrains the whole tree and breaks the window's layout.
@@ -1262,7 +1482,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
-            col.spacing = 8
+            col.spacing = 14
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
@@ -1272,14 +1492,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -14),
             ])
 
-            // channel title
+            // HEADER — input name left, compact type dropdown right
             let head = NSTextField(labelWithString: "Analog In \(i + 1)")
             head.font = GGTheme.nameFont
             head.textColor = GGTheme.primary
-            col.addArrangedSubview(head)
+            head.lineBreakMode = .byTruncatingTail
             inputHeaders.append(head)
 
-            // input-type selector
             let p = NSPopUpButton()
             p.addItem(withTitle: "—")
             for (v, label) in [(1, "Mic"), (2, "+4 dBu"), (3, "−10 dBV"), (4, "Instrument")] {
@@ -1292,78 +1511,100 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             p.font = NSFont.systemFont(ofSize: 11)
             p.controlSize = .small
             square(p)
-            col.addArrangedSubview(p)
+            p.widthAnchor.constraint(equalToConstant: 132).isActive = true
             levelPopups.append(p)
 
-            // compact horizontal meter
+            let headerRow = NSStackView()
+            headerRow.orientation = .horizontal
+            headerRow.alignment = .centerY
+            headerRow.spacing = 8
+            headerRow.translatesAutoresizingMaskIntoConstraints = false
+            headerRow.addArrangedSubview(head)
+            let headerSpacer = NSView()
+            headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            headerRow.addArrangedSubview(headerSpacer)
+            headerRow.addArrangedSubview(p)
+            headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            col.addArrangedSubview(headerRow)
+
+            // thin signal meter between the header and the controls
             let meter = GGLevelMeter()
-            col.addArrangedSubview(meter)
-            meter.heightAnchor.constraint(equalToConstant: 10).isActive = true
+            meter.heightAnchor.constraint(equalToConstant: 8).isActive = true
             meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            col.addArrangedSubview(meter)
             meters.append(meter)
 
-            // gain readout (tabular numerals; click to type a value)
-            let gainLbl = NSTextField(labelWithString: "Gain")
-            gainLbl.font = GGTheme.labelFont
-            gainLbl.textColor = GGTheme.softGray
-            gainSectionFields.append(gainLbl)
-            col.addArrangedSubview(gainLbl)
+            // CONTROL ROW — knob left, Auto Gain + toggles right
+            let knob = GainKnob()
+            knob.minValue = 0
+            knob.maxValue = 75
+            knob.doubleValue = 0
+            knob.target = self
+            knob.action = #selector(gainSlid(_:))
+            knob.tag = 200 + i
+            knob.sendsContinuously = true
+            knob.widthAnchor.constraint(equalToConstant: 80).isActive = true
+            knob.heightAnchor.constraint(equalToConstant: 80).isActive = true
+            gainKnobs.append(knob)
 
-            let sl = NeutralSlider()
-            sl.minValue = 0
-            sl.maxValue = 75
-            sl.doubleValue = 0
-            sl.target = self
-            sl.action = #selector(gainSlid(_:))
-            sl.tag = 200 + i
-            sl.sendsContinuously = true
-            sl.widthAnchor.constraint(equalToConstant: cardWidth - 28).isActive = true
-            col.addArrangedSubview(sl)
-            gainSliders.append(sl)
+            // precise entry: the knob's inline editor carries the old
+            // numeric field's tag + delegate, so commit runs the same code
+            knob.valueField.tag = 250 + i
+            knob.valueField.delegate = self
+            gainFields.append(knob.valueField)
 
-            let f = NSTextField()
-            f.placeholderString = "—"
-            f.alignment = .center
-            f.font = GGTheme.valueFont
-            f.textColor = GGTheme.primary
-            // clean text — no full-width lighter rectangle behind the value;
-            // an edit background appears only while editing (focus ring)
-            f.isBordered = false
-            f.drawsBackground = false
-            f.tag = 250 + i
-            f.delegate = self
-            f.toolTip = "Preamp gain — click to type an exact value"
-            f.widthAnchor.constraint(equalToConstant: cardWidth - 28).isActive = true
-            col.addArrangedSubview(f)
-            gainFields.append(f)
+            let ag = NSButton(title: "Auto Gain", target: self,
+                              action: #selector(autoGainClicked(_:)))
+            ag.tag = 1200 + i
+            square(ag)
+            ag.controlSize = .small
+            ag.font = NSFont.systemFont(ofSize: 11)
+            ag.widthAnchor.constraint(equalToConstant: 168).isActive = true
+            ag.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            autoGainButtons.append(ag)
 
-            // quiet secondary Auto Gain button
-            let b = NSButton(title: "Auto Gain", target: self,
-                             action: #selector(autoGainClicked(_:)))
-            b.tag = 1200 + i
-            square(b)
-            b.controlSize = .small
-            b.font = NSFont.systemFont(ofSize: 11)
-            col.addArrangedSubview(b)
-            autoGainButtons.append(b)
-
-            // bottom row: 48V / SL / Ø — independent toggles. Flat
-            // neutral chips at rest; engaged = the function's flat accent
-            // fill with a near-black label (amber / green / blue).
+            // one row of three equally sized toggles — 48V / SL / Ø.
+            // Flat neutral chips at rest; engaged = the function's flat
+            // accent fill with a near-black label (red / yellow / purple).
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
-            let tv = toggle("48V", 300 + i, GGTheme.amber)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.widthAnchor.constraint(equalToConstant: 168).isActive = true
+            func chip(_ title: String, _ tag: Int, _ accent: NSColor, _ tip: String) -> FunctionToggle {
+                let t = toggle(title, tag, accent)
+                t.widthAnchor.constraint(equalToConstant: 52).isActive = true
+                t.heightAnchor.constraint(equalToConstant: 28).isActive = true
+                t.toolTip = tip
+                return t
+            }
+            let tv = chip("48V", 300 + i, GGTheme.red, "+48V phantom power")
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("SL", 400 + i, GGTheme.green)
+            let soft = chip("SL", 400 + i, GGTheme.amber, "Soft Limit")
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = toggle("Ø", 500 + i, GGTheme.accent)
-            pol.toolTip = "Invert Polarity"
+            let pol = chip("Ø", 500 + i, GGTheme.violet, "Invert polarity")
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
-            col.addArrangedSubview(row)
+
+            let right = NSStackView()
+            right.orientation = .vertical
+            right.spacing = 8
+            right.translatesAutoresizingMaskIntoConstraints = false
+            right.widthAnchor.constraint(equalToConstant: 168).isActive = true
+            right.addArrangedSubview(ag)
+            right.addArrangedSubview(row)
+
+            let controlRow = NSStackView()
+            controlRow.orientation = .horizontal
+            controlRow.alignment = .centerY
+            controlRow.spacing = 24
+            controlRow.translatesAutoresizingMaskIntoConstraints = false
+            controlRow.addArrangedSubview(knob)
+            controlRow.addArrangedSubview(right)
+            controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            col.addArrangedSubview(controlRow)
 
             // learn fallback (only when ids are missing)
             let lb = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))
@@ -1703,7 +1944,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         monFields.append(f)
         group.addArrangedSubview(sliderRow)
 
-        // Mute / DIM / SUM — flat neutral gray at rest; red / amber / blue
+        // Mute / DIM / SUM — flat neutral gray at rest; red / blue / purple
         // flat fills when engaged.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
@@ -1711,10 +1952,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let mute = toggle("Mute", 800 + o, GGTheme.red)
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("DIM", 900 + o, GGTheme.amber)
+        let dim = toggle("DIM", 900 + o, GGTheme.accent)
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("SUM", 1000 + o, GGTheme.accent)
+        let mono = toggle("SUM", 1000 + o, GGTheme.violet)
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
 
@@ -1766,16 +2007,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         updateGainField(i)
     }
 
-    /// The gain readout shows the ACTIVE mode's gain only — "32.0 dB",
-    /// never a "M x · I y" pair.
+    /// The gain editor (the knob's inline field) shows the ACTIVE
+    /// mode's gain only — "32.0", never a "M x · I y" pair. Skipped
+    /// while the user is typing (a live poll must not clobber the edit).
     private func updateGainField(_ i: Int) {
         let st = inputs[i]
         var text = "—"
         if st.refLevel == 4 {
-            if let inst = st.instGain { text = String(format: "%.1f dB", inst) }
+            if let inst = st.instGain { text = String(format: "%.1f", inst) }
         } else if let m = st.micGain {
-            text = String(format: "%.1f dB", m)
+            text = String(format: "%.1f", m)
         }
+        guard gainFields[i].currentEditor() == nil else { return }
         if gainFields[i].stringValue != text { gainFields[i].stringValue = text }
     }
 
@@ -2000,8 +2243,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard let field = obj.object as? NSTextField, !suppressActions, !isLearning else { return }
         switch field.tag {
         case 250..<254:
-            // input gain (dB) — active mode's gain only
+            // input gain (dB) — the knob's inline editor, active mode only
             let i = field.tag - 250
+            defer { gainKnobs[i].endEditing() }
             guard let db = parseDB(field.stringValue) else { return refresh() }
             let v = min(max(db, 0), 75)
             let t = PathIds.active
@@ -2245,14 +2489,12 @@ extension QuartetControlController {
 
     func shortcutInputGain(up: Bool, step: Double) {
         let i = selectedInputIndex
-        gainSliders[i].doubleValue = min(max(gainSliders[i].doubleValue + (up ? step : -step), 0), 75)
-        gainSlid(gainSliders[i])
+        gainKnobs[i].doubleValue = min(max(gainKnobs[i].doubleValue + (up ? step : -step), 0), 75)
+        gainSlid(gainKnobs[i])
     }
 
     func shortcutEditInputGain() {
-        let i = selectedInputIndex
-        window?.makeFirstResponder(gainFields[i])
-        gainFields[i].selectText(nil)
+        gainKnobs[selectedInputIndex].beginEditing()
     }
 
     func shortcutAutoGainSelected() {
