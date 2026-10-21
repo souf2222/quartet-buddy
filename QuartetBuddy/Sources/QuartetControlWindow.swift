@@ -885,9 +885,10 @@ final class GainKnob: NSControl {
             unit.draw(at: NSPoint(x: c.x - us.width / 2,
                                   y: unitCenterY - unitFont.ascender / 2))
         } else {
-            // the em dash sits on the text's own baseline — center it
-            // with the font's x-height so it reads as centered
-            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y - vs.height / 2))
+            // The em dash is a bar a little above the baseline — put the
+            // BAR (not the line box) in the middle of the disk.
+            value.draw(at: NSPoint(x: c.x - vs.width / 2,
+                                   y: c.y - valueFont.capHeight * 0.25))
         }
     }
 
