@@ -113,22 +113,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         w.contentView = content
         w.delegate = self
         w.center()
-        // One cohesive dark surface — matches Quartet Control's Obsidian
-        // theme (opaque fallback charcoal) and keeps the sidebar readable
-        // in every system appearance.
+        // Native dark surface — the standard window background, matching
+        // Quartet Control's system-material look in every appearance.
         w.appearance = NSAppearance(named: .darkAqua)
-        w.backgroundColor = GGTheme.windowFallback
+        w.backgroundColor = NSColor.windowBackgroundColor
         window = w
     }
 
-    /// Sidebar: same dark family as the content area (a shade darker, like
-    /// System Settings), light text, and a clear selected-row pill.
+    /// Sidebar: the standard under-page background (the system's sidebar
+    /// material, like System Settings), light text, and a clear
+    /// selected-row pill.
     private func makeSidebar() -> NSView {
         let sidebar = NSView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = GGTheme.windowFallback
-            .blended(withFraction: 0.30, of: .black)?.cgColor
+        sidebar.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading

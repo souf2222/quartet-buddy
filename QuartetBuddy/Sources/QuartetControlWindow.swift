@@ -16,20 +16,21 @@ import AppKit
 /// The Inputs and Outputs sections live in a scroll view; the Monitor strip
 /// is pinned to the bottom so everyday listening controls never scroll away.
 ///
-/// Visual direction: minimal + utilitarian — professional audio software,
-/// not a dashboard. One flat smoked-glass window: nearly black, strong
-/// macOS blur, only a subtle hint of the desktop behind it. Square
-/// corners everywhere — panels, buttons, dropdowns, fields, selection
-/// outlines — with thin #34373C dividers, flat surfaces only slightly
-/// different from the window, no gradients, gloss, glows or decorative
-/// shadows. Input panels are compact: a header (name + type dropdown)
-/// over one control row — an 80-pt flat rotary knob (value inside, thin
-/// green setting-arc around a 270° dark track) beside Auto Gain and a
-/// row of three equal toggles. Color means state and nothing else:
-/// blue for focus, selection, active slider tracks, DIM and the other
-/// active functions; yellow ONLY for Soft Limit; purple ONLY for
-/// polarity and SUM; red ONLY for 48V, Mute and warnings; green only in
-/// meters and the knob arc. Inactive controls are neutral gray.
+/// Visual direction: NATIVE macOS — a standard Golden Gate window, not a
+/// custom glass dashboard. Standard window frame, traffic lights, system
+/// corner radius, unified title bar (device name + connection quiet), one
+/// dark standard background material with subtle behind-window blur —
+/// and native popups, buttons, fields everywhere, keeping their system
+/// appearance. Channels are NOT floating cards: four equal columns per
+/// section, separated by thin vertical rules and spacing. The custom
+/// element is the KNOB (input gain, output trim, monitor level): flat,
+/// no body circle — a thin subdued 270° track with the opening at the
+/// bottom, a flat green value arc (the SETTING, not live signal) growing
+/// clockwise from 7:30, whole-number value centered inside with a small
+/// "dB" under it, precise entry by double-click. Color is meaning:
+/// system accent for focus/selection and the neutral functions (Ø, SUM,
+/// Include, plug-in enable); green only for Soft Limit + the arcs;
+/// amber for 48V/DIM; red for Mute + clipping. Everything else is quiet.
 ///
 /// Plumbing is unchanged from the two windows it replaces: hardware reads
 /// come from the glue tree (live 2 s poll while visible), writes go through
@@ -37,81 +38,53 @@ import AppKit
 /// routing state lives in InsertServer, and Learn mode captures missing
 /// ids by listening to the live event stream.
 
-// MARK: - Theme (minimal: flat smoked glass, square geometry, restrained color)
+// MARK: - Theme (native macOS: system colors + a few app accents)
 
 enum GGTheme {
-    // Base surfaces — flat smoked glass. The window composes to near-black
-    // charcoal; panels are only slightly different from it. No gradients,
-    // gloss, glows or decorative shadows — every surface is flat.
+    // Text — the system label hierarchy (dark appearance in effect).
 
-    /// Opaque fallback — the charcoal the glass composes to.
-    static let windowFallback = hex("101113")
-    /// Smoked-glass window tint over the strong background blur —
-    /// nearly black; just a subtle hint of whatever is behind the window.
-    static let windowTint = NSColor(srgbRed: 16 / 255, green: 17 / 255, blue: 19 / 255, alpha: 0.85)
-    /// Title bar + monitor strip — slightly darker framing bands, same glass.
-    static let headerFooterTint = NSColor(srgbRed: 16 / 255, green: 17 / 255, blue: 19 / 255, alpha: 0.55)
-    /// Panels — flat, only slightly different from the main window.
-    static let card = NSColor(srgbRed: 32 / 255, green: 34 / 255, blue: 38 / 255, alpha: 0.50)
-    /// The selected panel — a deliberate flat lift.
-    static let cardSelected = NSColor(srgbRed: 44 / 255, green: 47 / 255, blue: 52 / 255, alpha: 0.55)
-    /// Borders + dividers — subtle gray.
-    static let cardBorder = hex("34373C")
-    /// Hovered panels — a slightly brighter neutral.
-    static let cardBorderEmphasized = hex("4A4E55")
-    /// Recessed areas — plug-in wells, meter beds.
-    static let inset = NSColor(white: 0, alpha: 0.25)
+    /// Primary text — names, values, titles.
+    static let primary = NSColor.labelColor
+    /// Secondary text — labels.
+    static let softGray = NSColor.secondaryLabelColor
+    /// Muted text — supporting metadata only.
+    static let muted = NSColor.tertiaryLabelColor
 
-    // Text — quiet labels, prominent values.
+    /// The ONE interaction color — the system accent (focus, selection,
+    /// and the neutral active functions: Ø, SUM, Include, plug-in enable,
+    /// Auto Gain running).
+    static let accent = NSColor.controlAccentColor
 
-    /// Primary text — names, gain values, monitor levels (`#E6E8EB`).
-    static let primary = hex("E6E8EB")
-    /// Secondary text — labels (`#9A9FA8`).
-    static let softGray = hex("9A9FA8")
-    /// Muted text — supporting metadata only (`#7A808A`).
-    static let muted = hex("7A808A")
-    /// Red — mute + clipping warnings.
-    static let warning = hex("E3636D")
+    // Function accents — flat fills when engaged, neutral otherwise.
+
+    /// Green — Soft Limit engaged (also the knob arc + meter hue).
+    static let green = hex("46C58A")
+    /// Amber — 48V + DIM engaged.
+    static let amber = hex("E7AE49")
+    /// Red — Mute engaged + clipping warnings.
+    static let red = hex("E3636D")
+    static let warning = red
 
     /// Near-black label ON flat accent fills.
     static let darkText = hex("101318")
-    /// DISABLED function controls — dimmer than idle-but-available.
-    static let subduedFill = NSColor(white: 1, alpha: 0.03)
 
-    // Accents — color only where it means something: blue for focus /
-    // selection / active tracks / DIM / everything "else" active; yellow
-    // only for Soft Limit; purple only for polarity + SUM; red only for
-    // 48V, Mute and warnings; green only in meters and the knob arc.
+    // Knob — the app's one custom control.
 
-    /// Clear blue — focus, selection, active slider tracks, DIM, and the
-    /// remaining active functions (Include, plug-in enable, Auto Gain).
-    static let accent = hex("5294E8")
-    /// Yellow — Soft Limit engaged.
-    static let amber = hex("E7AE49")
-    /// Purple — polarity (Ø) + SUM engaged.
-    static let violet = hex("AC88FF")
-    /// Red — 48V + Mute engaged; clipping warnings.
-    static let red = hex("E3636D")
-    /// Green — healthy signal (meters) only.
-    static let green = hex("46C58A")
-
-    // Knob — the input preamp dial.
-    /// Flat, nearly black knob body.
-    static let knobBody = hex("111315")
-    /// Thin dark-gray track around the body.
-    static let knobTrack = hex("34383C")
+    /// Thin, subdued 270° track — the system separator gray.
+    static let knobTrack = NSColor.separatorColor
     /// The green value arc — the setting, not the live signal.
     static let knobArc = hex("65D98B")
 
-    /// Idle controls — the flat neutral gray every share: quiet,
-    /// clearly "clickable but off", never mistakable for an engaged function.
-    static let toggleIdleFill = hex("202226")
-    static let toggleIdleBorder = hex("34373C")
-    static let toggleIdleLabel = hex("9A9FA8")
-    /// Hover — a slightly lighter flat gray.
-    static let hoverSurface = hex("282B30")
-    /// Unfilled slider bed — flat neutral gray.
-    static let sliderTrack = hex("2A2D31")
+    // Idle custom controls — quiet, system-adjacent neutrals.
+
+    static let idleFill = NSColor(white: 1, alpha: 0.08)
+    static let idleBorder = NSColor.separatorColor
+    static let idleLabel = NSColor.secondaryLabelColor
+    static let hoverFill = NSColor(white: 1, alpha: 0.13)
+    /// DISABLED function controls — dimmer than idle-but-available.
+    static let subduedFill = NSColor(white: 1, alpha: 0.04)
+    /// Recessed areas — plug-in well, meter bed.
+    static let inset = NSColor(white: 0, alpha: 0.18)
 
     /// `#RRGGBB` → NSColor (sRGB).
     static func hex(_ h: String) -> NSColor {
@@ -124,72 +97,61 @@ enum GGTheme {
                        blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 
-    static let titleFont = NSFont.systemFont(ofSize: 17, weight: .semibold)
-    static let sectionFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
-    static let nameFont = NSFont.systemFont(ofSize: 14, weight: .medium)
+    static let titleFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    static let sectionFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    static let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
     static let labelFont = NSFont.systemFont(ofSize: 11)
-    static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .medium)
 }
 
-/// A flat panel: square corners, a 1pt hairline border, a background
-/// only slightly different from the window. No radius, gradient, glow or
-/// shadow. Hover brightens the border slightly; the SELECTED panel gets
-/// a thin square blue outline. `selected` is set by the keyboard-shortcut
-/// highlight.
+/// A borderless channel-strip container. Native direction: channels are
+/// separated by thin vertical rules and spacing — no floating cards, no
+/// heavy outlines. The SELECTED strip gets the system-accent treatment:
+/// a soft tint + a thin rounded accent outline. `selected` is set by
+/// the keyboard-shortcut highlight.
 final class CardView: NSView {
     var selected = false { didSet { restyle() } }
-    private var hovering = false
-    private var hoverArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.borderWidth = 1
+        layer?.cornerRadius = 8
         layer?.masksToBounds = true
         restyle()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func restyle() {
-        layer?.backgroundColor = (selected ? GGTheme.cardSelected : GGTheme.card).cgColor
-        layer?.borderColor = selected
-            ? GGTheme.accent.cgColor
-            : (hovering ? GGTheme.cardBorderEmphasized : GGTheme.cardBorder).cgColor
+        if selected {
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10).cgColor
+            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.65).cgColor
+            layer?.borderWidth = 1
+        } else {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+        }
     }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let a = hoverArea { removeTrackingArea(a) }
-        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
-                               owner: self, userInfo: nil)
-        hoverArea = t
-        addTrackingArea(t)
-    }
-    override func mouseEntered(with event: NSEvent) { hovering = true; restyle() }
-    override func mouseExited(with event: NSEvent) { hovering = false; restyle() }
 }
 
-/// A 1pt hairline divider (header bottom, monitor top) — the palette's
-/// standard border, exactly.
+/// A 1pt hairline divider — the system separator, exactly.
 final class Hairline: NSView {
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = GGTheme.cardBorder.cgColor
+        layer?.backgroundColor = NSColor.separatorColor.cgColor
         heightAnchor.constraint(equalToConstant: 1).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 }
 
-/// A tiny square status mark — the red "muted" dot, the blue
-/// "plug-in present" dot. Small hits of color, only where meaningful.
+/// A tiny status mark — the red "muted" dot, the accent "plug-in
+/// present" dot. Small hits of color, only where meaningful.
 final class StatusDot: NSView {
     init(color: NSColor) {
         super.init(frame: NSRect(x: 0, y: 0, width: 5, height: 5))
         wantsLayer = true
         layer?.backgroundColor = color.cgColor
-        layer?.cornerRadius = 1
+        layer?.cornerRadius = 1.5
         setContentHuggingPriority(.required, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
     }
@@ -221,148 +183,45 @@ final class GGLevelMeter: NSView {
     }
 }
 
-// MARK: - Slider (thin track, small square handle, flat blue fill)
+// MARK: - Knob (flat dial: value inside, green setting-arc around)
 
-/// A linear slider drawn from scratch (the system slider is
-/// SwiftUI-hosted on this macOS, ignores cell drawing, and its track is
-/// permanently system-blue): a thin flat neutral bed, a flat blue fill
-/// up to the knob, and a small square handle. No rounded ends, no
-/// shadows, no glow — the geometry carries it. Keyboard focus shows a
-/// thin accent ring; arrow keys adjust (⇧ for fine steps). Optional:
-/// double-click resets to unity (output trim).
-final class NeutralSlider: NSControl {
-
-    var minValue: Double = 0 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
-    var maxValue: Double = 1 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
-    var sendsContinuously = true
-    /// Double-click resets to 0 dB (unity) — output-trim sliders.
-    var doubleClickResets = false
-
-    private var _value: Double = 0
-    override var doubleValue: Double {
-        get { _value }
-        set { _value = min(max(newValue, minValue), maxValue); needsDisplay = true }
-    }
-
-    static let thumbColor = GGTheme.primary   // small, simple handle
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        focusRingType = .exterior   // thin accent outline, keyboard focus only
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: 240, height: 16) }
-    override var acceptsFirstResponder: Bool { isEnabled }
-
-    // MARK: drawing
-    override func draw(_ dirtyRect: NSRect) {
-        let enabled = isEnabled
-        let h: CGFloat = 3
-        let bar = NSRect(x: 0, y: bounds.midY - h / 2, width: bounds.width, height: h)
-        (enabled ? GGTheme.sliderTrack : NSColor(white: 1, alpha: 0.05)).setFill()
-        NSBezierPath(rect: bar).fill()
-        let knobX = bar.minX + CGFloat(fraction) * bar.width
-        let w = min(max(knobX - bar.minX, 0), bar.width)
-        if w > 1 {
-            let fill = !enabled ? GGTheme.accent.withAlphaComponent(0.35) : GGTheme.accent
-            fill.setFill()
-            NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: w, height: h)).fill()
-        }
-        let size: CGFloat = 10
-        (enabled ? Self.thumbColor : NSColor(white: 1, alpha: 0.40)).setFill()
-        NSBezierPath(roundedRect: NSRect(x: knobX - size / 2, y: bounds.midY - size / 2,
-                                         width: size, height: size),
-                     xRadius: 2, yRadius: 2).fill()
-    }
-
-    override var focusRingMaskBounds: NSRect { bounds }
-    override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
-
-    // MARK: value helpers
-    private var fraction: Double {
-        maxValue > minValue ? (doubleValue - minValue) / (maxValue - minValue) : 0
-    }
-    private func setFraction(_ f: Double) {
-        let clamped = min(max(f, 0), 1)
-        doubleValue = minValue + clamped * (maxValue - minValue)
-    }
-    @discardableResult
-    private func send() -> Bool { sendAction(action, to: target) }
-
-    // MARK: mouse tracking (double-click → unity on trim sliders)
-    override func mouseDown(with event: NSEvent) {
-        guard isEnabled else { return }
-        if doubleClickResets, event.clickCount >= 2 {
-            doubleValue = 0
-            send()
-            return
-        }
-        track(at: event)
-        if sendsContinuously { send() }
-        var keep = true
-        while keep {
-            guard let ev = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
-            track(at: ev)
-            if ev.type == .leftMouseUp { keep = false }
-            if sendsContinuously { send() }
-        }
-        send()
-    }
-    private func track(at event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        setFraction(Double(p.x / max(bounds.width, 1)))
-    }
-
-    // MARK: keyboard
-    override func keyDown(with event: NSEvent) {
-        guard isEnabled else { super.keyDown(with: event); return }
-        let fine = event.modifierFlags.contains(.shift)
-        let step = fine ? max((maxValue - minValue) / 100, 0.01) : 1.0
-        switch event.specialKey {
-        case .leftArrow, .downArrow:
-            doubleValue -= step
-            send()
-        case .rightArrow, .upArrow:
-            doubleValue += step
-            send()
-        default:
-            super.keyDown(with: event)
-        }
-    }
-}
-
-// MARK: - Gain knob (flat dial: value inside, green arc around)
-
-/// A flat rotary knob — the input preamp control. Nearly black circular
-/// body with a subtle dark-gray outline, the gain value centered inside
-/// (off-white, tabular numerals) and a smaller muted "dB" beneath it.
-/// Around the body, separated by a small consistent gap, a thin 270°
-/// dark-gray track — starting at 7:30, clockwise through the left side
-/// and the top, ending at 4:30 — with a flat green arc that grows
-/// clockwise from the lower-left as the value rises (midpoint = 12
-/// o'clock, full = the whole track). The arc shows the SETTING, not the
-/// live signal. No pointer, tick marks, shadows, gradients or glow.
+/// The app's one custom control — a flat rotary knob used for input
+/// gain, output trim and monitor level. No knob body and no pointer:
+/// just a thin, subdued 270° track (start 7:30, clockwise through the
+/// left side and the top, end 4:30 — a small consistent opening at the
+/// bottom) with a flat green arc growing clockwise from the lower-left
+/// as the value rises (midpoint = 12 o'clock, full = the whole track).
+/// The arc shows the SETTING, not the live signal. The parameter value
+/// — WHOLE numbers, tabular numerals — is centered inside with a
+/// smaller "dB" beneath it; no separate numeric box. No gradients,
+/// bevels, glow or decorative shadows. Compact (72pt) for gain + trim,
+/// larger (88pt) for monitor level.
 ///
-/// Interaction: drag vertically (up = more, ⇧ = fine), arrow keys adjust
-/// (⇧ fine), double-click to type an exact value into an inline editor
-/// (`valueField` — same tag + delegate the old numeric field used).
+/// Interaction: drag vertically (up = more, ⇧ = slower), arrow keys step
+/// ±1, double-click the number to type an exact value into an inline
+/// editor (`valueField` — the editor is the precise path; typed
+/// decimals still reach the hardware).
 final class GainKnob: NSControl {
 
-    var minValue: Double = 0 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
-    var maxValue: Double = 75 { didSet { _value = min(max(_value, minValue), maxValue); needsDisplay = true } }
+    var minValue: Double = 0 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true } }
+    var maxValue: Double = 75 { didSet { _value = (min(max(_value, minValue), maxValue)).rounded(); needsDisplay = true } }
     var sendsContinuously = true
-    /// False while no gain is known (device offline) — draws "—", no arc.
+    /// False while no value is known (device offline) — draws "—", no arc.
     var hasValue = true { didSet { needsDisplay = true } }
+    /// Optional override tint for the value text — e.g. red as the clip
+    /// warning on positive output trim.
+    var valueTint: NSColor? { didSet { needsDisplay = true } }
 
     private var _value: Double = 0
+    /// Values are WHOLE numbers — the setter rounds (display + writes).
     override var doubleValue: Double {
         get { _value }
-        set { _value = min(max(newValue, minValue), maxValue); needsDisplay = true }
+        set { _value = (min(max(newValue, minValue), maxValue)).rounded(); needsDisplay = true }
     }
 
     /// The inline precise-entry field (double-click). The controller
-    /// wires it with the old numeric field's tag + delegate.
+    /// wires it with a tag + delegate matching the numeric field each
+    /// knob replaces.
     let valueField = NSTextField()
     private var isEditing = false
 
@@ -375,24 +234,23 @@ final class GainKnob: NSControl {
         valueField.alignment = .center
         valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         valueField.textColor = GGTheme.primary
-        valueField.toolTip = "Preamp gain — double-click the knob to type an exact value"
+        valueField.toolTip = "Double-click the knob to type an exact value"
         valueField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(valueField)
         NSLayoutConstraint.activate([
             valueField.centerXAnchor.constraint(equalTo: centerXAnchor),
-            valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 5),
-            valueField.widthAnchor.constraint(equalToConstant: 64),
-            valueField.heightAnchor.constraint(equalToConstant: 22),
+            valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 4),
+            valueField.widthAnchor.constraint(equalToConstant: 56),
+            valueField.heightAnchor.constraint(equalToConstant: 20),
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 80, height: 80) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 72, height: 72) }
     override var acceptsFirstResponder: Bool { isEnabled }
 
-    // MARK: geometry
-    private static let bodyRadius: CGFloat = 30
-    private static let trackRadius: CGFloat = 37
+    // MARK: geometry — scales with bounds (compact 72, monitor 88)
+    private var trackRadius: CGFloat { bounds.width / 2 - 1.5 }
     private static let stroke: CGFloat = 3
     /// Track: start 7:30 (225°), sweep 270° clockwise to 4:30 (-45°).
     private static let startAngle: CGFloat = 225
@@ -409,10 +267,11 @@ final class GainKnob: NSControl {
         let enabled = isEnabled
         let alpha: CGFloat = enabled ? 1 : 0.45
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
+        let big = bounds.width >= 84
 
         func arc(_ sweep: CGFloat) -> NSBezierPath {
             let p = NSBezierPath()
-            p.appendArc(withCenter: c, radius: Self.trackRadius,
+            p.appendArc(withCenter: c, radius: trackRadius,
                         startAngle: Self.startAngle,
                         endAngle: Self.startAngle - sweep, clockwise: true)
             p.lineWidth = Self.stroke
@@ -431,35 +290,26 @@ final class GainKnob: NSControl {
             arc(CGFloat(f) * Self.sweepAngle).stroke()
         }
 
-        // flat body with a subtle dark-gray outline
-        let bodyRect = NSRect(x: c.x - Self.bodyRadius, y: c.y - Self.bodyRadius,
-                               width: Self.bodyRadius * 2, height: Self.bodyRadius * 2)
-        let body = NSBezierPath(ovalIn: bodyRect)
-        GGTheme.knobBody.setFill()
-        body.fill()
-        GGTheme.knobTrack.withAlphaComponent(alpha).setStroke()
-        body.lineWidth = 1
-        body.stroke()
-
         guard !isEditing else { return }
 
+        // value + dB centered in the (body-less) dial
         if hasValue {
             let value = NSAttributedString(
-                string: String(format: "%.1f", doubleValue),
-                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
-                             .foregroundColor: GGTheme.primary.withAlphaComponent(enabled ? 1 : 0.5)])
+                string: String(format: "%.0f", doubleValue),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 15 : 12.5, weight: .medium),
+                             .foregroundColor: (valueTint ?? GGTheme.primary).withAlphaComponent(enabled ? 1 : 0.5)])
             let vs = value.size()
-            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y + 5 - vs.height / 2))
+            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y + (big ? 5 : 4) - vs.height / 2))
             let unit = NSAttributedString(
                 string: "dB",
-                attributes: [.font: NSFont.systemFont(ofSize: 8),
+                attributes: [.font: NSFont.systemFont(ofSize: big ? 9 : 8),
                              .foregroundColor: GGTheme.muted.withAlphaComponent(enabled ? 1 : 0.5)])
             let us = unit.size()
-            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - 6 - us.height / 2))
+            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - (big ? 7 : 6) - us.height / 2))
         } else {
             let dash = NSAttributedString(
                 string: "—",
-                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 15 : 12.5, weight: .medium),
                              .foregroundColor: GGTheme.muted])
             let ds = dash.size()
             dash.draw(at: NSPoint(x: c.x - ds.width / 2, y: c.y - ds.height / 2))
@@ -473,7 +323,7 @@ final class GainKnob: NSControl {
     func beginEditing() {
         guard isEnabled, !isEditing, let window else { return }
         isEditing = true
-        valueField.stringValue = String(format: "%.1f", doubleValue)
+        valueField.stringValue = String(format: "%.0f", doubleValue)
         valueField.isHidden = false
         needsDisplay = true
         window.makeFirstResponder(valueField)
@@ -490,7 +340,7 @@ final class GainKnob: NSControl {
         needsDisplay = true
     }
 
-    // MARK: mouse (vertical drag; ⇧ = fine; double-click → type a value)
+    // MARK: mouse (vertical drag; ⇧ = slow; double-click → type a value)
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
         if event.clickCount >= 2 {
@@ -506,8 +356,8 @@ final class GainKnob: NSControl {
                 let dy = ev.locationInWindow.y - lastY
                 lastY = ev.locationInWindow.y
                 let fine = ev.modifierFlags.contains(.shift)
-                let step = (maxValue - minValue) / (fine ? 400 : 120)
-                doubleValue += Double(dy) * step
+                let rate = (maxValue - minValue) / (fine ? 320 : 110)
+                doubleValue += Double(dy) * rate   // setter rounds to whole
                 if sendsContinuously { send() }
             default:
                 keep = false
@@ -516,17 +366,15 @@ final class GainKnob: NSControl {
         send()
     }
 
-    // MARK: keyboard
+    // MARK: keyboard (±1 whole steps)
     override func keyDown(with event: NSEvent) {
         guard isEnabled else { super.keyDown(with: event); return }
-        let fine = event.modifierFlags.contains(.shift)
-        let step = fine ? max((maxValue - minValue) / 100, 0.01) : 1.0
         switch event.specialKey {
         case .leftArrow, .downArrow:
-            doubleValue -= step
+            doubleValue -= 1
             send()
         case .rightArrow, .upArrow:
-            doubleValue += step
+            doubleValue += 1
             send()
         default:
             super.keyDown(with: event)
@@ -606,9 +454,9 @@ class FunctionButton: NSButton {
 }
 
 /// The labeled toggle (48V / SL / Ø / Mute / DIM / SUM / Include): OFF =
-/// the shared flat neutral gray, ON = the function's flat accent fill +
-/// near-black label — the color IS the state indicator (no checkmark).
-/// Square corners, compact height, no pill shapes.
+/// the shared flat neutral treatment, ON = the function's flat accent
+/// fill + near-black label — the color IS the state indicator (no
+/// checkmark). Compact, rounded like a native small button.
 final class FunctionToggle: FunctionButton {
     let baseTitle: String
     static let font = NSFont.systemFont(ofSize: 11)
@@ -622,31 +470,29 @@ final class FunctionToggle: FunctionButton {
 
     override var intrinsicContentSize: NSSize {
         let s = NSAttributedString(string: baseTitle, attributes: [.font: Self.font]).size()
-        return NSSize(width: ceil(s.width) + 24, height: 22)
+        return NSSize(width: ceil(s.width) + 18, height: 22)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let engaged = isEngaged
         let enabled = isEnabled
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(rect: rect)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
         else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
-        else { fill = hovering ? GGTheme.hoverSurface : GGTheme.toggleIdleFill }
+        else { fill = hovering ? GGTheme.hoverFill : GGTheme.idleFill }
         fill.setFill()
         path.fill()
-        if enabled {
-            let border = engaged
-                ? (accent.blended(withFraction: 0.30, of: .black) ?? accent)
-                : (hovering ? GGTheme.cardBorderEmphasized : GGTheme.toggleIdleBorder)
+        if enabled, !engaged {
+            let border = hovering ? GGTheme.idleBorder.withAlphaComponent(0.8) : GGTheme.idleBorder
             border.setStroke()
             path.lineWidth = 1
             path.stroke()
         }
         let label = baseTitle
         let text: NSColor = !enabled ? .disabledControlTextColor
-            : engaged ? GGTheme.darkText : GGTheme.toggleIdleLabel
+            : engaged ? GGTheme.darkText : GGTheme.idleLabel
         let attr = NSAttributedString(string: label, attributes: [.font: Self.font, .foregroundColor: text])
         let s = attr.size()
         attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
@@ -654,8 +500,9 @@ final class FunctionToggle: FunctionButton {
     }
 }
 
-/// The small enable/bypass switch for plug-ins — flat neutral gray track
-/// when off, flat blue track with a small square knob when on. No pill.
+/// The small enable/bypass switch for plug-ins — a NATIVE capsule
+/// switch: neutral track when off, system-accent track with a white
+/// circular knob when on.
 final class FunctionSwitch: FunctionButton {
     override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 20) }
 
@@ -663,18 +510,15 @@ final class FunctionSwitch: FunctionButton {
         let engaged = isEngaged
         let enabled = isEnabled
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
         else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
-        else { fill = hovering ? GGTheme.hoverSurface : GGTheme.toggleIdleFill }
+        else { fill = hovering ? GGTheme.hoverFill : GGTheme.idleFill }
         fill.setFill()
         path.fill()
-        if enabled {
-            let border = engaged
-                ? (accent.blended(withFraction: 0.30, of: .black) ?? accent)
-                : (hovering ? GGTheme.cardBorderEmphasized : GGTheme.toggleIdleBorder)
-            border.setStroke()
+        if enabled, !engaged {
+            GGTheme.idleBorder.setStroke()
             path.lineWidth = 1
             path.stroke()
         }
@@ -685,8 +529,7 @@ final class FunctionSwitch: FunctionButton {
         let knob = !enabled ? NSColor(white: 1, alpha: 0.45)
             : GGTheme.primary
         knob.setFill()
-        NSBezierPath(roundedRect: NSRect(x: x, y: rect.minY + inset, width: d, height: d),
-                     xRadius: 1, yRadius: 1).fill()
+        NSBezierPath(ovalIn: NSRect(x: x, y: rect.minY + inset, width: d, height: d)).fill()
     }
 }
 
@@ -816,7 +659,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             else { shown = st.micGain ?? st.instGain ?? 0 }
             if gainKnobs[i].doubleValue != shown { gainKnobs[i].doubleValue = shown }
             gainKnobs[i].hasValue = st.micGain != nil || st.instGain != nil
-            updateGainField(i)
 
             setToggle(toggles48V[i], st.phantom,
                       enabled: connected && !learning && t.hwinPhantom[i] != nil)
@@ -887,12 +729,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             pluginDots[i].isHidden = !hasPlugin
 
             let trim = server.trim(i)
-            if trimSliders[i].doubleValue != trim { trimSliders[i].doubleValue = trim }
-            let text = String(format: "%+.1f dB", trim)
-            if trimFields[i].stringValue != text { trimFields[i].stringValue = text }
-            // off-white readout at rest (values stay readable); red only as
-            // the clipping warning when the trim is boosted above unity
-            trimFields[i].textColor = trim > 0.01 ? GGTheme.warning : GGTheme.primary
+            if trimKnobs[i].doubleValue != trim { trimKnobs[i].doubleValue = trim }
+            // red value text as the clip warning on boosted trim
+            trimKnobs[i].valueTint = trim > 0.5 ? GGTheme.red : nil
         }
 
         // MONITOR
@@ -904,11 +743,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let dimId = o == 0 ? t.hwout0Dim : t.hwout1Dim
             let sumId = o == 0 ? t.hwout0Sum : t.hwout1Sum
 
-            monSliders[o].isEnabled = connected && !learning && !gainId.isEmpty
+            monKnobs[o].isEnabled = connected && !learning && !gainId.isEmpty
             let g = min(max(st.gain ?? 0, AppDelegate.minDB), AppDelegate.maxDB)
-            if monSliders[o].doubleValue != g { monSliders[o].doubleValue = g }
-            let text = String(format: "%.1f dB", st.gain ?? 0)
-            if monFields[o].stringValue != text { monFields[o].stringValue = text }
+            if monKnobs[o].doubleValue != g { monKnobs[o].doubleValue = g }
+            monKnobs[o].hasValue = st.gain != nil
 
             setToggle(muteToggles[o], st.mute, enabled: connected && !learning && !muteId.isEmpty)
             setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
@@ -1118,7 +956,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var levelPopups: [NSPopUpButton] = []
     private var meters: [GGLevelMeter] = []
     private var gainKnobs: [GainKnob] = []
-    private var gainFields: [NSTextField] = []
     private var autoGainButtons: [NSButton] = []
     private var toggles48V: [NSButton] = []
     private var softLimitToggles: [NSButton] = []
@@ -1135,12 +972,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var openButtons: [NSButton] = []
     private var addPluginButtons: [NSButton] = []
     private var pluginDots: [StatusDot] = []
-    private var trimSliders: [NeutralSlider] = []
-    private var trimFields: [NSTextField] = []
+    private var trimKnobs: [GainKnob] = []
 
     // monitor strip (index 0 = Main Speakers, 1 = Headphones)
-    private var monSliders: [NeutralSlider] = []
-    private var monFields: [NSTextField] = []
+    private var monKnobs: [GainKnob] = []
     private var muteToggles: [NSButton] = []
     private var dimToggles: [NSButton] = []
     private var monoToggles: [NSButton] = []
@@ -1174,41 +1009,30 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     //   inputs:  100/200/250/300/400/500/1200/600 + i
     //   routing: 2050/2100/2200/2300/2400/2450/2600/2650 + i
     //   monitor: 700/750/800/900/1000/1100 + o
-    /// Shared card width for BOTH grids (input panels + routing cards) —
-    /// the knob panel is ~300 px wide; 4 columns + 16-pt gaps must fit
+    /// Shared strip width for BOTH sections (input panels + routing
+    /// strips) — the compact knob panel; 4 strips + 3 rules must fit
     /// the window's minimum width.
-    private let cardWidth: CGFloat = 300
+    private let cardWidth: CGFloat = 240
 
     private func build() {
-        // Window: one resizable 1200×820 workspace.
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 760))
+        // Window: one resizable workspace — default 1,080 × 720.
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 720))
 
-        // The whole shell is ONE flat smoked-glass surface: the blur view
-        // samples the desktop behind a strong system blur, the nearly
-        // black tint (85%) sits on top — only a subtle hint of the
-        // wallpaper reads through. Header + monitor are slightly darker
-        // bands of the same glass, framed by hairlines; panels are flat
-        // fills only slightly different from the window.
+        // NATIVE background: the standard dark window material over a
+        // subtle system blur — no manually simulated black overlay, no
+        // per-panel glass. The whole content area is ONE stable material;
+        // Liquid Glass stays with the native toolbar controls.
         let blur = NSVisualEffectView()
         blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.material = .underWindowBackground
+        blur.material = .windowBackground
         blur.blendingMode = .behindWindow
         blur.state = .active
         content.addSubview(blur, positioned: .below, relativeTo: nil)
-        let tint = NSView()
-        tint.translatesAutoresizingMaskIntoConstraints = false
-        tint.wantsLayer = true
-        tint.layer?.backgroundColor = GGTheme.windowTint.cgColor
-        content.addSubview(tint, positioned: .above, relativeTo: blur)
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: content.topAnchor),
             blur.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             blur.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            tint.topAnchor.constraint(equalTo: content.topAnchor),
-            tint.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            tint.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tint.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
         // --- assemble: three regions pinned with autolayout. The header
@@ -1225,7 +1049,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             header.topAnchor.constraint(equalTo: content.topAnchor),
             header.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 68),
+            header.heightAnchor.constraint(equalToConstant: 60),
 
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 0),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -1251,13 +1075,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.isMovableByWindowBackground = true
         w.contentView = content
         w.delegate = self
-        // minimum: all four 300-pt panels + gaps + margins must fit —
-        // the pinned column widths are hard requirements, not wishes
-        w.minSize = NSSize(width: 1290, height: 620)
+        // minimum: all four 240-pt strips + rules + margins must fit —
+        // the pinned strip widths are hard requirements, not wishes
+        w.minSize = NSSize(width: 1060, height: 560)
         window = w
-        // default size 1,300 × 760 — NSWindow sizes to the contentView's
+        // default size 1,080 × 720 — NSWindow sizes to the contentView's
         // fitting size otherwise, and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1300, height: 760))
+        w.setContentSize(NSSize(width: 1080, height: 720))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -1268,15 +1092,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
     }
 
-    /// Title bar: title + interface subtitle on the left, toolbar on the
-    /// right (settings). A subtle band of the same glass, framed by a
-    /// hairline at its bottom — it blends into the window, never a
-    /// separate strip.
+    /// Unified title bar: title + quiet device name on the left, a
+    /// native toolbar-style settings button on the right — the same
+    /// window material throughout, framed by a hairline at its bottom.
     private func makeHeader() -> NSView {
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
-        header.wantsLayer = true
-        header.layer?.backgroundColor = GGTheme.headerFooterTint.cgColor
 
         let title = NSTextField(labelWithString: "Quartet Control")
         title.font = GGTheme.titleFont
@@ -1286,14 +1107,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         let subtitle = NSTextField(labelWithString: interfaceName)
         subtitle.font = NSFont.systemFont(ofSize: 11)
-        subtitle.textColor = GGTheme.softGray
+        subtitle.textColor = GGTheme.muted
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(subtitle)
         subtitleField = subtitle
 
         let settings = NSButton(title: "⚙︎", target: self, action: #selector(settingsClicked(_:)))
-        square(settings)
-        settings.font = NSFont.systemFont(ofSize: 16)
+        settings.bezelStyle = .rounded
+        settings.font = NSFont.systemFont(ofSize: 15)
         settings.toolTip = "Settings…"
         settings.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(settings)
@@ -1303,17 +1124,17 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
-            title.topAnchor.constraint(equalTo: header.topAnchor, constant: 8),
+            title.topAnchor.constraint(equalTo: header.topAnchor, constant: 7),
             subtitle.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 76),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
-            settings.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
+            settings.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -14),
             settings.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             // REQUIRED: close the horizontal chain (title…settings) — an
             // underconstrained header breaks the whole window's layout.
             settings.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
-            // comfortably-sized settings button (30 × 28)
-            settings.widthAnchor.constraint(equalToConstant: 30),
-            settings.heightAnchor.constraint(equalToConstant: 28),
+            // comfortably-sized settings button (32 × 26)
+            settings.widthAnchor.constraint(equalToConstant: 32),
+            settings.heightAnchor.constraint(equalToConstant: 26),
             divider.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             divider.bottomAnchor.constraint(equalTo: header.bottomAnchor),
@@ -1324,7 +1145,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Scroll view: the inputs + outputs sections scroll together; the
     /// monitor strip stays pinned below.
     private func makeScrollArea() -> NSScrollView {
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 900))
+        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 900))
         // TIFA=false: the doc's edges are driven by the stack constraints
         // below, NOT by the clip view's autoresizing — leaving the default
         // over-constrains the whole tree and breaks the window's layout.
@@ -1341,8 +1162,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // All right (the batch action lives with the settings it uses).
         let autoGainAll = NSButton(title: "Auto Gain All", target: self,
                                    action: #selector(autoGainAllClicked(_:)))
-        square(autoGainAll)
-        autoGainAll.controlSize = .regular
+        autoGainAll.bezelStyle = .rounded
+        autoGainAll.controlSize = .small
         autoGainAll.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         autoGainAll.toolTip = "Calibrate every Mic/Instrument input with the Target/Duration settings above"
         let inputsHeader = sectionHeader(
@@ -1359,6 +1180,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let inputGrid = makeInputGrid()
         stack.addArrangedSubview(inputGrid)
 
+        // thin system separator between the two sections
+        let sectionRule = Hairline()
+        stack.addArrangedSubview(sectionRule)
+
         // OUTPUTS & ROUTING header: title + supporting label.
         let outHeader = NSStackView()
         outHeader.orientation = .vertical
@@ -1369,7 +1194,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         outTitle.textColor = GGTheme.primary
         let outSupport = NSTextField(labelWithString: "Choose a source, apply processing, and set output trim.")
         outSupport.font = NSFont.systemFont(ofSize: 11)
-        outSupport.textColor = GGTheme.softGray
+        outSupport.textColor = GGTheme.muted
         outHeader.addArrangedSubview(outTitle)
         outHeader.addArrangedSubview(outSupport)
         stack.addArrangedSubview(outHeader)
@@ -1393,8 +1218,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // full-width header (internal .leading alignment) so the
             // "Outputs & Routing" title sits left, aligned with "Inputs"
             outHeader.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            outGrid.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            inputGrid.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            sectionRule.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            // the channel strips HUG their fixed content (4 strips + 3
+            // rules) and center — pinning them to the stack width would
+            // over-constrain the fixed strip widths
         ])
 
         let scroll = NSScrollView()
@@ -1452,7 +1279,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             for item in p.itemArray where (item.representedObject as? Double) == v { p.select(item); break }
         }
         p.autoenablesItems = true
-        square(p)
         let pair = NSStackView(views: [l, p])
         pair.spacing = 6
         pair.alignment = .centerY
@@ -1467,32 +1293,38 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: input cards
 
+    /// One horizontal strip of four equal channel panels separated by
+    /// thin vertical rules — native direction: no floating cards, no
+    /// heavy outlines, just spacing + rules. Each panel: header (name +
+    /// type dropdown) over a thin meter, then the compact gain knob with
+    /// Auto Gain + the 48V/SL/Ø chips beside it.
     private func makeInputGrid() -> NSView {
-        let grid = NSGridView()
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        // One shared 4-column grid for BOTH sections — same card width, same
-        // 16-pt gaps, so the output cards line up under the input cards.
-        grid.columnSpacing = 16
-        grid.rowSpacing = 12
+        let strip = NSStackView()
+        strip.orientation = .horizontal
+        strip.spacing = 8
+        strip.translatesAutoresizingMaskIntoConstraints = false
 
         for i in 0..<4 {
+            if i > 0 { addRule(to: strip) }
+
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
+            card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
             inputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
             col.alignment = .leading
-            col.spacing = 14
+            col.spacing = 10
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
-                col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-                col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -14),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+                col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
             ])
 
-            // HEADER — input name left, compact type dropdown right
+            // HEADER — input name left, compact native dropdown right
             let head = NSTextField(labelWithString: "Analog In \(i + 1)")
             head.font = GGTheme.nameFont
             head.textColor = GGTheme.primary
@@ -1510,14 +1342,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             p.tag = 100 + i
             p.font = NSFont.systemFont(ofSize: 11)
             p.controlSize = .small
-            square(p)
-            p.widthAnchor.constraint(equalToConstant: 132).isActive = true
+            p.widthAnchor.constraint(equalToConstant: 108).isActive = true
             levelPopups.append(p)
 
             let headerRow = NSStackView()
             headerRow.orientation = .horizontal
             headerRow.alignment = .centerY
-            headerRow.spacing = 8
+            headerRow.spacing = 6
             headerRow.translatesAutoresizingMaskIntoConstraints = false
             headerRow.addArrangedSubview(head)
             let headerSpacer = NSView()
@@ -1532,12 +1363,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             // thin signal meter between the header and the controls
             let meter = GGLevelMeter()
-            meter.heightAnchor.constraint(equalToConstant: 8).isActive = true
+            meter.heightAnchor.constraint(equalToConstant: 7).isActive = true
             col.addArrangedSubview(meter)
             meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             meters.append(meter)
 
-            // CONTROL ROW — knob left, Auto Gain + toggles right
+            // CONTROL ROW — compact knob left, Auto Gain + chips right
             let knob = GainKnob()
             knob.minValue = 0
             knob.maxValue = 75
@@ -1546,100 +1377,110 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             knob.action = #selector(gainSlid(_:))
             knob.tag = 200 + i
             knob.sendsContinuously = true
-            knob.widthAnchor.constraint(equalToConstant: 80).isActive = true
-            knob.heightAnchor.constraint(equalToConstant: 80).isActive = true
+            knob.widthAnchor.constraint(equalToConstant: 72).isActive = true
+            knob.heightAnchor.constraint(equalToConstant: 72).isActive = true
             gainKnobs.append(knob)
 
-            // precise entry: the knob's inline editor carries the old
-            // numeric field's tag + delegate, so commit runs the same code
+            // precise entry: the knob's inline editor carries the numeric
+            // tag + delegate, so commit runs the same write path
             knob.valueField.tag = 250 + i
             knob.valueField.delegate = self
-            gainFields.append(knob.valueField)
 
             let ag = NSButton(title: "Auto Gain", target: self,
                               action: #selector(autoGainClicked(_:)))
             ag.tag = 1200 + i
-            square(ag)
+            ag.bezelStyle = .recessed
             ag.controlSize = .small
             ag.font = NSFont.systemFont(ofSize: 11)
-            ag.widthAnchor.constraint(equalToConstant: 168).isActive = true
-            ag.heightAnchor.constraint(equalToConstant: 28).isActive = true
             autoGainButtons.append(ag)
 
-            // one row of three equally sized toggles — 48V / SL / Ø.
-            // Flat neutral chips at rest; engaged = the function's flat
-            // accent fill with a near-black label (red / yellow / purple).
+            // one compact row of toggles — 48V / SL / Ø (amber / green /
+            // system accent when engaged; small intrinsic chips).
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
             row.translatesAutoresizingMaskIntoConstraints = false
-            row.widthAnchor.constraint(equalToConstant: 168).isActive = true
-            func chip(_ title: String, _ tag: Int, _ accent: NSColor, _ tip: String) -> FunctionToggle {
-                let t = toggle(title, tag, accent)
-                t.widthAnchor.constraint(equalToConstant: 52).isActive = true
-                t.heightAnchor.constraint(equalToConstant: 28).isActive = true
-                t.toolTip = tip
-                return t
-            }
-            let tv = chip("48V", 300 + i, GGTheme.red, "+48V phantom power")
+            let tv = toggle("48V", 300 + i, GGTheme.amber)
+            tv.toolTip = "+48V phantom power"
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = chip("SL", 400 + i, GGTheme.amber, "Soft Limit")
+            let soft = toggle("SL", 400 + i, GGTheme.green)
+            soft.toolTip = "Soft Limit"
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = chip("Ø", 500 + i, GGTheme.violet, "Invert polarity")
+            let pol = toggle("Ø", 500 + i, GGTheme.accent)
+            pol.toolTip = "Invert polarity"
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
 
             let right = NSStackView()
             right.orientation = .vertical
-            right.spacing = 8
+            right.alignment = .leading
+            right.spacing = 6
             right.translatesAutoresizingMaskIntoConstraints = false
-            right.widthAnchor.constraint(equalToConstant: 168).isActive = true
             right.addArrangedSubview(ag)
+            ag.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
             right.addArrangedSubview(row)
 
             let controlRow = NSStackView()
             controlRow.orientation = .horizontal
             controlRow.alignment = .centerY
-            controlRow.spacing = 24
+            controlRow.spacing = 14
             controlRow.translatesAutoresizingMaskIntoConstraints = false
             controlRow.addArrangedSubview(knob)
             controlRow.addArrangedSubview(right)
-            // join the hierarchy BEFORE constraining against col (see
-            // headerRow above — cross-view constraints need a common
-            // ancestor at activation time)
+            // join the hierarchy BEFORE cross-view constraints (common
+            // ancestor required at activation time)
             col.addArrangedSubview(controlRow)
             controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            right.widthAnchor.constraint(equalTo: controlRow.widthAnchor,
+                                         constant: -(72 + 14)).isActive = true
 
             // learn fallback (only when ids are missing)
             let lb = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))
             lb.tag = 600 + i
-            square(lb)
+            lb.bezelStyle = .recessed
             lb.controlSize = .small
             lb.font = NSFont.systemFont(ofSize: 10)
             col.addArrangedSubview(lb)
             inputLearnButtons.append(lb)
 
-            grid.addColumn(with: [card])
+            strip.addArrangedSubview(card)
         }
-        pinColumns(grid)
-        return grid
+        return strip
+    }
+
+    /// A thin full-height vertical rule between channel panels. Added to
+    /// the strip BEFORE its edge constraints activate (common-ancestor
+    /// rule).
+    private func addRule(to strip: NSStackView) {
+        let rule = NSView()
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        strip.addArrangedSubview(rule)
+        rule.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        rule.topAnchor.constraint(equalTo: strip.topAnchor).isActive = true
+        rule.bottomAnchor.constraint(equalTo: strip.bottomAnchor).isActive = true
     }
 
     // MARK: routing cards
 
+    /// Four aligned output strips separated by the same thin vertical
+    /// rules as the inputs — one shared visual grid. Per strip: name,
+    /// source, processing slot, and the compact output-trim KNOB.
     private func makeRoutingGrid() -> NSView {
-        let grid = NSGridView()
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        // SAME grid geometry as the inputs (16-pt gaps, cardWidth columns)
-        // so the two sections share one visual grid.
-        grid.columnSpacing = 16
-        grid.rowSpacing = 12
+        let strip = NSStackView()
+        strip.orientation = .horizontal
+        strip.spacing = 8
+        strip.translatesAutoresizingMaskIntoConstraints = false
 
         for i in 0..<4 {
+            if i > 0 { addRule(to: strip) }
+
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
+            card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
             outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
@@ -1648,10 +1489,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(col)
             NSLayoutConstraint.activate([
-                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
-                col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-                col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -14),
+                col.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+                col.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+                col.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+                col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
             ])
 
             // editable destination name, styled as a clean heading
@@ -1686,16 +1527,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             sp.tag = 2100 + i
             sp.font = NSFont.systemFont(ofSize: 11)
             sp.controlSize = .small
-            sp.widthAnchor.constraint(equalToConstant: cardWidth - 28).isActive = true
-            square(sp)
             col.addArrangedSubview(sp)
+            sp.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             sourcePopups.append(sp)
 
-            // "Include" — the linked/mirrored-routing chip: flat blue when
-            // engaged (the mirrored pair inherits the source's processing).
-            // Inside a CONSTANT-HEIGHT row: it hides for direct sources
-            // but the row keeps its height, so Processing and Output Trim
-            // stay aligned across all four cards.
+            // "Include" — the linked/mirrored-routing chip: system accent
+            // when engaged. Inside a CONSTANT-HEIGHT row: it hides for
+            // direct sources but the row keeps its height, so Processing
+            // and Trim stay aligned across all four strips.
             let inc = FunctionToggle(title: "Include", tag: 2200 + i,
                                      accent: GGTheme.accent,
                                      target: self, action: #selector(includeChanged(_:)))
@@ -1723,7 +1562,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             plugRow.alignment = .centerY
             plugRow.translatesAutoresizingMaskIntoConstraints = false
 
-            // small blue presence mark for an inserted plug-in
+            // small accent presence mark for an inserted plug-in
             let dot = StatusDot(color: GGTheme.accent)
             dot.isHidden = true
             plugRow.addArrangedSubview(dot)
@@ -1742,14 +1581,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             pp.font = NSFont.systemFont(ofSize: 11)
             pp.controlSize = .small
             pp.toolTip = "Add / replace / remove the plug-in"
-            square(pp)
             plugRow.addArrangedSubview(pp)
             pluginPopups.append(pp)
 
             let open = NSButton(title: "Open", target: self,
                                 action: #selector(rowEditorOpened(_:)))
             open.tag = 2450 + i
-            square(open)
+            open.bezelStyle = .recessed
             open.controlSize = .small
             open.font = NSFont.systemFont(ofSize: 11)
             plugRow.addArrangedSubview(open)
@@ -1761,40 +1599,47 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let add = NSButton(title: "Add Plug-in…", target: self,
                                action: #selector(addPluginClicked(_:)))
             add.tag = 2500 + i
-            square(add)
+            add.bezelStyle = .recessed
             add.controlSize = .small
             add.font = NSFont.systemFont(ofSize: 11)
             plugRow.addArrangedSubview(add)
             addPluginButtons.append(add)
 
-            // the processing well: a flat recessed slot, darker than its
-            // panel and square, like a cut-out; an inserted plug-in reads
-            // as the picker + Open row with the small blue indicator
+            // the processing well: a subtle recessed slot; an inserted
+            // plug-in reads as the picker + Open row with the accent dot
             let slot = NSView()
             slot.translatesAutoresizingMaskIntoConstraints = false
             slot.wantsLayer = true
             slot.layer?.backgroundColor = GGTheme.inset.cgColor
+            slot.layer?.cornerRadius = 6
             slot.addSubview(plugRow)
+            // join the hierarchy BEFORE the slot↔col width constraint —
+            // cross-view constraints need a common ancestor (see headerRow)
+            col.addArrangedSubview(slot)
             NSLayoutConstraint.activate([
                 plugRow.topAnchor.constraint(equalTo: slot.topAnchor, constant: 6),
                 plugRow.leadingAnchor.constraint(equalTo: slot.leadingAnchor, constant: 8),
                 plugRow.trailingAnchor.constraint(equalTo: slot.trailingAnchor, constant: -8),
                 plugRow.bottomAnchor.constraint(equalTo: slot.bottomAnchor, constant: -6),
-                slot.widthAnchor.constraint(equalToConstant: cardWidth - 28),
-                // fixed slot height: identical cards whether a plug-in
+                slot.widthAnchor.constraint(equalTo: col.widthAnchor),
+                // fixed slot height: identical strips whether a plug-in
                 // exists or the slot shows the neutral Add control
                 slot.heightAnchor.constraint(equalToConstant: 32),
             ])
-            col.addArrangedSubview(slot)
 
-            // Output trim: slider above an editable numeric value,
-            // visually secondary to the monitor strip below.
-            let trimLbl = NSTextField(labelWithString: "Output Trim")
+            // Output trim: the compact knob — value inside, green arc
+            // around; the red tint warns when the trim is boosted.
+            let trimRow = NSStackView()
+            trimRow.orientation = .horizontal
+            trimRow.spacing = 10
+            trimRow.alignment = .centerY
+            trimRow.translatesAutoresizingMaskIntoConstraints = false
+            let trimLbl = NSTextField(labelWithString: "Trim")
             trimLbl.font = GGTheme.labelFont
             trimLbl.textColor = GGTheme.softGray
-            col.addArrangedSubview(trimLbl)
+            trimRow.addArrangedSubview(trimLbl)
 
-            let tsl = NeutralSlider()
+            let tsl = GainKnob()
             tsl.minValue = -64
             tsl.maxValue = 6
             tsl.doubleValue = 0
@@ -1802,54 +1647,34 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tsl.action = #selector(trimSlid(_:))
             tsl.tag = 2600 + i
             tsl.sendsContinuously = true
-            tsl.doubleClickResets = true   // double-click the knob → 0 dB
-            tsl.widthAnchor.constraint(equalToConstant: cardWidth - 28).isActive = true
-            col.addArrangedSubview(tsl)
-            trimSliders.append(tsl)
+            tsl.widthAnchor.constraint(equalToConstant: 72).isActive = true
+            tsl.heightAnchor.constraint(equalToConstant: 72).isActive = true
+            trimKnobs.append(tsl)
 
-            let tf = NSTextField()
-            tf.placeholderString = "+0.0 dB"
-            tf.alignment = .center
-            tf.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-            tf.textColor = GGTheme.softGray
-            tf.isBordered = false
-            tf.drawsBackground = false
-            tf.tag = 2650 + i
-            tf.delegate = self
-            tf.widthAnchor.constraint(equalToConstant: cardWidth - 28).isActive = true
-            col.addArrangedSubview(tf)
-            trimFields.append(tf)
+            // precise entry — the old trim field's tag + delegate
+            tsl.valueField.tag = 2650 + i
+            tsl.valueField.delegate = self
 
-            grid.addColumn(with: [card])
+            trimRow.addArrangedSubview(tsl)
+            col.addArrangedSubview(trimRow)
+            trimRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+
+            strip.addArrangedSubview(card)
         }
-        pinColumns(grid)
-        return grid
-    }
-
-    /// Pin every cell's contentView to the fixed card width — sliders and
-    /// text fields have no intrinsic width and collapse to zero otherwise.
-    private func pinColumns(_ grid: NSGridView) {
-        for c in 0..<grid.numberOfColumns {
-            for r in 0..<grid.numberOfRows {
-                if let cellView = grid.cell(atColumnIndex: c, rowIndex: r).contentView {
-                    cellView.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
-                }
-            }
-        }
+        return strip
     }
 
     // MARK: monitor strip
 
-    /// The persistent bottom strip: Main Speakers + Headphones, side by
-    /// side. A slightly darker band of the same glass material, framed by
-    /// a thin top hairline — not a contrast panel. Both groups stay
-    /// visually balanced; when headphones are muted only the Mute button
-    /// goes red (plus the badge + dot), never the whole section.
+    /// The persistent bottom section: Main Speakers + Headphones side by
+    /// side, same window material, framed by a thin top hairline — not a
+    /// contrast panel. Each group: heading over a LARGER level knob with
+    /// the Mute / DIM / SUM chips beside it. Both groups stay visually
+    /// balanced; when headphones are muted only the Mute chip goes red
+    /// (plus the badge + dot), never the whole section.
     private func makeMonitorStrip() -> NSView {
         let strip = NSView()
         strip.translatesAutoresizingMaskIntoConstraints = false
-        strip.wantsLayer = true
-        strip.layer?.backgroundColor = GGTheme.headerFooterTint.cgColor
 
         // thin top hairline (subtle border against the routing area)
         let topDivider = Hairline()
@@ -1863,14 +1688,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         let row = NSStackView()
         row.orientation = .horizontal
-        row.spacing = 16
+        row.spacing = 24
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.distribution = .fillEqually
         row.addArrangedSubview(makeMonitorGroup(0))
-        // subtle vertical divider between the two monitor groups
+        // thin vertical rule between the two monitor groups
         let vDivider = NSView()
         vDivider.wantsLayer = true
-        vDivider.layer?.backgroundColor = GGTheme.cardBorder.cgColor
+        vDivider.layer?.backgroundColor = NSColor.separatorColor.cgColor
         vDivider.widthAnchor.constraint(equalToConstant: 1).isActive = true
         row.addArrangedSubview(vDivider)
         row.addArrangedSubview(makeMonitorGroup(1))
@@ -1882,10 +1706,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             topDivider.trailingAnchor.constraint(equalTo: strip.trailingAnchor),
             title.topAnchor.constraint(equalTo: strip.topAnchor, constant: 8),
             title.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 20),
-            row.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 6),
+            row.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
             row.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 20),
-            row.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -20),
-            row.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: -12),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: strip.trailingAnchor, constant: -20),
+            row.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: -14),
         ])
         return strip
     }
@@ -1913,68 +1737,63 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         headRow.alignment = .centerY
         group.addArrangedSubview(headRow)
 
-        let sub = NSTextField(labelWithString: "Monitor Level")
-        sub.font = GGTheme.labelFont
-        sub.textColor = GGTheme.softGray
-        group.addArrangedSubview(sub)
+        // larger level knob (value inside) + Mute/DIM/SUM chips beside it
+        let body = NSStackView()
+        body.orientation = .horizontal
+        body.spacing = 16
+        body.alignment = .centerY
+        body.translatesAutoresizingMaskIntoConstraints = false
 
-        // wide volume slider + numeric readout
-        let sliderRow = NSStackView()
-        sliderRow.orientation = .horizontal
-        sliderRow.spacing = 10
-        sliderRow.alignment = .centerY
-        let sl = NeutralSlider()
-        sl.minValue = -64
-        sl.maxValue = 0
+        let sl = GainKnob()
+        sl.minValue = AppDelegate.minDB
+        sl.maxValue = AppDelegate.maxDB
         sl.doubleValue = 0
         sl.target = self
         sl.action = #selector(monSlid(_:))
         sl.tag = 700 + o
         sl.sendsContinuously = true
-        sl.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
-        sliderRow.addArrangedSubview(sl)
-        monSliders.append(sl)
+        sl.widthAnchor.constraint(equalToConstant: 88).isActive = true
+        sl.heightAnchor.constraint(equalToConstant: 88).isActive = true
+        body.addArrangedSubview(sl)
+        monKnobs.append(sl)
 
-        let f = NSTextField()
-        f.placeholderString = "—"
-        f.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        f.textColor = GGTheme.primary
-        f.isBordered = false
-        f.drawsBackground = false
-        f.alignment = .center
-        f.tag = 750 + o
-        f.delegate = self
-        f.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        f.toolTip = "Monitor level — click to type an exact value"
-        sliderRow.addArrangedSubview(f)
-        monFields.append(f)
-        group.addArrangedSubview(sliderRow)
+        // precise entry — the old level field's tag + delegate
+        sl.valueField.tag = 750 + o
+        sl.valueField.delegate = self
 
-        // Mute / DIM / SUM — flat neutral gray at rest; red / blue / purple
-        // flat fills when engaged.
+        let right = NSStackView()
+        right.orientation = .vertical
+        right.spacing = 6
+        right.translatesAutoresizingMaskIntoConstraints = false
+        body.addArrangedSubview(right)
+
+        // Mute / DIM / SUM — neutral at rest; red / amber / system
+        // accent flat fills when engaged.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
         btnRow.spacing = 6
+        btnRow.translatesAutoresizingMaskIntoConstraints = false
         let mute = toggle("Mute", 800 + o, GGTheme.red)
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("DIM", 900 + o, GGTheme.accent)
+        let dim = toggle("DIM", 900 + o, GGTheme.amber)
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("SUM", 1000 + o, GGTheme.violet)
+        let mono = toggle("SUM", 1000 + o, GGTheme.accent)
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
+        right.addArrangedSubview(btnRow)
 
         let learn = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))
         learn.tag = 1100 + o
-        square(learn)
+        learn.bezelStyle = .recessed
         learn.controlSize = .small
         learn.font = NSFont.systemFont(ofSize: 10)
         learn.isHidden = true
-        btnRow.addArrangedSubview(learn)
+        right.addArrangedSubview(learn)
         monLearnButtons.append(learn)
-        group.addArrangedSubview(btnRow)
 
+        group.addArrangedSubview(body)
         return group
     }
 
@@ -2010,22 +1829,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             onWriteDouble?(id, v)
             inputs[i].micGain = v
         }
-        updateGainField(i)
-    }
-
-    /// The gain editor (the knob's inline field) shows the ACTIVE
-    /// mode's gain only — "32.0", never a "M x · I y" pair. Skipped
-    /// while the user is typing (a live poll must not clobber the edit).
-    private func updateGainField(_ i: Int) {
-        let st = inputs[i]
-        var text = "—"
-        if st.refLevel == 4 {
-            if let inst = st.instGain { text = String(format: "%.1f", inst) }
-        } else if let m = st.micGain {
-            text = String(format: "%.1f", m)
-        }
-        guard gainFields[i].currentEditor() == nil else { return }
-        if gainFields[i].stringValue != text { gainFields[i].stringValue = text }
     }
 
     // Auto Gain
@@ -2179,17 +1982,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         pluginPopups[i].performClick(nil)
     }
 
-    /// Output-trim slider (tag = 2600 + pair). Soft-snaps to unity.
+    /// Output-trim knob (tag = 2600 + pair) — whole-number steps.
     @objc private func trimSlid(_ sender: NSControl) {
         let i = sender.tag - 2600
-        var v = sender.doubleValue
-        if abs(v) < 0.5 { v = 0 }
+        let v = sender.doubleValue   // already whole (knob rounds)
         InsertServer.shared.setTrim(i, v, notify: false)
-        suppressActions = true
-        let text = String(format: "%+.1f dB", min(6.0, max(-64.0, v)))
-        trimFields[i].stringValue = text
-        trimFields[i].textColor = v > 0.01 ? GGTheme.warning : GGTheme.primary
-        suppressActions = false
+        // red value text as the clip warning on boosted trim
+        trimKnobs[i].valueTint = v > 0.5 ? GGTheme.red : nil
     }
 
     // Monitor actions
@@ -2203,7 +2002,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !id.isEmpty else { return }
         monitors[o].gain = v
         onWriteDouble?(id, v)
-        monFields[o].stringValue = String(format: "%.1f dB", v)
     }
 
     /// Mute / Dim / Mono for Main Speakers + Headphones.
@@ -2266,8 +2064,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
             refresh()
         case 750..<752:
-            // monitor level (dB)
+            // monitor level (dB) — the monitor knob's inline editor
             let o = field.tag - 750
+            defer { monKnobs[o].endEditing() }
             guard let db = parseDB(field.stringValue), AppDelegate.isValidDB(db) else { return refresh() }
             let id = o == 0 ? PathIds.active.hwout0Gain : PathIds.active.hwout1Gain
             guard !id.isEmpty else { return refresh() }
@@ -2287,8 +2086,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             QBLog.log("control: output \(i) named '\(name)'")
             refresh()
         case 2650..<2654:
-            // output trim (dB)
+            // output trim (dB) — the trim knob's inline editor
             let i = field.tag - 2650
+            defer { trimKnobs[i].endEditing() }
             if let db = parseDB(field.stringValue) {
                 InsertServer.shared.setTrim(i, db)
             }
@@ -2323,17 +2123,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                                           : #selector(inputToggleChanged(_:)))
     }
 
-    /// Square, flat system bezel — the geometry for every button in the
-    /// window (native rendering, no custom drawing, no rounded corners).
-    private func square(_ b: NSButton) {
-        b.bezelStyle = .shadowlessSquare
-    }
 
-    /// Same for dropdowns: square-edged popups instead of the rounded
-    /// default bezel.
-    private func square(_ p: NSPopUpButton) {
-        (p.cell as? NSButtonCell)?.bezelStyle = .shadowlessSquare
-    }
 
     /// Apply the live state to a function toggle (colors/shapes are the
     /// control's own).
@@ -2461,14 +2251,12 @@ extension QuartetControlController {
 
     func shortcutOutputTrim(up: Bool, step: Double) {
         let i = selectedOutputIndex
-        trimSliders[i].doubleValue = min(max(trimSliders[i].doubleValue + (up ? step : -step), -64), 6)
-        trimSlid(trimSliders[i])
+        trimKnobs[i].doubleValue = min(max(trimKnobs[i].doubleValue + (up ? step : -step), -64), 6)
+        trimSlid(trimKnobs[i])
     }
 
     func shortcutEditOutputTrim() {
-        let i = selectedOutputIndex
-        window?.makeFirstResponder(trimFields[i])
-        trimFields[i].selectText(nil)
+        trimKnobs[selectedOutputIndex].beginEditing()
     }
 
     func shortcutOpenSourceSelector() {
