@@ -56,6 +56,7 @@ swiftc -O \
     "$SRC/DefaultDeviceMonitor.swift" \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
+    "$SRC/Shortcuts.swift" \
     "$SRC/MidiWatcher.swift" \
     "$SRC/QBLog.swift" \
     "$SRC/AutoGain.swift" \

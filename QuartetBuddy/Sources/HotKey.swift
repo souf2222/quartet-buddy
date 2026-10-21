@@ -43,11 +43,21 @@ final class HotKeyManager {
     }
 
     var onHotKey: (() -> Void)?
+    /// Fires on key RELEASE — only used by hold actions (talkback). The
+    /// system hotkey API only reports key-down, so the release is watched
+    /// by polling the physical key state (see watchRelease) plus a safety
+    /// auto-release in case the event is lost.
+    var onHotKeyUp: (() -> Void)?
+    /// True while the physical key for the registered combo is down.
+    private(set) var keyIsDown = false
 
     private let signature: OSType
     private let hotKeyId: UInt32
     private var ref: EventHotKeyRef?
     private var combo: Combo?
+    private var releaseTimer: Timer?
+    /// Safety cap for a stuck release watch (seconds).
+    private static let maxHold: TimeInterval = 30
     private static var handlerInstalled = false
     private static var eventHandler: EventHandlerRef?
 
@@ -76,6 +86,41 @@ final class HotKeyManager {
             self.ref = nil
         }
         combo = nil
+        stopReleaseWatch(release: false)
+    }
+
+    /// Poll the physical key state until the key is released, then fire
+    /// onHotKeyUp. A safety deadline force-releases a stuck watch.
+    private func watchRelease() {
+        guard onHotKeyUp != nil, let combo else { return }
+        keyIsDown = true
+        let started = Date()
+        releaseTimer?.invalidate()
+        releaseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(combo.keyCode))
+            if !down || Date().timeIntervalSince(started) >= Self.maxHold {
+                t.invalidate()
+                self.keyIsDown = false
+                self.onHotKeyUp?()
+            }
+        }
+    }
+
+    private func stopReleaseWatch(release: Bool) {
+        releaseTimer?.invalidate()
+        releaseTimer = nil
+        if release, keyIsDown {
+            keyIsDown = false
+            onHotKeyUp?()
+        }
+    }
+
+    /// Key-down entry point (registry dispatch): fire the action, then
+    /// arm the release watch for hold actions.
+    func fireKeyDown() {
+        onHotKey?()
+        if onHotKeyUp != nil { watchRelease() }
     }
 
     var current: Combo? { combo }
@@ -118,7 +163,7 @@ enum HotKeyRegistry {
     }
 
     static func dispatch(sig: OSType, id: UInt32) {
-        map["\(sig):\(id)"]?.mgr?.onHotKey?()
+        map["\(sig):\(id)"]?.mgr?.fireKeyDown()
     }
 }
 
