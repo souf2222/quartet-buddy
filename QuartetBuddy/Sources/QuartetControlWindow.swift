@@ -689,7 +689,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             inputLearnButtons[i].isEnabled = (learning && learningColumn == .input(i)) || !missing.isEmpty
         }
 
-        // OUTPUTS & ROUTING (InsertServer state)
+        // OUTPUTS & ROUTING (InsertServer state). The controls are NEVER
+        // disabled by the engine's state — a routing edit is intent, and
+        // the action handlers auto-start the insert if it's off. Only the
+        // plug-in-specific controls depend on a plug-in being loaded.
         let server = InsertServer.shared
         let live = server.running
         for i in 0..<4 {
@@ -704,7 +707,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 srcPopup.lastItem?.representedObject = src.rawValue
             }
             srcPopup.selectItem(at: srcPopup.indexOfItem(withObjectValue: server.source(i).rawValue).getOrElse { 0 })
-            srcPopup.isEnabled = live
 
             // "Include source processing" — mirrored sources only.
             let mirrored = server.source(i).copyIndex != nil && server.source(i) != .off
@@ -712,7 +714,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             include.isHidden = !mirrored
             if mirrored {
                 include.state = server.mirrorPre(i) ? .off : .on
-                include.isEnabled = live
             }
 
             let plugPopup = pluginPopups[i]
@@ -727,21 +728,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
             let key = UserDefaults.standard.string(forKey: "insertPair.\(i).plugin") ?? ""
             plugPopup.selectItem(at: plugPopup.indexOfItem(withObjectValue: key).getOrElse { 0 })
-            plugPopup.isEnabled = live
 
-            // Processing slot: WITH a plug-in → enable switch + picker + Open.
-            // WITHOUT → one neutral "Add Plug-in…" control; the switch, picker
-            // and Open hide (never disabled/dead), and the fixed slot height
-            // keeps every card's layout identical.
+            // Processing slot: WITH a plug-in → power button + picker +
+            // Open. WITHOUT → one neutral "Add Plug-in…" control; the
+            // power button, picker and Open hide (never disabled/dead),
+            // and the fixed row heights keep every strip's layout
+            // identical.
             let hasPlugin = server.pluginName(i) != nil
             enabledChecks[i].state = (server.enabled(i) && !server.bypassAll) ? .on : .off
-            enabledChecks[i].isEnabled = live && hasPlugin
+            enabledChecks[i].isEnabled = hasPlugin
             enabledChecks[i].isHidden = !hasPlugin
             plugPopup.isHidden = !hasPlugin
-            openButtons[i].isEnabled = live && hasPlugin
+            openButtons[i].isEnabled = hasPlugin
             openButtons[i].isHidden = !hasPlugin
             addPluginButtons[i].isHidden = hasPlugin
-            addPluginButtons[i].isEnabled = live
 
             let trim = server.trim(i)
             if trimKnobs[i].doubleValue != trim { trimKnobs[i].doubleValue = trim }
@@ -778,9 +778,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
 
         updateCardHighlights()
+        // Status line: learn instructions first, then Auto Gain, then the
+        // insert hint (routing edits auto-start it — say so while it's off),
+        // then the connection state.
         statusField.stringValue = learnStatus()
             ?? autoGainStatus
-            ?? (connected ? "" : "Not connected — waiting for Apogee Control 2 / ApogeeGlue…")
+            ?? (connected
+                ? (live ? "" : "Plug-in insert is off — loading a plug-in or changing a source turns it on")
+                : "Not connected — waiting for Apogee Control 2 / ApogeeGlue…")
         // NOTE: no geometry work here — resizing during a refresh cancels
         // slider drags mid-flight. The window's size is the user's.
     }
@@ -1023,15 +1028,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     //   inputs:  100/200/250/300/400/500/1200/600 + i
     //   routing: 2050/2100/2200/2300/2400/2450/2600/2650 + i
     //   monitor: 700/750/800/900/1000/1100 + o
-    /// Input strip width — the compact knob panel.
+    /// ONE strip width for BOTH sections — input and output boxes are
+    /// the same size; all four strips + rules must fit the window width.
     private let cardWidth: CGFloat = 240
-    /// Output strip width — wider for the processing column; all four
-    /// strips + rules must fit the window's minimum width.
-    private let outCardWidth: CGFloat = 300
 
     private func build() {
-        // Window: one resizable workspace — default 1,300 × 620.
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 620))
+        // Window: one resizable workspace — default 1,060 × 620 (the
+        // MINIMAL width that fits all four strips + rules + margins).
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 620))
 
         // NATIVE background: the standard dark window material over a
         // subtle system blur — no manually simulated black overlay, no
@@ -1090,13 +1094,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.isMovableByWindowBackground = true
         w.contentView = content
         w.delegate = self
-        // minimum: all four 300-pt output strips + rules + margins must
-        // fit — the pinned strip widths are hard requirements, not wishes
-        w.minSize = NSSize(width: 1290, height: 520)
+        // minimum: all four 240-pt strips + rules + margins must fit —
+        // the pinned strip widths are hard requirements, not wishes
+        w.minSize = NSSize(width: 1060, height: 520)
         window = w
-        // default size 1,300 × 620 — NSWindow sizes to the contentView's
-        // fitting size otherwise, and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1300, height: 620))
+        // default size = the minimal width — NSWindow sizes to the
+        // contentView's fitting size otherwise, and the intrinsic size is tiny
+        w.setContentSize(NSSize(width: 1060, height: 620))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -1160,7 +1164,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Scroll view: the inputs + outputs sections scroll together; the
     /// monitor strip stays pinned below.
     private func makeScrollArea() -> NSScrollView {
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 900))
+        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 900))
         // TIFA=false: the doc's edges are driven by the stack constraints
         // below, NOT by the clip view's autoresizing — leaving the default
         // over-constrains the whole tree and breaks the window's layout.
@@ -1222,12 +1226,26 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         statusField.textColor = GGTheme.softGray
         statusField.lineBreakMode = .byWordWrapping
         statusField.preferredMaxLayoutWidth = 1000
+        // a long status hint must NEVER drive the content's minimum
+        // width — it wraps instead
+        statusField.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         stack.addArrangedSubview(statusField)
 
+        // Scroll content edges at 999 (NOT required): during the window's
+        // first, zero-size layout pass the required strip widths would
+        // otherwise conflict with the required edges — the engine would
+        // break the STRIP widths and the window would momentarily
+        // collapse to the status label's width before recovering.
+        // Breakable edges make that pass deterministic: the strips always
+        // hold, and once real sizes exist the edges are fully honored.
+        let stackLeading = stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 20)
+        let stackTrailing = stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -20)
+        stackLeading.priority = .init(999)
+        stackTrailing.priority = .init(999)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -20),
+            stackLeading,
+            stackTrailing,
             stack.bottomAnchor.constraint(lessThanOrEqualTo: doc.bottomAnchor, constant: -8),
             inputsHeader.widthAnchor.constraint(equalTo: stack.widthAnchor),
             // full-width header (internal .leading alignment) so the
@@ -1500,7 +1518,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
-            card.widthAnchor.constraint(equalToConstant: outCardWidth).isActive = true
+            card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
             outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
@@ -1969,11 +1987,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // Routing actions (InsertServer)
 
+    /// A routing edit is intent: if the AU insert engine is off, start it
+    /// (the exact path the menubar toggle uses) so the change takes
+    /// effect. Called AFTER the state write, so a fresh start loads it.
+    private func ensureInsertRunning() {
+        guard !InsertServer.shared.running else { return }
+        InsertServer.shared.setRunning(true)
+        QBLog.log("control: routing edit started the plug-in insert")
+    }
+
     @objc private func sourceChanged(_ sender: NSPopUpButton) {
         let i = sender.tag - 2100
         guard !suppressActions, let raw = sender.selectedItem?.representedObject as? String,
               let src = InsertServer.PairSource(rawValue: raw) else { return refresh() }
         InsertServer.shared.setSource(i, src)
+        ensureInsertRunning()
         refresh()
     }
 
@@ -1983,6 +2011,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let i = sender.tag - 2200
         guard !suppressActions else { return refresh() }
         InsertServer.shared.setMirrorPre(i, sender.state == .off)
+        ensureInsertRunning()
         refresh()
     }
 
@@ -1992,13 +2021,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let desc = key.isEmpty ? nil
             : InsertServer.listPlugins().first { InsertServer.descKey($0.desc) == key }?.desc
         InsertServer.shared.setPlugin(i, desc)
+        if !key.isEmpty { ensureInsertRunning() }   // picking "None" doesn't start it
         refresh()
     }
 
     @objc private func enabledChanged(_ sender: NSButton) {
         let i = sender.tag - 2400
         guard !suppressActions else { return refresh() }
-        InsertServer.shared.setEnabled(i, sender.state == .on)
+        let on = sender.state == .on
+        InsertServer.shared.setEnabled(i, on)
+        if on { ensureInsertRunning() }   // enabling processing means intent to run it
         refresh()
     }
 
