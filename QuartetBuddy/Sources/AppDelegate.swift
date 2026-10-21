@@ -547,6 +547,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         // Window & Navigation
         case .showHideWindow: control.toggleShown()
+        case .showQuickPanel: QuickPanelController.shared.toggleShown()
+        // ⌘P — app-only (the local monitor fires this just while the
+        // control panel is focused); other apps' ⌘P is untouched
+        case .pinPanel: control.togglePinned()
         case .openSettings: settingsWindow.show()
         case .selectNextOutput: control.selectAdjacentOutput(1)
         case .selectPreviousOutput: control.selectAdjacentOutput(-1)
@@ -617,7 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .outputTrimDown: control.shortcutOutputTrim(up: false, step: 1)
         case .editOutputTrim: control.shortcutEditOutputTrim()
         case .openSourceSelector: control.shortcutOpenSourceSelector()
-        case .toggleIncludeSource: control.shortcutToggleIncludeSource()
+        case .cycleStage: control.shortcutCycleStage()
 
         // Inputs (selected card)
         case .selectInput1: control.selectInput(0)
@@ -715,9 +719,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.menu = menu
+        // The Apogee logo is now a plain BUTTON: clicking it opens the
+        // Quartet Control window (the window carries everything the old
+        // menubar menu did — no dropdown). The menu object still exists
+        // only as the target of rebuildMenu's tooltip/dot bookkeeping.
+        statusItem.menu = nil
+        statusItem?.button?.target = self
+        statusItem?.button?.action = #selector(statusClicked(_:))
+        statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         menu.delegate = self
         rebuildMenu()
+    }
+
+    /// Clicking the menubar Apogee logo — TOGGLE the Quartet Control
+    /// window: closed → open it, open → close it. Nothing else lives up
+    /// here anymore.
+    @objc private func statusClicked(_ sender: Any?) {
+        QuartetControlController.shared.toggleShown()
     }
 
     /// Rebuild the menu + menubar state. Coalesced: bursts of state changes
@@ -1031,6 +1049,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Talkback chip in the monitor strip — same path as the hotkeys.
         control.onTalkback = { [weak self] on in self?.setTalkback(on) }
         control.talkbackState = { [weak self] in self?.talkbackOn ?? false }
+        // OS volume-target readback — drives the blue marker on the
+        // monitor groups (selectedOutput has a didSet → refreshMenu →
+        // controller.refresh → updateCardHighlights, so it stays live)
+        control.volumeTarget = { [weak self] in
+            guard let self else { return 0 }
+            return self.selectedOutput == .headphones ? 1 : 0
+        }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             return self.glue.state == .connected && self.quartetPresence.isConnected
@@ -1044,9 +1069,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QuartetControlController.shared.showAutoStatus(line, clearAfter: nil, detail: detail,
                                                            remaining: remaining)
         }
-        engine.onFinished = { _, line, detail, gain, outcome in
+        engine.onFinished = { input, line, detail, gain, outcome in
             QuartetControlController.shared.showAutoGainResult(line, detail: detail,
-                                                               gain: gain, outcome: outcome)
+                                                               gain: gain, input: input,
+                                                               outcome: outcome)
         }
     }
 

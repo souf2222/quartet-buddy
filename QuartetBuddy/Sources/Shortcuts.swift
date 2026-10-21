@@ -20,6 +20,8 @@ enum ShortcutAction: String, CaseIterable {
 
     // Window & Navigation
     case showHideWindow
+    case showQuickPanel
+    case pinPanel
     case openSettings
     case selectNextOutput
     case selectPreviousOutput
@@ -68,7 +70,7 @@ enum ShortcutAction: String, CaseIterable {
     case outputTrimDown
     case editOutputTrim
     case openSourceSelector
-    case toggleIncludeSource
+    case cycleStage
 
     // Inputs (app-only by default)
     case selectInput1
@@ -94,7 +96,7 @@ enum ShortcutAction: String, CaseIterable {
     /// Section heading in the settings table.
     var section: String {
         switch self {
-        case .showHideWindow, .openSettings, .selectNextOutput, .selectPreviousOutput:
+        case .showHideWindow, .showQuickPanel, .pinPanel, .openSettings, .selectNextOutput, .selectPreviousOutput:
             return "Window & Navigation"
         case .speakerMute, .speakerDim, .speakerSum, .speakerVolumeUp, .speakerVolumeDown,
              .speakerFineUp, .speakerFineDown:
@@ -110,7 +112,7 @@ enum ShortcutAction: String, CaseIterable {
         case .bypassAllPlugins, .toggleInsert, .bypassSelectedOutput, .openSelectedPlugin:
             return "Plug-ins"
         case .selectOutput1, .selectOutput2, .selectOutput3, .selectOutput4,
-             .outputTrimUp, .outputTrimDown, .editOutputTrim, .openSourceSelector, .toggleIncludeSource:
+             .outputTrimUp, .outputTrimDown, .editOutputTrim, .openSourceSelector, .cycleStage:
             return "Outputs & Routing"
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4,
              .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
@@ -125,6 +127,8 @@ enum ShortcutAction: String, CaseIterable {
     var title: String {
         switch self {
         case .showHideWindow: return "Show / hide Quartet Control"
+        case .showQuickPanel: return "Show / hide quick-control panel"
+        case .pinPanel: return "Pin / unpin the control panel"
         case .openSettings: return "Open Settings"
         case .selectNextOutput: return "Select next output"
         case .selectPreviousOutput: return "Select previous output"
@@ -161,7 +165,7 @@ enum ShortcutAction: String, CaseIterable {
         case .outputTrimDown: return "Output trim down"
         case .editOutputTrim: return "Edit output trim"
         case .openSourceSelector: return "Open source selector"
-        case .toggleIncludeSource: return "Toggle include source processing"
+        case .cycleStage: return "Cycle source signal stage"
         case .selectInput1: return "Select Analog In 1"
         case .selectInput2: return "Select Analog In 2"
         case .selectInput3: return "Select Analog In 3"
@@ -186,6 +190,11 @@ enum ShortcutAction: String, CaseIterable {
     var defaultGlobal: Bool {
         switch self {
         case .showHideWindow: return true
+        case .showQuickPanel: return true
+        // ⌘P is the app's pin toggle — APP-ONLY by default (matched by the
+        // local monitor while the control panel is focused), so the
+        // global ⌘P of other applications is never intercepted.
+        case .pinPanel: return false
         case .openSettings: return false
         case .selectNextOutput, .selectPreviousOutput: return false
         case .speakerMute, .speakerDim, .speakerVolumeUp, .speakerVolumeDown: return true
@@ -199,7 +208,7 @@ enum ShortcutAction: String, CaseIterable {
         case .toggleInsert, .bypassSelectedOutput, .openSelectedPlugin: return false
         case .selectOutput1, .selectOutput2, .selectOutput3, .selectOutput4: return false
         case .outputTrimUp, .outputTrimDown, .editOutputTrim,
-             .openSourceSelector, .toggleIncludeSource: return false
+             .openSourceSelector, .cycleStage: return false
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4: return false
         case .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
              .autoGainAllInputs, .cancelAutoGain, .toggleSoftLimit, .togglePolarity: return false
@@ -213,6 +222,8 @@ enum ShortcutAction: String, CaseIterable {
             .init(keyCode: code, modifiers: mods)
         }
         switch self {
+        case .showQuickPanel: return combo(UInt32(kVK_ANSI_C), UInt32(optionKey))
+        case .pinPanel: return combo(UInt32(kVK_ANSI_P), UInt32(cmdKey))
         case .openSettings: return combo(UInt32(kVK_ANSI_Comma), UInt32(cmdKey))
         case .talkbackToggle: return combo(UInt32(kVK_ANSI_T), UInt32(cmdKey | shiftKey))
         case .selectOutput1: return combo(UInt32(kVK_ANSI_1), UInt32(cmdKey))
@@ -380,6 +391,16 @@ final class ShortcutManager {
             for (key, binding) in saved {
                 if let action = ShortcutAction(rawValue: key) { bindings[action] = binding }
             }
+            // Actions added after the user's bindings were persisted carry
+            // no entry — seed those with their designed defaults (e.g. the
+            // quick panel's ⌥C), so a new action is bound out of the box.
+            for action in ShortcutAction.allCases where bindings[action] == nil {
+                if let combo = action.defaultCombo {
+                    bindings[action] = Binding(combo: combo,
+                                                isGlobal: action.defaultGlobal && action.allowGlobal)
+                }
+            }
+            persist()
             return
         }
         // One-time migration from the old per-feature hotkeys:

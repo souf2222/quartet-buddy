@@ -23,12 +23,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var currentPane: Pane = .general
 
     enum Pane: Int, CaseIterable {
-        case general, shortcuts, audio, talkback, plugins, about
+        case general, shortcuts, autoGain, audio, talkback, plugins, about
 
         var icon: String {
             switch self {
             case .general: return "⚙"
             case .shortcuts: return "⌘"
+            case .autoGain: return "◤"
             case .audio: return "♫"
             case .talkback: return "◉"
             case .plugins: return "◇"
@@ -39,6 +40,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switch self {
             case .general: return "General"
             case .shortcuts: return "Shortcuts"
+            case .autoGain: return "Auto Gain"
             case .audio: return "Audio"
             case .talkback: return "Talkback"
             case .plugins: return "Plug-ins"
@@ -71,6 +73,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard window != nil else { return }
         rebuildTalkback()
         rebuildAudio()
+        rebuildAutoGain()
         rebuildPlugins()
         rebuildShortcuts()
     }
@@ -105,7 +108,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             ])
         }
 
-        let w = NSWindow(contentRect: content.bounds,
+        let w = QuartetWindow(contentRect: content.bounds,
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = "Quartet Buddy Settings"
@@ -120,14 +123,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window = w
     }
 
-    /// Sidebar: the standard under-page background (the system's sidebar
-    /// material, like System Settings), light text, and a clear
+    /// Sidebar: the standard sidebar MATERIAL (the system's own surface,
+    /// like System Settings — a NSVisualEffectView with the .sidebar
+    /// material, correct in every appearance), light text, and a clear
     /// selected-row pill.
+    ///
+    /// NB never assign a dynamic color's `.cgColor` to a layer here: it
+    /// resolves against whatever appearance is CURRENT at that moment
+    /// (before the window's darkAqua is guaranteed), yielding the LIGHT
+    /// variant — a white sidebar with white text.
     private func makeSidebar() -> NSView {
-        let sidebar = NSView()
+        let sidebar = NSVisualEffectView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.wantsLayer = true
-        sidebar.layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.state = .active
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -248,6 +258,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         switch pane {
         case .general: buildGeneral(into: body)
         case .shortcuts: buildShortcuts(into: body)
+        case .autoGain: buildAutoGain(into: body)
         case .audio: buildAudio(into: body)
         case .talkback: buildTalkback(into: body)
         case .plugins: buildPlugins(into: body)
@@ -680,6 +691,98 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let current = InsertServer.savedBufferFrames()
         latencyPopup.selectItem(at: InsertServer.bufferChoices.firstIndex { $0.frames == current } ?? 0)
         rateField.stringValue = "Quartet · \(Int(InsertServer.shared.currentRate())) Hz"
+    }
+
+    // MARK: - Auto Gain
+
+    private var gainTargetPopup: NSPopUpButton!
+    private var gainDurationPopup: NSPopUpButton!
+    private var gainSuppress = false
+
+    /// Settings ▸ Auto Gain — the two labeled rows that used to live in
+    /// the main window's Inputs header:
+    ///
+    ///     Target peak level      [ −18 dBFS peak ▾ ]
+    ///     Measurement duration   [ 5 s           ▾ ]
+    ///
+    /// One persisted configuration for BOTH the per-input Auto Gain and
+    /// Auto Gain All. A change applies to the NEXT operation — a run in
+    /// flight keeps its own target/duration.
+    private func buildAutoGain(into body: NSStackView) {
+        body.addArrangedSubview(sectionLabel("Calibration"))
+
+        // Target peak level
+        let targetRow = NSStackView()
+        targetRow.orientation = .horizontal
+        targetRow.spacing = 8
+        targetRow.alignment = .centerY
+        targetRow.translatesAutoresizingMaskIntoConstraints = false
+        targetRow.addArrangedSubview(secondary("Target peak level"))
+        gainTargetPopup = NSPopUpButton()
+        gainTargetPopup.translatesAutoresizingMaskIntoConstraints = false
+        for v in AutoGainEngine.targetOptions {
+            gainTargetPopup.addItem(withTitle: String(format: "%.0f dBFS peak", v))
+            gainTargetPopup.lastItem?.representedObject = NSNumber(value: v)
+        }
+        gainTargetPopup.action = #selector(gainTargetChanged(_:))
+        gainTargetPopup.target = self
+        targetRow.addArrangedSubview(gainTargetPopup)
+        body.addArrangedSubview(targetRow)
+
+        // Measurement duration
+        let durationRow = NSStackView()
+        durationRow.orientation = .horizontal
+        durationRow.spacing = 8
+        durationRow.alignment = .centerY
+        durationRow.translatesAutoresizingMaskIntoConstraints = false
+        durationRow.addArrangedSubview(secondary("Measurement duration"))
+        gainDurationPopup = NSPopUpButton()
+        gainDurationPopup.translatesAutoresizingMaskIntoConstraints = false
+        for v in AutoGainEngine.listenOptions {
+            gainDurationPopup.addItem(withTitle: String(format: "%.0f s", v))
+            gainDurationPopup.lastItem?.representedObject = NSNumber(value: v)
+        }
+        gainDurationPopup.action = #selector(gainDurationChanged(_:))
+        gainDurationPopup.target = self
+        durationRow.addArrangedSubview(gainDurationPopup)
+        body.addArrangedSubview(durationRow)
+
+        NSLayoutConstraint.activate([
+            gainTargetPopup.widthAnchor.constraint(equalToConstant: 160),
+            gainDurationPopup.widthAnchor.constraint(equalToConstant: 160),
+        ])
+
+        body.addArrangedSubview(secondary(
+            "Applies to the next Auto Gain operation — both per-input and Auto Gain All."))
+    }
+
+    private func rebuildAutoGain() {
+        guard gainTargetPopup != nil, gainDurationPopup != nil else { return }
+        gainSuppress = true
+        defer { gainSuppress = false }
+        for item in gainTargetPopup.itemArray
+        where (item.representedObject as? NSNumber)?.doubleValue == AutoGainEngine.targetDBFS {
+            gainTargetPopup.select(item); break
+        }
+        for item in gainDurationPopup.itemArray
+        where (item.representedObject as? NSNumber)?.doubleValue == AutoGainEngine.listenSeconds {
+            gainDurationPopup.select(item); break
+        }
+    }
+
+    /// A change persists immediately and applies to the NEXT operation.
+    @objc private func gainTargetChanged(_ sender: NSPopUpButton) {
+        guard !gainSuppress,
+              let v = sender.selectedItem?.representedObject as? NSNumber else { return }
+        AutoGainEngine.targetDBFS = v.doubleValue
+        QuartetControlController.shared.refresh()
+    }
+
+    @objc private func gainDurationChanged(_ sender: NSPopUpButton) {
+        guard !gainSuppress,
+              let v = sender.selectedItem?.representedObject as? NSNumber else { return }
+        AutoGainEngine.listenSeconds = v.doubleValue
+        QuartetControlController.shared.refresh()
     }
 
     // MARK: - Plug-ins

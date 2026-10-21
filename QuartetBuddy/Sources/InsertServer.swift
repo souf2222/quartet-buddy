@@ -82,13 +82,44 @@ final class InsertServer: NSObject {
         }
     }
 
+    /// WHERE a mirror taps the SOURCE pair's chain. The source's chain
+    /// is its input trim (Level) → its plug-in → its hardware output —
+    /// the Trim is applied FIRST (an input trim), so the Post-FX tap
+    /// divides it back out to honor the "after FX, before Trim" stage.
+    enum MirrorStage: String {
+        /// The source's raw playback channels — before its processing
+        /// and trim.
+        case pre = "pre"
+        /// After the source's plug-in, its Trim divided back out.
+        case postFX = "post-fx"
+        /// After both — the source's full rendered output.
+        case postTrim = "post-trim"
+
+        var label: String {
+            switch self {
+            case .pre: return "Pre-FX"
+            case .postFX: return "Post-FX"
+            case .postTrim: return "Post-Trim"
+            }
+        }
+
+        /// The tap's wording in the route summary / flow line.
+        var point: String {
+            switch self {
+            case .pre: return "before its processing"
+            case .postFX: return "after its FX, before its Trim"
+            case .postTrim: return "after its processing"
+            }
+        }
+    }
+
     struct Pair {
         var source: PairSource = .systemMix
         /// Plugin processing enabled for this pair (bypass = raw passthrough).
         var enabled = true
-        /// For mirrored sources: copy BEFORE the source pair's plug-in
-        /// (raw playback channels) or AFTER (its processed output).
-        var mirrorPre = true
+        /// For mirrored sources: WHERE the mirror taps the source pair's
+        /// chain (see MirrorStage). Own sources and Off don't use it.
+        var stage: MirrorStage = .pre
         /// Input trim in dB (−64…+6, 0 = unity) — applied to the pair's
         /// input before its plug-in chain. Routing-level: unaffected by
         /// bypassAll.
@@ -102,6 +133,10 @@ final class InsertServer: NSObject {
         var proc: StereoABL?
         /// scaled input storage when trim != 0 dB (audio thread reads)
         var level: StereoABL?
+        /// mirror tap storage when a Post-FX mirror divides the source's
+        /// trim back out — the scaled copy lives here, off the shared
+        /// source buffer (audio thread reads)
+        var mirror: StereoABL?
         var pluginName: String?
         var desc: AudioComponentDescription?
         var viewInfo: (bundleURL: URL, classNames: [String])?
@@ -174,6 +209,7 @@ final class InsertServer: NSObject {
     private static func pluginKey(_ i: Int) -> String { "insertPair.\(i).plugin" }
     private static func enabledKey(_ i: Int) -> String { "insertPair.\(i).enabled" }
     private static func mirrorKey(_ i: Int) -> String { "insertPair.\(i).mirror" }
+    private static func stageKey(_ i: Int) -> String { "insertPair.\(i).stage" }
     private static let bypassAllKey = "insertBypassAll"
     private static func trimKey(_ i: Int) -> String { "insertPair.\(i).trim" }
     /// Linear gain factors per pair (10^(dB/20)), main-side writes.
@@ -211,9 +247,15 @@ final class InsertServer: NSObject {
             } else if UserDefaults.standard.object(forKey: "insertPair.\(i).bypass") != nil {
                 p.enabled = !UserDefaults.standard.bool(forKey: "insertPair.\(i).bypass")
             }
-            // mirror point: before (default) / after the source plug-in
-            if let m = UserDefaults.standard.string(forKey: Self.mirrorKey(i)) {
-                p.mirrorPre = (m == "before")
+            // mirror tap point (v6): Pre-FX / Post-FX / Post-Trim.
+            // Migrates the old before/after checkbox: "before" was the
+            // raw channels (→ Pre-FX); "after" was the source's FULL
+            // rendered output — trim included — which is now Post-Trim.
+            if let s = UserDefaults.standard.string(forKey: Self.stageKey(i)),
+               let stage = MirrorStage(rawValue: s) {
+                p.stage = stage
+            } else if let m = UserDefaults.standard.string(forKey: Self.mirrorKey(i)) {
+                p.stage = (m == "before") ? .pre : .postTrim
             }
             // input trim (Level) — clamp to −64…+6 dB
             let savedTrim = UserDefaults.standard.double(forKey: Self.trimKey(i))
@@ -341,9 +383,12 @@ final class InsertServer: NSObject {
             QBLog.log("insert: buffer size set err \(bufErr)")
         }
 
-        // 3) system buffer, per-pair level buffers + one engine per pair
+        // 3) system buffer, per-pair level + mirror buffers, one engine per pair
         sys = StereoABL(frames: 4096, channels: 8)
-        for i in 0..<4 { pairs[i].level = StereoABL(frames: 4096) }
+        for i in 0..<4 {
+            pairs[i].level = StereoABL(frames: 4096)
+            pairs[i].mirror = StereoABL(frames: 4096)
+        }
         for i in 0..<4 {
             if let key = UserDefaults.standard.string(forKey: Self.pluginKey(i)),
                let d = Self.listPlugins().first(where: { Self.descKey($0.desc) == key })?.desc {
@@ -382,6 +427,7 @@ final class InsertServer: NSObject {
             pairs[i].renderBuffer = nil
             pairs[i].proc = nil
             pairs[i].level = nil
+            pairs[i].mirror = nil
             pairs[i].desc = nil
             pairs[i].pluginName = nil
             pairs[i].viewInfo = nil
@@ -404,21 +450,25 @@ final class InsertServer: NSObject {
     // MARK: - Route resolution (main-side)
 
     /// A pair's resolved input: pair `src`'s raw playback channels
-    /// (pre) or rendered output (post — mirror AFTER the source's
-    /// plug-in). `nil` = silence (Off or a routing cycle).
+    /// (stage nil — its own playback, or a Pre-FX mirror), or its
+    /// rendered output (Post-FX / Post-Trim mirrors). `nil` src =
+    /// silence (Off or a routing cycle).
     struct Route {
         var src: Int?
-        var post = false
+        /// nil = raw channels; .postFX = the source's rendered output
+        /// with its input trim divided back out; .postTrim = its full
+        /// rendered output (its trim included).
+        var stage: MirrorStage?
     }
 
     /// The tap captures the Quartet's FULL 8-channel stream — 4 stereo
     /// pairs. Pair i's own channels = (2i, 2i+1): whatever apps send to
-    /// pair i. Mirrors copy a source pair's raw channels (before) or
-    /// its processed output (after). Cycles resolve to silence, never
-    /// in the audio thread.
+    /// pair i. Mirrors copy a source pair's raw channels (Pre-FX) or
+    /// its rendered output (Post-FX / Post-Trim). Cycles resolve to
+    /// silence, never in the audio thread.
     private(set) var routes: [Route] = [Route(src: 0), Route(src: 1), Route(src: 2), Route(src: 3)]
 
-    /// Render order (post-mirrors render after their source).
+    /// Render order (post-stage mirrors render after their source).
     private var renderOrder: [Int] = [0, 1, 2, 3]
 
     private func resolveRoutes() {
@@ -437,10 +487,10 @@ final class InsertServer: NSObject {
                 guard let j = pairs[i].source.copyIndex else { break }
                 if j == i {
                     r = Route(src: i)                   // self == own channels
-                } else if pairs[i].mirrorPre {
+                } else if pairs[i].stage == .pre {
                     r = Route(src: j)                    // source's raw channels
                 } else {
-                    // AFTER the source's plug-in: the source's rendered
+                    // AFTER the source's processing: the source's rendered
                     // output — source renders first (order), silence flows
                     if state[j] == 1 {
                         QBLog.log("insert: routing cycle at pair \(i) — silence")
@@ -448,7 +498,7 @@ final class InsertServer: NSObject {
                         return routes[i]!
                     }
                     let rj = resolve(j, stack.union([i]))
-                    r = Route(src: rj.src, post: rj.src != nil)
+                    r = Route(src: rj.src, stage: pairs[i].stage)
                 }
             }
             routes[i] = r
@@ -463,7 +513,7 @@ final class InsertServer: NSObject {
             state[i] = 1
             var ok = true
             if pairs[i].source != .off, let j = pairs[i].source.copyIndex,
-               j != i, !pairs[i].mirrorPre, j != i {
+               j != i, pairs[i].stage != .pre {
                 ok = orderVisit(j)
             }
             state[i] = 2
@@ -479,7 +529,7 @@ final class InsertServer: NSObject {
             if seen.contains(i) { return }
             seen.insert(i)
             if pairs[i].source != .off, let j = pairs[i].source.copyIndex,
-               j != i, !pairs[i].mirrorPre { add(j) }
+               j != i, pairs[i].stage != .pre { add(j) }
             ordered.append(i)
         }
         for i in 0..<4 { add(i) }
@@ -489,10 +539,10 @@ final class InsertServer: NSObject {
 
     /// Label for a source option in pair i's picker.
     static func sourceLabel(_ src: PairSource, for i: Int) -> String {
-        if src == .off { return "Silence" }
+        if src == .off { return "—" }
         if src == .systemMix { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
-        if let j = src.copyIndex { return "Mirror Out \(2 * j + 1)–\(2 * j + 2)" }
-        return "Silence"
+        if let j = src.copyIndex { return "Playback \(2 * j + 1)–\(2 * j + 2)" }
+        return "—"
     }
 
     /// Source options for pair i (own playback + mirrors + silence).
@@ -500,22 +550,24 @@ final class InsertServer: NSObject {
         [.systemMix] + [0, 1, 2, 3].filter { $0 != i }.map { PairSource.copy($0) } + [.off]
     }
 
-    /// Human route summary (mirrors label with before/after).
+    /// Human route summary (mirrors label with the tap point).
     func routeSummary(_ i: Int) -> String {
-        guard let src = routes[i].src else { return "Silence" }
-        if src == i { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
+        guard let src = routes[i].src else { return "—" }
+        if routes[i].stage == nil {
+            if src == i { return "Playback \(2 * i + 1)–\(2 * i + 2)" }
+            return "Mirror Out \(2 * src + 1)–\(2 * src + 2) (raw channels)"
+        }
         let srcName = "Out \(2 * src + 1)–\(2 * src + 2)"
-        let point = pairs[i].mirrorPre ? "before" : "after"
-        return "Mirror \(srcName) (\(point) its plug-in)"
+        return "Mirror \(srcName) (\(pairs[i].stage.point))"
     }
 
     /// Signal-flow line for the Outputs window, e.g.
     /// "Playback 1–2 → ARC X → Out 1–2" /
     /// "Playback 1–2 → Out 1–2 plug-in → Out 3–4".
     func flowLine(_ i: Int) -> String {
-        guard let src = routes[i].src else { return "Silence → Out \(2 * i + 1)–\(2 * i + 2)" }
+        guard let src = routes[i].src else { return "— → Out \(2 * i + 1)–\(2 * i + 2)" }
         var parts: [String] = []
-        if routes[i].post {
+        if routes[i].stage != nil {
             let srcPlugin = pairs[src].pluginName.map(Self.shortName) ?? "no plug-in"
             parts.append("Playback \(2 * src + 1)–\(2 * src + 2)")
             parts.append("\(srcPlugin) (Out \(2 * src + 1)–\(2 * src + 2))")
@@ -539,7 +591,7 @@ final class InsertServer: NSObject {
         "\(Self.pairNames[i]): \(routeSummary(i))"
     }
 
-    func mirrorPre(_ i: Int) -> Bool { pairs[i].mirrorPre }
+    func stage(_ i: Int) -> MirrorStage { pairs[i].stage }
     func enabled(_ i: Int) -> Bool { pairs[i].enabled }
     /// Current device sample rate (48000 by default before start).
     func currentRate() -> Double { sampleRate }
@@ -733,17 +785,42 @@ final class InsertServer: NSObject {
         }
 
         // 2) render the 4 chains in dependency order — each pair's input
-        //    = its route: the source pair's raw playback channels (pre)
-        //    or its rendered output (post-mirror), or silence.
+        //    = its route: the source pair's raw playback channels
+        //    (Pre-FX), its rendered output (Post-FX / Post-Trim), or
+        //    silence. The source renders FIRST, so its output buffers
+        //    are already filled in when a post-stage mirror taps them.
         var outL: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         var outR: [UnsafeMutablePointer<Float>?] = [nil, nil, nil, nil]
         for i in renderOrder {
             let p = pairs[i]
             let route = routes[i]
             guard let src = route.src else { continue }   // off / cycle → silent
-            if route.post, let l = outL[src], let r = outR[src] {
-                outL[i] = l; outR[i] = r       // mirror AFTER source's plug-in
-            } else {
+            switch route.stage {
+            case .postTrim:
+                // the source's full rendered output — its input trim
+                // included (shared buffer, the destination only reads it)
+                if let l = outL[src], let r = outR[src] {
+                    outL[i] = l; outR[i] = r
+                }
+            case .postFX:
+                // the source's rendered output with its input trim
+                // divided back out — the mirror hears the source's plug-in
+                // at the source's PRE-trim level. Unity source trim → the
+                // shared output buffer; otherwise a scaled copy into the
+                // pair's mirror buffer (never in place).
+                let gain = 1.0 / trimFactors[src]
+                if gain == 1.0, let l = outL[src], let r = outR[src] {
+                    outL[i] = l; outR[i] = r
+                } else if gain != 1.0, let m = p.mirror,
+                          let l = outL[src], let r = outR[src] {
+                    for fr in 0..<frames {
+                        m.buffers[0][fr] = l[fr] * gain
+                        m.buffers[1][fr] = r[fr] * gain
+                    }
+                    outL[i] = m.buffers[0]
+                    outR[i] = m.buffers[1]
+                }
+            default:
                 outL[i] = sys.buffers[src * 2]  // raw playback channels
                 outR[i] = sys.buffers[src * 2 + 1]
             }
@@ -926,12 +1003,13 @@ final class InsertServer: NSObject {
         onStateChange?()
     }
 
-    /// Mirror point for pair i: before/after the source pair's plug-in.
-    func setMirrorPre(_ i: Int, _ pre: Bool) {
-        pairs[i].mirrorPre = pre
-        UserDefaults.standard.set(pre ? "before" : "after", forKey: Self.mirrorKey(i))
+    /// The mirror's tap point for pair i — WHERE the signal is taken
+    /// from the source pair's chain (Pre-FX / Post-FX / Post-Trim).
+    func setStage(_ i: Int, _ stage: MirrorStage) {
+        pairs[i].stage = stage
+        UserDefaults.standard.set(stage.rawValue, forKey: Self.stageKey(i))
         resolveRoutes()
-        QBLog.log("insert: pair \(i) mirror \(pre ? "before" : "after") source plug-in")
+        QBLog.log("insert: pair \(i) mirror \(stage.rawValue) (\(stage.point))")
         onStateChange?()
     }
 

@@ -64,7 +64,9 @@ swiftc -O \
     "$SRC/QuartetPresence.swift" \
     "$SRC/OSVolumeMirror.swift" \
     "$SRC/InsertServer.swift" \
+    "$SRC/QuartetWindow.swift" \
     "$SRC/QuartetControlWindow.swift" \
+    "$SRC/QuickControlPanel.swift" \
     "$SRC/SettingsWindow.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \

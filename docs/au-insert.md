@@ -31,22 +31,28 @@ The Quartet presents macOS **one 8-channel stream** = 4 stereo pairs.
 The tap captures the **full 8 channels**; pair i's *own* playback audio
 is channels (2i, 2i+1) — a DAW addressing "Out 3‑4" lands exactly there.
 
-Each pair picks a **Source** (Outputs & Plug-ins window):
+Each pair picks a **Source** (control window):
 
 - **Playback i–2** (default) — the pair passes through **its own**
   playback channels.
-- **Mirror Out X–Y** — that pair's signal. Mirror point, per pair:
-  **Before Source Plug-in** (raw playback channels — independent
-  correction per destination) or **After Source Plug-in** (the source's
-  processed output — the destination inherits its processing, then may
-  apply its own plug-in).
+- **Playback X–Y** (mirror) — another pair's signal. For mirrors, a
+  second menu section picks the **tap point on the SOURCE's chain**:
+  - **Pre-FX** — the source's raw playback channels, before its
+    processing and trim (independent correction per destination).
+  - **Post-FX** — after the source's plug-in, but with its input trim
+    divided back out (the source's FX without its level trim).
+  - **Post-Trim** — the source's full rendered output, trim included
+    (the destination inherits the processing, then may apply its own).
 - **Silence**.
+
+The stages refer to the selected source's chain — never the
+destination's own FX and trim, which stay downstream of the tap.
 
 Routing cycles resolve to silence, detected and logged main-side —
 never in the audio thread. `resolveRoutes` computes each pair's route
-(source pair + pre/post) and the render order (post-mirrors render
-after their source); in the IO cycle every pair's input is a slice of
-the deinterleaved tap or another pair's rendered output.
+(source pair + tap stage) and the render order (post-stage mirrors
+render after their source); in the IO cycle every pair's input is a
+slice of the deinterleaved tap or another pair's rendered output.
 
 ## Menu & windows
 
@@ -54,16 +60,16 @@ the deinterleaved tap or another pair's rendered output.
   speaker/headphone levels, Mute Speakers/Headphones, Dim Speakers,
   Start/Stop Talkback, **Bypass All Plug-ins**, Outputs & Plug-ins…,
   Settings…, Quit.
-- **Outputs & Plug-ins window**: one row per pair
-  (Audio Source / Plug-in / Enabled) with a details pane —
-  route summary, mirror point, Open Editor…, signal flow
-  ("Playback 1–2 → ARC X → Out 3‑4" — double processing is visible).
+- **Outputs window**: the routing cards in the control window — one
+  strip per pair with the grouped source menu, the plug-in slot and the
+  trim knob.
 - **Settings window**: General (launch at login), Talkback (momentary),
   Shortcuts & MIDI (hotkey recording, MIDI learn), Audio (latency).
 
 Per-pair persistence: `insertPair.N.source` (`mix`/`copy:j`/`off`),
-`.plugin`, `.enabled`, `.mirror` (`before`/`after`), plus per-plug-in
-ClassInfo state. Global: `insertBypassAll`.
+`.plugin`, `.enabled`, `.stage` (`pre`/`post-fx`/`post-trim`; the old
+`.mirror` `before`/`after` value migrates: before→pre, after→post-trim),
+plus per-plug-in ClassInfo state. Global: `insertBypassAll`.
 
 ## Plugin hosting
 
