@@ -186,16 +186,16 @@ final class GGLevelMeter: NSView {
 // MARK: - Knob (flat dial: value inside, green setting-arc around)
 
 /// The app's one custom control — a flat rotary knob used for input
-/// gain, output trim and monitor level. No knob body and no pointer:
-/// just a thin, subdued 270° track (start 7:30, clockwise through the
-/// left side and the top, end 4:30 — a small consistent opening at the
-/// bottom) with a flat green arc growing clockwise from the lower-left
-/// as the value rises (midpoint = 12 o'clock, full = the whole track).
-/// The arc shows the SETTING, not the live signal. The parameter value
-/// — WHOLE numbers, tabular numerals — is centered inside with a
-/// smaller "dB" beneath it; no separate numeric box. No gradients,
-/// bevels, glow or decorative shadows. Compact (72pt) for gain + trim,
-/// larger (88pt) for monitor level.
+/// gain, output trim and monitor level, ONE compact size everywhere
+/// (52pt — as tall as the Auto Gain + toggle block beside it). No knob
+/// body and no pointer: just a thin, subdued 270° track (start 7:30,
+/// clockwise through the left side and the top, end 4:30 — a small
+/// consistent opening at the bottom) with a flat green arc growing
+/// clockwise from the lower-left as the value rises (midpoint = 12
+/// o'clock, full = the whole track). The arc shows the SETTING, not the
+/// live signal. The parameter value — WHOLE numbers, tabular numerals —
+/// is centered inside with a smaller "dB" beneath it; no separate
+/// numeric box. No gradients, bevels, glow or decorative shadows.
 ///
 /// Interaction: drag vertically (up = more, ⇧ = slower), arrow keys step
 /// ±1, double-click the number to type an exact value into an inline
@@ -232,26 +232,28 @@ final class GainKnob: NSControl {
         valueField.isBordered = false
         valueField.drawsBackground = false
         valueField.alignment = .center
-        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        valueField.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         valueField.textColor = GGTheme.primary
         valueField.toolTip = "Double-click the knob to type an exact value"
         valueField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(valueField)
         NSLayoutConstraint.activate([
             valueField.centerXAnchor.constraint(equalTo: centerXAnchor),
-            valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 4),
-            valueField.widthAnchor.constraint(equalToConstant: 56),
-            valueField.heightAnchor.constraint(equalToConstant: 20),
+            valueField.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 3),
+            valueField.widthAnchor.constraint(equalToConstant: 44),
+            valueField.heightAnchor.constraint(equalToConstant: 18),
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 72, height: 72) }
+    /// ONE size everywhere — as tall as the Auto Gain + toggle block it
+    /// sits beside (24 + 6 + 22 = 52).
+    override var intrinsicContentSize: NSSize { NSSize(width: 52, height: 52) }
     override var acceptsFirstResponder: Bool { isEnabled }
 
-    // MARK: geometry — scales with bounds (compact 72, monitor 88)
+    // MARK: geometry — scales with bounds
     private var trackRadius: CGFloat { bounds.width / 2 - 1.5 }
-    private static let stroke: CGFloat = 3
+    private static let stroke: CGFloat = 2.5
     /// Track: start 7:30 (225°), sweep 270° clockwise to 4:30 (-45°).
     private static let startAngle: CGFloat = 225
     private static let sweepAngle: CGFloat = 270
@@ -296,20 +298,20 @@ final class GainKnob: NSControl {
         if hasValue {
             let value = NSAttributedString(
                 string: String(format: "%.0f", doubleValue),
-                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 15 : 12.5, weight: .medium),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 14 : 11, weight: .medium),
                              .foregroundColor: (valueTint ?? GGTheme.primary).withAlphaComponent(enabled ? 1 : 0.5)])
             let vs = value.size()
-            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y + (big ? 5 : 4) - vs.height / 2))
+            value.draw(at: NSPoint(x: c.x - vs.width / 2, y: c.y + (big ? 5 : 3) - vs.height / 2))
             let unit = NSAttributedString(
                 string: "dB",
-                attributes: [.font: NSFont.systemFont(ofSize: big ? 9 : 8),
+                attributes: [.font: NSFont.systemFont(ofSize: big ? 9 : 7.5),
                              .foregroundColor: GGTheme.muted.withAlphaComponent(enabled ? 1 : 0.5)])
             let us = unit.size()
-            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - (big ? 7 : 6) - us.height / 2))
+            unit.draw(at: NSPoint(x: c.x - us.width / 2, y: c.y - (big ? 7 : 5) - us.height / 2))
         } else {
             let dash = NSAttributedString(
                 string: "—",
-                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 15 : 12.5, weight: .medium),
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: big ? 14 : 11, weight: .medium),
                              .foregroundColor: GGTheme.muted])
             let ds = dash.size()
             dash.draw(at: NSPoint(x: c.x - ds.width / 2, y: c.y - ds.height / 2))
@@ -459,7 +461,8 @@ class FunctionButton: NSButton {
 /// checkmark). Compact, rounded like a native small button.
 final class FunctionToggle: FunctionButton {
     let baseTitle: String
-    static let font = NSFont.systemFont(ofSize: 11)
+    /// Glyph buttons (M / D / ∑) draw larger; text chips keep the default.
+    var titleFont: NSFont = NSFont.systemFont(ofSize: 11)
 
     init(title: String, tag: Int, accent: NSColor,
          target: AnyObject?, action: Selector) {
@@ -469,7 +472,7 @@ final class FunctionToggle: FunctionButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var intrinsicContentSize: NSSize {
-        let s = NSAttributedString(string: baseTitle, attributes: [.font: Self.font]).size()
+        let s = NSAttributedString(string: baseTitle, attributes: [.font: titleFont]).size()
         return NSSize(width: ceil(s.width) + 18, height: 22)
     }
 
@@ -493,24 +496,26 @@ final class FunctionToggle: FunctionButton {
         let label = baseTitle
         let text: NSColor = !enabled ? .disabledControlTextColor
             : engaged ? GGTheme.darkText : GGTheme.idleLabel
-        let attr = NSAttributedString(string: label, attributes: [.font: Self.font, .foregroundColor: text])
+        let attr = NSAttributedString(string: label, attributes: [.font: titleFont, .foregroundColor: text])
         let s = attr.size()
         attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
                               y: (bounds.height - s.height) / 2 - 0.5))
     }
 }
 
-/// The small enable/bypass switch for plug-ins — a NATIVE capsule
-/// switch: neutral track when off, system-accent track with a white
-/// circular knob when on.
-final class FunctionSwitch: FunctionButton {
-    override var intrinsicContentSize: NSSize { NSSize(width: 34, height: 20) }
+/// The compact enable/bypass "power" button for a processing slot — one
+/// small rounded chip with a hand-drawn power glyph (broken circle +
+/// stem), replacing the large capsule switch. System-accent fill with a
+/// near-black glyph when processing is ON; quiet neutral when bypassed.
+/// No redundant status dot — the button IS the state.
+final class PowerToggle: FunctionButton {
+    override var intrinsicContentSize: NSSize { NSSize(width: 28, height: 22) }
 
     override func draw(_ dirtyRect: NSRect) {
         let engaged = isEngaged
         let enabled = isEnabled
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
         let fill: NSColor
         if !enabled { fill = GGTheme.subduedFill }
         else if engaged { fill = hovering ? Self.lift(accent, 0.08) : accent }
@@ -522,14 +527,24 @@ final class FunctionSwitch: FunctionButton {
             path.lineWidth = 1
             path.stroke()
         }
-        let inset: CGFloat = 3
-        let d = rect.height - inset * 2
-        let travel = rect.width - inset * 2 - d
-        let x = engaged ? rect.minX + inset + travel : rect.minX + inset
-        let knob = !enabled ? NSColor(white: 1, alpha: 0.45)
-            : GGTheme.primary
-        knob.setFill()
-        NSBezierPath(ovalIn: NSRect(x: x, y: rect.minY + inset, width: d, height: d)).fill()
+        // power glyph: circle broken at the top + a stem through the gap
+        let c = NSPoint(x: bounds.midX, y: bounds.midY)
+        let r = bounds.height * 0.26
+        let color: NSColor = !enabled ? .disabledControlTextColor
+            : engaged ? GGTheme.darkText : GGTheme.idleLabel
+        color.setStroke()
+        let glyph = NSBezierPath()
+        glyph.appendArc(withCenter: c, radius: r,
+                        startAngle: 120, endAngle: 60, clockwise: false)
+        glyph.lineWidth = 1.6
+        glyph.lineCapStyle = .round
+        glyph.stroke()
+        let stem = NSBezierPath()
+        stem.move(to: NSPoint(x: c.x, y: c.y - r * 0.1))
+        stem.line(to: NSPoint(x: c.x, y: c.y + r * 1.35))
+        stem.lineWidth = 1.6
+        stem.lineCapStyle = .round
+        stem.stroke()
     }
 }
 
@@ -705,7 +720,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             plugPopup.addItem(withTitle: "None")
             plugPopup.lastItem?.representedObject = ""
             for (name, desc) in InsertServer.listPlugins() {
-                plugPopup.addItem(withTitle: name)
+                // short name in the selector — the manufacturer stays in
+                // the menu's full title where there's room for it
+                plugPopup.addItem(withTitle: InsertServer.shortName(name))
                 plugPopup.lastItem?.representedObject = InsertServer.descKey(desc)
             }
             let key = UserDefaults.standard.string(forKey: "insertPair.\(i).plugin") ?? ""
@@ -725,8 +742,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             openButtons[i].isHidden = !hasPlugin
             addPluginButtons[i].isHidden = hasPlugin
             addPluginButtons[i].isEnabled = live
-            // the plug-in's small blue presence mark in the processing well
-            pluginDots[i].isHidden = !hasPlugin
 
             let trim = server.trim(i)
             if trimKnobs[i].doubleValue != trim { trimKnobs[i].doubleValue = trim }
@@ -971,7 +986,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var enabledChecks: [NSButton] = []
     private var openButtons: [NSButton] = []
     private var addPluginButtons: [NSButton] = []
-    private var pluginDots: [StatusDot] = []
     private var trimKnobs: [GainKnob] = []
 
     // monitor strip (index 0 = Main Speakers, 1 = Headphones)
@@ -1009,14 +1023,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     //   inputs:  100/200/250/300/400/500/1200/600 + i
     //   routing: 2050/2100/2200/2300/2400/2450/2600/2650 + i
     //   monitor: 700/750/800/900/1000/1100 + o
-    /// Shared strip width for BOTH sections (input panels + routing
-    /// strips) — the compact knob panel; 4 strips + 3 rules must fit
-    /// the window's minimum width.
+    /// Input strip width — the compact knob panel.
     private let cardWidth: CGFloat = 240
+    /// Output strip width — wider for the processing column; all four
+    /// strips + rules must fit the window's minimum width.
+    private let outCardWidth: CGFloat = 300
 
     private func build() {
-        // Window: one resizable workspace — default 1,080 × 720.
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 720))
+        // Window: one resizable workspace — default 1,300 × 620.
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 620))
 
         // NATIVE background: the standard dark window material over a
         // subtle system blur — no manually simulated black overlay, no
@@ -1075,13 +1090,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.isMovableByWindowBackground = true
         w.contentView = content
         w.delegate = self
-        // minimum: all four 240-pt strips + rules + margins must fit —
-        // the pinned strip widths are hard requirements, not wishes
-        w.minSize = NSSize(width: 1060, height: 560)
+        // minimum: all four 300-pt output strips + rules + margins must
+        // fit — the pinned strip widths are hard requirements, not wishes
+        w.minSize = NSSize(width: 1290, height: 520)
         window = w
-        // default size 1,080 × 720 — NSWindow sizes to the contentView's
+        // default size 1,300 × 620 — NSWindow sizes to the contentView's
         // fitting size otherwise, and the intrinsic size is tiny
-        w.setContentSize(NSSize(width: 1080, height: 720))
+        w.setContentSize(NSSize(width: 1300, height: 620))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -1145,7 +1160,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Scroll view: the inputs + outputs sections scroll together; the
     /// monitor strip stays pinned below.
     private func makeScrollArea() -> NSScrollView {
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 900))
+        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 1300, height: 900))
         // TIFA=false: the doc's edges are driven by the stack constraints
         // below, NOT by the clip view's autoresizing — leaving the default
         // over-constrains the whole tree and breaks the window's layout.
@@ -1368,7 +1383,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             meters.append(meter)
 
-            // CONTROL ROW — compact knob left, Auto Gain + chips right
+            // CONTROL ROW — compact knob left, Auto Gain + chips right.
+            // The knob's height EQUALS the Auto Gain + toggle block:
+            // 24 (Auto Gain) + 6 (gap) + 22 (chips) = 52.
             let knob = GainKnob()
             knob.minValue = 0
             knob.maxValue = 75
@@ -1377,8 +1394,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             knob.action = #selector(gainSlid(_:))
             knob.tag = 200 + i
             knob.sendsContinuously = true
-            knob.widthAnchor.constraint(equalToConstant: 72).isActive = true
-            knob.heightAnchor.constraint(equalToConstant: 72).isActive = true
+            knob.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            knob.heightAnchor.constraint(equalToConstant: 52).isActive = true
             gainKnobs.append(knob)
 
             // precise entry: the knob's inline editor carries the numeric
@@ -1392,6 +1409,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             ag.bezelStyle = .recessed
             ag.controlSize = .small
             ag.font = NSFont.systemFont(ofSize: 11)
+            ag.heightAnchor.constraint(equalToConstant: 24).isActive = true
             autoGainButtons.append(ag)
 
             // one compact row of toggles — 48V / SL / Ø (amber / green /
@@ -1419,8 +1437,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             right.spacing = 6
             right.translatesAutoresizingMaskIntoConstraints = false
             right.addArrangedSubview(ag)
-            ag.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
             right.addArrangedSubview(row)
+            // Auto Gain spans exactly the width of the three chips below
+            ag.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
 
             let controlRow = NSStackView()
             controlRow.orientation = .horizontal
@@ -1429,12 +1448,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             controlRow.translatesAutoresizingMaskIntoConstraints = false
             controlRow.addArrangedSubview(knob)
             controlRow.addArrangedSubview(right)
-            // join the hierarchy BEFORE cross-view constraints (common
-            // ancestor required at activation time)
+            // hugs its content — the knob block defines the height
             col.addArrangedSubview(controlRow)
-            controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
-            right.widthAnchor.constraint(equalTo: controlRow.widthAnchor,
-                                         constant: -(72 + 14)).isActive = true
 
             // learn fallback (only when ids are missing)
             let lb = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))
@@ -1467,8 +1482,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     // MARK: routing cards
 
     /// Four aligned output strips separated by the same thin vertical
-    /// rules as the inputs — one shared visual grid. Per strip: name,
-    /// source, processing slot, and the compact output-trim KNOB.
+    /// rules as the inputs. Compact two-column layout per strip:
+    /// header (editable name + small physical identifier on ONE line),
+    /// full-width source dropdown, then the trim knob (with a small
+    /// "Trim" caption beneath) beside a two-row processing area —
+    /// plug-in selector on top, compact power + Open row below. The
+    /// processing well, the status dot and the large switch are gone;
+    /// empty and loaded slots share identical dimensions.
     private func makeRoutingGrid() -> NSView {
         let strip = NSStackView()
         strip.orientation = .horizontal
@@ -1480,7 +1500,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
-            card.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
+            card.widthAnchor.constraint(equalToConstant: outCardWidth).isActive = true
             outputCards.append(card)
             let col = NSStackView()
             col.orientation = .vertical
@@ -1495,7 +1515,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 col.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
             ])
 
-            // editable destination name, styled as a clean heading
+            // HEADER — editable name left, small physical identifier
+            // right, ONE line (the name's border appears only while
+            // editing; it's plain text the rest of the time)
             let nf = NSTextField()
             nf.placeholderString = "Unnamed Output"
             nf.font = GGTheme.nameFont
@@ -1505,22 +1527,29 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             nf.tag = 2050 + i
             nf.delegate = self
             nf.toolTip = "Destination name — click to rename"
-            col.addArrangedSubview(nf)
             nameFields.append(nf)
 
-            // physical output label (never hidden by custom naming) —
-            // supporting metadata, so it takes the muted tone
             let phys = NSTextField(labelWithString: InsertServer.pairNames[i])
             phys.font = GGTheme.labelFont
             phys.textColor = GGTheme.muted
-            col.addArrangedSubview(phys)
+            phys.setContentHuggingPriority(.required, for: .horizontal)
+            phys.setContentCompressionResistancePriority(.required, for: .horizontal)
             physLabels.append(phys)
 
-            // Source
-            let srcLbl = NSTextField(labelWithString: "Source")
-            srcLbl.font = GGTheme.labelFont
-            srcLbl.textColor = GGTheme.softGray
-            col.addArrangedSubview(srcLbl)
+            let headerRow = NSStackView()
+            headerRow.orientation = .horizontal
+            headerRow.alignment = .centerY
+            headerRow.spacing = 8
+            headerRow.translatesAutoresizingMaskIntoConstraints = false
+            headerRow.addArrangedSubview(nf)
+            let headerSpacer = NSView()
+            headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            headerRow.addArrangedSubview(headerSpacer)
+            headerRow.addArrangedSubview(phys)
+            col.addArrangedSubview(headerRow)
+            headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+
+            // Source — full-width native dropdown, no separate label
             let sp = NSPopUpButton()
             sp.target = self
             sp.action = #selector(sourceChanged(_:))
@@ -1532,9 +1561,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             sourcePopups.append(sp)
 
             // "Include" — the linked/mirrored-routing chip: system accent
-            // when engaged. Inside a CONSTANT-HEIGHT row: it hides for
-            // direct sources but the row keeps its height, so Processing
-            // and Trim stay aligned across all four strips.
+            // when engaged. Constant-height row (hidden for direct
+            // sources) keeps every strip's geometry identical.
             let inc = FunctionToggle(title: "Include", tag: 2200 + i,
                                      accent: GGTheme.accent,
                                      target: self, action: #selector(includeChanged(_:)))
@@ -1550,95 +1578,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(incRow)
             includeChecks.append(inc)
 
-            // Processing slot: enable switch + plug-in + Open + replace menu
-            let plugLbl = NSTextField(labelWithString: "Processing")
-            plugLbl.font = GGTheme.labelFont
-            plugLbl.textColor = GGTheme.softGray
-            col.addArrangedSubview(plugLbl)
-
-            let plugRow = NSStackView()
-            plugRow.orientation = .horizontal
-            plugRow.spacing = 6
-            plugRow.alignment = .centerY
-            plugRow.translatesAutoresizingMaskIntoConstraints = false
-
-            // small accent presence mark for an inserted plug-in
-            let dot = StatusDot(color: GGTheme.accent)
-            dot.isHidden = true
-            plugRow.addArrangedSubview(dot)
-            pluginDots.append(dot)
-
-            let en = FunctionSwitch(tag: 2400 + i, accent: GGTheme.accent,
-                                    target: self, action: #selector(enabledChanged(_:)))
-            en.toolTip = "Enable / bypass the plug-in"
-            plugRow.addArrangedSubview(en)
-            enabledChecks.append(en)
-
-            let pp = NSPopUpButton()
-            pp.target = self
-            pp.action = #selector(pluginChanged(_:))
-            pp.tag = 2300 + i
-            pp.font = NSFont.systemFont(ofSize: 11)
-            pp.controlSize = .small
-            pp.toolTip = "Add / replace / remove the plug-in"
-            plugRow.addArrangedSubview(pp)
-            pluginPopups.append(pp)
-
-            let open = NSButton(title: "Open", target: self,
-                                action: #selector(rowEditorOpened(_:)))
-            open.tag = 2450 + i
-            open.bezelStyle = .recessed
-            open.controlSize = .small
-            open.font = NSFont.systemFont(ofSize: 11)
-            plugRow.addArrangedSubview(open)
-            openButtons.append(open)
-
-            // No plug-in assigned: ONE neutral "Add Plug-in…" control (opens
-            // the same picker); enable switch + Open + picker stay hidden —
-            // never dead controls. addPluginButtons toggles in refresh().
-            let add = NSButton(title: "Add Plug-in…", target: self,
-                               action: #selector(addPluginClicked(_:)))
-            add.tag = 2500 + i
-            add.bezelStyle = .recessed
-            add.controlSize = .small
-            add.font = NSFont.systemFont(ofSize: 11)
-            plugRow.addArrangedSubview(add)
-            addPluginButtons.append(add)
-
-            // the processing well: a subtle recessed slot; an inserted
-            // plug-in reads as the picker + Open row with the accent dot
-            let slot = NSView()
-            slot.translatesAutoresizingMaskIntoConstraints = false
-            slot.wantsLayer = true
-            slot.layer?.backgroundColor = GGTheme.inset.cgColor
-            slot.layer?.cornerRadius = 6
-            slot.addSubview(plugRow)
-            // join the hierarchy BEFORE the slot↔col width constraint —
-            // cross-view constraints need a common ancestor (see headerRow)
-            col.addArrangedSubview(slot)
-            NSLayoutConstraint.activate([
-                plugRow.topAnchor.constraint(equalTo: slot.topAnchor, constant: 6),
-                plugRow.leadingAnchor.constraint(equalTo: slot.leadingAnchor, constant: 8),
-                plugRow.trailingAnchor.constraint(equalTo: slot.trailingAnchor, constant: -8),
-                plugRow.bottomAnchor.constraint(equalTo: slot.bottomAnchor, constant: -6),
-                slot.widthAnchor.constraint(equalTo: col.widthAnchor),
-                // fixed slot height: identical strips whether a plug-in
-                // exists or the slot shows the neutral Add control
-                slot.heightAnchor.constraint(equalToConstant: 32),
-            ])
-
-            // Output trim: the compact knob — value inside, green arc
-            // around; the red tint warns when the trim is boosted.
-            let trimRow = NSStackView()
-            trimRow.orientation = .horizontal
-            trimRow.spacing = 10
-            trimRow.alignment = .centerY
-            trimRow.translatesAutoresizingMaskIntoConstraints = false
-            let trimLbl = NSTextField(labelWithString: "Trim")
-            trimLbl.font = GGTheme.labelFont
-            trimLbl.textColor = GGTheme.softGray
-            trimRow.addArrangedSubview(trimLbl)
-
+            // BODY — trim knob left, two-row processing area right
             let tsl = GainKnob()
             tsl.minValue = -64
             tsl.maxValue = 6
@@ -1647,17 +1587,110 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tsl.action = #selector(trimSlid(_:))
             tsl.tag = 2600 + i
             tsl.sendsContinuously = true
-            tsl.widthAnchor.constraint(equalToConstant: 72).isActive = true
-            tsl.heightAnchor.constraint(equalToConstant: 72).isActive = true
+            tsl.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            tsl.heightAnchor.constraint(equalToConstant: 52).isActive = true
             trimKnobs.append(tsl)
 
             // precise entry — the old trim field's tag + delegate
             tsl.valueField.tag = 2650 + i
             tsl.valueField.delegate = self
 
-            trimRow.addArrangedSubview(tsl)
-            col.addArrangedSubview(trimRow)
-            trimRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            let trimCaption = NSTextField(labelWithString: "Trim")
+            trimCaption.font = GGTheme.labelFont
+            trimCaption.textColor = GGTheme.muted
+            let knobCol = NSStackView()
+            knobCol.orientation = .vertical
+            knobCol.alignment = .centerX
+            knobCol.spacing = 3
+            knobCol.translatesAutoresizingMaskIntoConstraints = false
+            knobCol.addArrangedSubview(tsl)
+            knobCol.addArrangedSubview(trimCaption)
+
+            // processing column — label, selector row, power + Open row
+            let procLbl = NSTextField(labelWithString: "Processing")
+            procLbl.font = GGTheme.labelFont
+            procLbl.textColor = GGTheme.softGray
+
+            let pp = NSPopUpButton()
+            pp.target = self
+            pp.action = #selector(pluginChanged(_:))
+            pp.tag = 2300 + i
+            pp.font = NSFont.systemFont(ofSize: 11)
+            pp.controlSize = .small
+            pp.toolTip = "Add / replace / remove the plug-in"
+            pluginPopups.append(pp)
+
+            // empty slot: the same row carries "Add Plug-in…" instead
+            let add = NSButton(title: "Add Plug-in…", target: self,
+                               action: #selector(addPluginClicked(_:)))
+            add.tag = 2500 + i
+            add.bezelStyle = .recessed
+            add.controlSize = .small
+            add.font = NSFont.systemFont(ofSize: 11)
+            addPluginButtons.append(add)
+
+            let row1 = NSStackView()
+            row1.orientation = .horizontal
+            row1.spacing = 0
+            row1.alignment = .centerY
+            row1.translatesAutoresizingMaskIntoConstraints = false
+            row1.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            row1.addArrangedSubview(pp)
+            row1.addArrangedSubview(add)
+
+            let power = PowerToggle(tag: 2400 + i, accent: GGTheme.accent,
+                                    target: self, action: #selector(enabledChanged(_:)))
+            power.toolTip = "Bypass processing."
+            power.setAccessibilityLabel("Enable processing")
+            enabledChecks.append(power)
+
+            let open = NSButton(title: "Open", target: self,
+                                action: #selector(rowEditorOpened(_:)))
+            open.tag = 2450 + i
+            open.bezelStyle = .recessed
+            open.controlSize = .small
+            open.font = NSFont.systemFont(ofSize: 11)
+            openButtons.append(open)
+
+            let row2 = NSStackView()
+            row2.orientation = .horizontal
+            row2.spacing = 6
+            row2.alignment = .centerY
+            row2.translatesAutoresizingMaskIntoConstraints = false
+            // fixed height: blank when the slot is empty, identical
+            // strip geometry either way
+            row2.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            row2.addArrangedSubview(power)
+            let row2Spacer = NSView()
+            row2Spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            row2.addArrangedSubview(row2Spacer)
+            row2.addArrangedSubview(open)
+
+            let procCol = NSStackView()
+            procCol.orientation = .vertical
+            procCol.alignment = .leading
+            procCol.spacing = 4
+            procCol.translatesAutoresizingMaskIntoConstraints = false
+            procCol.addArrangedSubview(procLbl)
+            procCol.addArrangedSubview(row1)
+            procCol.addArrangedSubview(row2)
+
+            let body = NSStackView()
+            body.orientation = .horizontal
+            body.spacing = 12
+            body.alignment = .top
+            body.translatesAutoresizingMaskIntoConstraints = false
+            body.addArrangedSubview(knobCol)
+            body.addArrangedSubview(procCol)
+            // join the hierarchy BEFORE cross-view constraints (common
+            // ancestor required at activation time)
+            col.addArrangedSubview(body)
+            body.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            procCol.widthAnchor.constraint(equalTo: body.widthAnchor,
+                                           constant: -(52 + 12)).isActive = true
+            row1.widthAnchor.constraint(equalTo: procCol.widthAnchor).isActive = true
+            pp.widthAnchor.constraint(equalTo: row1.widthAnchor).isActive = true
+            add.widthAnchor.constraint(equalTo: row1.widthAnchor).isActive = true
 
             strip.addArrangedSubview(card)
         }
@@ -1716,10 +1749,37 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private func makeMonitorGroup(_ o: Int) -> NSView {
         let heading: String = o == 0 ? "Main Speakers" : "Headphones"
-        let group = NSStackView()
-        group.orientation = .vertical
-        group.alignment = .leading
-        group.spacing = 6
+
+        // level knob (value inside) with the heading + glyph row beside it
+        let body = NSStackView()
+        body.orientation = .horizontal
+        body.spacing = 14
+        body.alignment = .top
+        body.translatesAutoresizingMaskIntoConstraints = false
+
+        let sl = GainKnob()
+        sl.minValue = AppDelegate.minDB
+        sl.maxValue = AppDelegate.maxDB
+        sl.doubleValue = 0
+        sl.target = self
+        sl.action = #selector(monSlid(_:))
+        sl.tag = 700 + o
+        sl.sendsContinuously = true
+        sl.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        sl.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        body.addArrangedSubview(sl)
+        monKnobs.append(sl)
+
+        // precise entry — the old level field's tag + delegate
+        sl.valueField.tag = 750 + o
+        sl.valueField.delegate = self
+
+        let right = NSStackView()
+        right.orientation = .vertical
+        right.alignment = .leading
+        right.spacing = 6
+        right.translatesAutoresizingMaskIntoConstraints = false
+        body.addArrangedSubview(right)
 
         let head = NSTextField(labelWithString: heading)
         head.font = GGTheme.nameFont
@@ -1735,51 +1795,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let headRow = NSStackView(views: [head, muteDot, badge])
         headRow.spacing = 8
         headRow.alignment = .centerY
-        group.addArrangedSubview(headRow)
+        right.addArrangedSubview(headRow)
 
-        // larger level knob (value inside) + Mute/DIM/SUM chips beside it
-        let body = NSStackView()
-        body.orientation = .horizontal
-        body.spacing = 16
-        body.alignment = .centerY
-        body.translatesAutoresizingMaskIntoConstraints = false
-
-        let sl = GainKnob()
-        sl.minValue = AppDelegate.minDB
-        sl.maxValue = AppDelegate.maxDB
-        sl.doubleValue = 0
-        sl.target = self
-        sl.action = #selector(monSlid(_:))
-        sl.tag = 700 + o
-        sl.sendsContinuously = true
-        sl.widthAnchor.constraint(equalToConstant: 88).isActive = true
-        sl.heightAnchor.constraint(equalToConstant: 88).isActive = true
-        body.addArrangedSubview(sl)
-        monKnobs.append(sl)
-
-        // precise entry — the old level field's tag + delegate
-        sl.valueField.tag = 750 + o
-        sl.valueField.delegate = self
-
-        let right = NSStackView()
-        right.orientation = .vertical
-        right.spacing = 6
-        right.translatesAutoresizingMaskIntoConstraints = false
-        body.addArrangedSubview(right)
-
-        // Mute / DIM / SUM — neutral at rest; red / amber / system
-        // accent flat fills when engaged.
+        // M / D / ∑ — equal square glyph buttons: Mute (coral red),
+        // DIM (amber), Sum to mono (system accent) when active; neutral
+        // dark gray at rest. Full names live in tooltips + accessibility.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
-        btnRow.spacing = 6
+        btnRow.spacing = 5
         btnRow.translatesAutoresizingMaskIntoConstraints = false
-        let mute = toggle("Mute", 800 + o, GGTheme.red)
+        let mute = glyphToggle("M", 800 + o, GGTheme.red, "Mute")
         btnRow.addArrangedSubview(mute)
         muteToggles.append(mute)
-        let dim = toggle("DIM", 900 + o, GGTheme.amber)
+        let dim = glyphToggle("D", 900 + o, GGTheme.amber, "DIM")
         btnRow.addArrangedSubview(dim)
         dimToggles.append(dim)
-        let mono = toggle("SUM", 1000 + o, GGTheme.accent)
+        let mono = glyphToggle("∑", 1000 + o, GGTheme.accent, "Sum to mono")
         btnRow.addArrangedSubview(mono)
         monoToggles.append(mono)
         right.addArrangedSubview(btnRow)
@@ -1793,8 +1824,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         right.addArrangedSubview(learn)
         monLearnButtons.append(learn)
 
-        group.addArrangedSubview(body)
-        return group
+        return body
     }
 
     // MARK: - actions (all clamped — bad ranges crash the unit)
@@ -2121,6 +2151,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         FunctionToggle(title: title, tag: tag, accent: accent, target: self,
                        action: tag >= 700 ? #selector(monToggleChanged(_:))
                                           : #selector(inputToggleChanged(_:)))
+    }
+
+    /// A compact square glyph button (M / D / ∑) — the monitor functions.
+    /// The visible title is a single letter; the full function name stays
+    /// in the tooltip + accessibility label.
+    private func glyphToggle(_ glyph: String, _ tag: Int,
+                             _ accent: NSColor, _ name: String) -> FunctionToggle {
+        let t = toggle(glyph, tag, accent)
+        t.titleFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+        t.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        t.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        t.toolTip = name
+        t.setAccessibilityLabel(name)
+        return t
     }
 
 
