@@ -53,6 +53,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         refresh()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // open at the TOP of the shortcuts table (doc is unflipped — its
+        // origin is the bottom edge, so top == bounds.maxY).
+        window?.contentView?.layoutSubtreeIfNeeded()
+        if let d = shortcutDoc {
+            d.scroll(NSPoint(x: 0, y: d.bounds.maxY))
+        }
     }
 
     /// Open straight to the Shortcuts pane.
@@ -209,6 +215,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             scroll.backgroundColor = .clear
             scroll.documentView = doc
             v.addSubview(scroll)
+            shortcutDoc = doc
             NSLayoutConstraint.activate([
                 scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
                 scroll.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 24),
@@ -217,7 +224,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 body.topAnchor.constraint(equalTo: doc.topAnchor),
                 body.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
                 body.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-                body.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+                // <= (NOT ==): the doc may stretch taller than the table
+                // (doc.height >= clip.height); an equality pin would drag
+                // the body to the doc's BOTTOM edge, opening the pane
+                // scrolled to the end. The stack hugs the TOP — same
+                // pattern as the control window's scroll area.
+                body.bottomAnchor.constraint(lessThanOrEqualTo: doc.bottomAnchor),
                 doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
                 // content fills at least the visible area, never a stub.
                 doc.heightAnchor.constraint(
@@ -244,6 +256,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     private var bodyViews: [Pane: NSStackView] = [:]
+    /// The Shortcuts table's document view (top-scroll on show).
+    private var shortcutDoc: NSView?
 
     /// Full-width divider (NSBox separators hug intrinsic width inside a
     /// .leading stack — pin them to the body's width explicitly).
