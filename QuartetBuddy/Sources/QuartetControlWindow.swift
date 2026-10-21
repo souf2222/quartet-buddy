@@ -57,7 +57,9 @@ enum GGTheme {
 
     // Function accents — flat fills when engaged, neutral otherwise.
 
-    /// Green — Soft Limit engaged (also the knob arc + meter hue).
+    /// Cyan — Soft Limit engaged.
+    static let cyan = hex("50D8F4")
+    /// Green — the knob arcs + healthy-signal meters.
     static let green = hex("46C58A")
     /// Amber — 48V + DIM engaged.
     static let amber = hex("E7AE49")
@@ -142,21 +144,6 @@ final class Hairline: NSView {
         heightAnchor.constraint(equalToConstant: 1).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-}
-
-/// A tiny status mark — the red "muted" dot, the accent "plug-in
-/// present" dot. Small hits of color, only where meaningful.
-final class StatusDot: NSView {
-    init(color: NSColor) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 5, height: 5))
-        wantsLayer = true
-        layer?.backgroundColor = color.cgColor
-        layer?.cornerRadius = 1.5
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentHuggingPriority(.required, for: .vertical)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    override var intrinsicContentSize: NSSize { NSSize(width: 5, height: 5) }
 }
 
 /// A compact horizontal signal meter: 20 square segments, green → amber →
@@ -397,6 +384,11 @@ class FunctionButton: NSButton {
     var accent: NSColor
     var hovering = false
     private var hoverArea: NSTrackingArea?
+
+    /// NSButton draws in a FLIPPED coordinate system (y grows downward);
+    /// our glyph math (the power symbol, arc angles) is written y-up like
+    /// the knob's. Draw y-up here — paths and centered text are unaffected.
+    override var isFlipped: Bool { false }
 
     init(tag: Int, accent: NSColor, target: AnyObject?, action: Selector) {
         self.accent = accent
@@ -649,14 +641,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
 
             // Mode-dependent controls: the preamp only applies in Mic /
-            // Instrument; the meter + knob hide at the line levels.
-            gainKnobs[i].isHidden = lineMode
-            meters[i].isHidden = lineMode
-            autoGainButtons[i].isHidden = lineMode
-            toggles48V[i].isHidden = lineMode || st.refLevel == 4
+            // Instrument mode. Instead of HIDING controls at the line
+            // levels, they stay in place GRAYED OUT — the strip never
+            // moves.
+            let preampActive = !lineMode
 
             let mineRunning = autoRunning.contains(i)
-            autoGainButtons[i].isEnabled = connected && !learning
+            autoGainButtons[i].isEnabled = preampActive && connected && !learning
                 && (mineRunning || autoRunning.isEmpty)
             // Auto Gain is an action, not a persistent state: neutral at
             // rest; while running it becomes a flat blue "Cancel" chip.
@@ -668,15 +659,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
-            gainKnobs[i].isEnabled = connected && !learning && micId != nil && instId != nil && autoRunning.isEmpty
+            gainKnobs[i].isEnabled = preampActive && connected && !learning
+                && micId != nil && instId != nil && autoRunning.isEmpty
             let shown: Double
             if st.refLevel == 4 { shown = st.instGain ?? st.micGain ?? 0 }
             else { shown = st.micGain ?? st.instGain ?? 0 }
             if gainKnobs[i].doubleValue != shown { gainKnobs[i].doubleValue = shown }
             gainKnobs[i].hasValue = st.micGain != nil || st.instGain != nil
 
+            // 48V applies to Mic mode only — visible but grayed elsewhere
             setToggle(toggles48V[i], st.phantom,
-                      enabled: connected && !learning && t.hwinPhantom[i] != nil)
+                      enabled: preampActive && st.refLevel != 4
+                          && connected && !learning && t.hwinPhantom[i] != nil)
             setToggle(softLimitToggles[i], st.softLimit,
                       enabled: connected && !learning && t.hwinSoftLimit[i] != nil)
             setToggle(polarityToggles[i], st.polarity,
@@ -729,19 +723,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let key = UserDefaults.standard.string(forKey: "insertPair.\(i).plugin") ?? ""
             plugPopup.selectItem(at: plugPopup.indexOfItem(withObjectValue: key).getOrElse { 0 })
 
-            // Processing slot: WITH a plug-in → power button + picker +
-            // Open. WITHOUT → one neutral "Add Plug-in…" control; the
-            // power button, picker and Open hide (never disabled/dead),
-            // and the fixed row heights keep every strip's layout
-            // identical.
+            // Processing slot: everything stays in place in both states —
+            // the power + Open buttons gray out when no plug-in is loaded
+            // (they never hide), the selector always shows ("None" = empty).
             let hasPlugin = server.pluginName(i) != nil
             enabledChecks[i].state = (server.enabled(i) && !server.bypassAll) ? .on : .off
             enabledChecks[i].isEnabled = hasPlugin
-            enabledChecks[i].isHidden = !hasPlugin
-            plugPopup.isHidden = !hasPlugin
             openButtons[i].isEnabled = hasPlugin
-            openButtons[i].isHidden = !hasPlugin
-            addPluginButtons[i].isHidden = hasPlugin
 
             let trim = server.trim(i)
             if trimKnobs[i].doubleValue != trim { trimKnobs[i].doubleValue = trim }
@@ -767,11 +755,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
             setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil)
 
-            // Mute gets the clearest active state: filled red button,
-            // a red "Muted" badge and its dot — the section itself
-            // never turns red.
-            mutedBadges[o]?.isHidden = !(st.mute ?? false)
-            mutedDots[o].isHidden = !(st.mute ?? false)
+            // Mute's clearest active state: the red M glyph itself — no
+            // extra badge or dot.
             let missing = missingMonitorTargets(o)
             monLearnButtons[o].isHidden = missing.isEmpty && !isLearning
             monLearnButtons[o].isEnabled = (learning && learningColumn == .monitor(o)) || !missing.isEmpty
@@ -990,7 +975,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var pluginPopups: [NSPopUpButton] = []
     private var enabledChecks: [NSButton] = []
     private var openButtons: [NSButton] = []
-    private var addPluginButtons: [NSButton] = []
     private var trimKnobs: [GainKnob] = []
 
     // monitor strip (index 0 = Main Speakers, 1 = Headphones)
@@ -999,8 +983,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var dimToggles: [NSButton] = []
     private var monoToggles: [NSButton] = []
     private var monLearnButtons: [NSButton] = []
-    private var mutedBadges: [NSTextField?] = []
-    private var mutedDots: [StatusDot] = []
 
     private var statusField: NSTextField!
     private var subtitleField: NSTextField!
@@ -1430,7 +1412,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             ag.heightAnchor.constraint(equalToConstant: 24).isActive = true
             autoGainButtons.append(ag)
 
-            // one compact row of toggles — 48V / SL / Ø (amber / green /
+            // one compact row of toggles — 48V / SL / Ø (amber / cyan /
             // system accent when engaged; small intrinsic chips).
             let row = NSStackView()
             row.orientation = .horizontal
@@ -1440,7 +1422,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tv.toolTip = "+48V phantom power"
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("SL", 400 + i, GGTheme.green)
+            let soft = toggle("SL", 400 + i, GGTheme.cyan)
             soft.toolTip = "Soft Limit"
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
@@ -1459,15 +1441,24 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // Auto Gain spans exactly the width of the three chips below
             ag.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
 
+            // the knob + button block is HORIZONTALLY CENTERED in the box
             let controlRow = NSStackView()
             controlRow.orientation = .horizontal
             controlRow.alignment = .centerY
             controlRow.spacing = 14
             controlRow.translatesAutoresizingMaskIntoConstraints = false
+            let leadSpacer = NSView()
+            leadSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            controlRow.addArrangedSubview(leadSpacer)
             controlRow.addArrangedSubview(knob)
             controlRow.addArrangedSubview(right)
-            // hugs its content — the knob block defines the height
+            let trailSpacer = NSView()
+            trailSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            controlRow.addArrangedSubview(trailSpacer)
+            // equal flexible margins → the content centers
+            leadSpacer.widthAnchor.constraint(equalTo: trailSpacer.widthAnchor).isActive = true
             col.addArrangedSubview(controlRow)
+            controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
             // learn fallback (only when ids are missing)
             let lb = NSButton(title: "Learn…", target: self, action: #selector(learnClicked(_:)))
@@ -1624,7 +1615,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             knobCol.addArrangedSubview(tsl)
             knobCol.addArrangedSubview(trimCaption)
 
-            // processing column — label, selector row, power + Open row
+            // processing column — label, plug-in selector, power + Open.
+            // Everything stays in place in BOTH states: the selector
+            // always shows (None = the empty slot — picking a plug-in
+            // adds it), and the power + Open buttons gray out instead of
+            // hiding when no plug-in is loaded.
             let procLbl = NSTextField(labelWithString: "Processing")
             procLbl.font = GGTheme.labelFont
             procLbl.textColor = GGTheme.softGray
@@ -1637,24 +1632,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             pp.controlSize = .small
             pp.toolTip = "Add / replace / remove the plug-in"
             pluginPopups.append(pp)
-
-            // empty slot: the same row carries "Add Plug-in…" instead
-            let add = NSButton(title: "Add Plug-in…", target: self,
-                               action: #selector(addPluginClicked(_:)))
-            add.tag = 2500 + i
-            add.bezelStyle = .recessed
-            add.controlSize = .small
-            add.font = NSFont.systemFont(ofSize: 11)
-            addPluginButtons.append(add)
-
-            let row1 = NSStackView()
-            row1.orientation = .horizontal
-            row1.spacing = 0
-            row1.alignment = .centerY
-            row1.translatesAutoresizingMaskIntoConstraints = false
-            row1.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            row1.addArrangedSubview(pp)
-            row1.addArrangedSubview(add)
 
             let power = PowerToggle(tag: 2400 + i, accent: GGTheme.accent,
                                     target: self, action: #selector(enabledChanged(_:)))
@@ -1675,9 +1652,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             row2.spacing = 6
             row2.alignment = .centerY
             row2.translatesAutoresizingMaskIntoConstraints = false
-            // fixed height: blank when the slot is empty, identical
-            // strip geometry either way
-            row2.heightAnchor.constraint(equalToConstant: 24).isActive = true
             row2.addArrangedSubview(power)
             let row2Spacer = NSView()
             row2Spacer.setContentHuggingPriority(.init(1), for: .horizontal)
@@ -1690,25 +1664,24 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             procCol.spacing = 4
             procCol.translatesAutoresizingMaskIntoConstraints = false
             procCol.addArrangedSubview(procLbl)
-            procCol.addArrangedSubview(row1)
+            procCol.addArrangedSubview(pp)
             procCol.addArrangedSubview(row2)
 
+            // the trim knob comes AFTER the plug-in area
             let body = NSStackView()
             body.orientation = .horizontal
             body.spacing = 12
             body.alignment = .top
             body.translatesAutoresizingMaskIntoConstraints = false
-            body.addArrangedSubview(knobCol)
             body.addArrangedSubview(procCol)
+            body.addArrangedSubview(knobCol)
             // join the hierarchy BEFORE cross-view constraints (common
             // ancestor required at activation time)
             col.addArrangedSubview(body)
             body.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             procCol.widthAnchor.constraint(equalTo: body.widthAnchor,
                                            constant: -(52 + 12)).isActive = true
-            row1.widthAnchor.constraint(equalTo: procCol.widthAnchor).isActive = true
-            pp.widthAnchor.constraint(equalTo: row1.widthAnchor).isActive = true
-            add.widthAnchor.constraint(equalTo: row1.widthAnchor).isActive = true
+            pp.widthAnchor.constraint(equalTo: procCol.widthAnchor).isActive = true
 
             strip.addArrangedSubview(card)
         }
@@ -1802,18 +1775,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let head = NSTextField(labelWithString: heading)
         head.font = GGTheme.nameFont
         head.textColor = GGTheme.primary
-        let badge = NSTextField(labelWithString: "Muted")
-        badge.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
-        badge.textColor = GGTheme.red
-        badge.isHidden = true
-        mutedBadges.append(badge)
-        let muteDot = StatusDot(color: GGTheme.red)
-        muteDot.isHidden = true
-        mutedDots.append(muteDot)
-        let headRow = NSStackView(views: [head, muteDot, badge])
-        headRow.spacing = 8
-        headRow.alignment = .centerY
-        right.addArrangedSubview(headRow)
+        right.addArrangedSubview(head)
 
         // M / D / ∑ — equal square glyph buttons: Mute (coral red),
         // DIM (amber), Sum to mono (system accent) when active; neutral
@@ -2036,12 +1998,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     @objc private func rowEditorOpened(_ sender: NSButton) {
         InsertServer.shared.showPluginUI(sender.tag - 2450)
-    }
-
-    /// "Add Plug-in…" — opens the same picker (popup's menu) at the slot.
-    @objc private func addPluginClicked(_ sender: NSButton) {
-        let i = sender.tag - 2500
-        pluginPopups[i].performClick(nil)
     }
 
     /// Output-trim knob (tag = 2600 + pair) — whole-number steps.
