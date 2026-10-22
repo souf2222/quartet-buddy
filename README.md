@@ -15,9 +15,13 @@ routing) and everything stays in sync.
 
 ## Screenshots
 
-![Quartet Buddy](docs/screenshots/screenshot-1.jpg)
+**Quartet Control** — one window for everything: inputs (level mode, preamp
+gain, 48V, soft limit) → outputs & routing (source, plug-in insert, trim) →
+the persistent monitor bar (Speakers · Headphones with their M/D/∑ chips),
+plus the live sample-rate readout — and clicking the menubar Apogee logo
+toggles it.
 
-![Quartet Buddy](docs/screenshots/screenshot-2.jpg)
+![Quartet Buddy — Quartet Control](docs/screenshots/screenshot-3.jpg)
 
 ## Features
 
@@ -26,13 +30,14 @@ routing) and everything stays in sync.
 | **Native volume keys** | F11/F12 (and the volume HUD, ⌥-fine steps — everything) behave exactly like any Mac: they drive the macOS volume slider, which is **bound to the Quartet's real analog fader**. Key presses move the fader; fader moves (Apogee Control 2, the touchscreen) move the slider — always in sync, both directions. |
 | **macOS slider binding** | The slider macOS shows for the Quartet is a pure display (verified: writing it changes no audio) — Quartet Buddy is the bridge that makes it real. Drag it in System Settings → Sound / Control Center and the Quartet follows; 100% ⇔ 0 dB, 0% ⇔ −64 dB. |
 | **Native mute key** | F10 (and the Control Center mute icon) toggle the selected output's hardware mute. One-way by necessity: writing the OS mute control wedges the Apogee driver, so mutes done in Apogee Control 2 / on the touchscreen don't update the macOS mute display. |
-| **Volume target** | Choose **Main Out** or **Headphones** for the binding — via the menu, or a **system-wide switch hotkey**. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
+| **Volume target** | Choose **Main Out** or **Headphones** for the binding — a **system-wide switch hotkey** (recorded in Settings ▸ Shortcuts) or the next/previous-output shortcuts. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
-| **Live status** | Menubar tooltip + menu show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
+| **Live status** | The menubar tooltip and the Quartet Control window show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 | **AU insert** | Run any AU plugin independently on each of the Quartet's 4 stereo pairs, with per-pair routing (own playback / mirror another pair with a selectable tap point on its chain — Pre-FX / Post-FX / Post-Trim / silence) in the Quartet Control window. No loopback driver, no default-device switch, volume keys unaffected. See [`docs/au-insert.md`](docs/au-insert.md`). |
 | **Quartet Control** | One unified audio-control window (the old "Quartet Console" + "Outputs & Plug-ins" merged) with an explicit signal flow: **inputs → outputs & routing → monitor**. Per analog input — analog level (Mic / +4 dBu / −10 dBV / Instrument), preamp gain (mic and instrument keep their own values — the slider edits the active mode's; hidden at the line levels), signal meter, +48V (Mic only), soft limit, polarity. Per stereo output pair — destination name, source (a grouped menu whose second section picks where the signal is taken from a mirrored source's chain: Pre-FX / Post-FX / Post-Trim), processing slot (enable / open / replace), output trim. A persistent bottom strip keeps Main Speakers + Headphones monitor level, mute, dim, mono always visible while the rest scrolls. Reads are always live (tree poll); **write ids are computed from the device serial via the cracked descriptor hash** (see [`docs/protocol-notes.md`](docs/protocol-notes.md)) — every control works on any Quartet, no setup, no capture. |
-| **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug) — and the menu header tells you why ("Quartet Not Connected" / "Glue Offline"). |
+| **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug), and the Quartet Control window flags what's unreachable ("Quartet Not Connected" / "Glue Offline"). |
+| **Quick-control panel** | An optional floating, titlebar-free strip with the essentials — monitor knobs with their M/D/∑ chips, talkback and mute-all tiles — toggled by a configurable global hotkey (default ⌥C). Clicking the menubar Apogee logo toggles the full Quartet Control window; ⌘P pins/unpins it while it's focused. All keyboard shortcuts are configurable in Settings ▸ Shortcuts. |
 
 No media keys are ever intercepted — macOS handles the volume keys and F10
 natively, on whatever device is the current output (your MacBook speakers
@@ -67,19 +72,21 @@ to the Quartet's hardware.
 > registration survives every rebuild; without it, it falls back to ad-hoc
 > signing.
 
-**Launch at Login** is a menu toggle. Your choice is remembered, and if the
-registration ever goes missing (app moved/renamed), the app re-registers
-itself automatically on the next launch.
+**Launch at Login** is a checkbox in Settings ▸ General. Your choice is
+remembered, and if the registration ever goes missing (app moved/renamed),
+the app re-registers itself automatically on the next launch.
 
 ### Setup
 
-- **Volume target:** *Volume Target →* Main Out / Headphones (or record a
-  switch hotkey) — what the macOS slider binding controls. Resets to Main Out
-  whenever the app launches or the Quartet (re)connects.
-- **AU insert:** *Start Plug-in Insert* in the menubar menu turns the insert
-  (and its routing window) on and is remembered across launches.
-- **New Quartet:** plug it in and the **Setup wizard opens by itself** (or
-  menubar → *Setup New Quartet…*). Path-ids are hashed per device serial, so
+- **Volume target:** record a switch hotkey in Settings ▸ Shortcuts (or use
+  the next/previous-output shortcuts) — what the macOS slider binding
+  controls. Resets to Main Out whenever the app launches or the Quartet
+  (re)connects.
+- **AU insert:** Settings ▸ Plug-ins ▸ *Plug-in insert active* turns the
+  insert on; routing and the processing slots live in the Quartet Control
+  window's **Outputs & Routing** section.
+- **New Quartet:** plug it in and the **setup wizard opens by itself**.
+  Path-ids are hashed per device serial, so
   each physical Quartet needs its ids captured once: follow 5 steps (move the
   Main Out fader, the HP fader, toggle each mute, toggle dim) — the wizard
   listens to the glue stream, captures each id live and saves it to
@@ -134,16 +141,12 @@ QuartetBuddy/build.sh        build + sign + bundle
   cable/port; the icon returns to full color the moment it's seen again.
 - **Volume keys do nothing on the Quartet** — the keys drive the macOS
   slider, and the app carries its level to the Quartet, so the bridge must
-  be up: check the menu header — "Glue Offline" means the app can't reach
-  the Quartet (Apogee Control 2 / its daemon not running; it auto-reconnects
+  be up (Apogee Control 2 / its daemon not running → the app auto-reconnects
   every 3 s). And the Quartet must be the current output device — with any
   other device selected, the keys adjust that device instead (native macOS
   behavior).
-- **Menu header shows "Glue Offline"** — ApogeeGlue isn't running (Apogee
-  Control 2 not installed/running). The app auto-reconnects every 3 s; there's
-  also a *Reconnect* menu item.
-- Everything logs to `~/Library/Logs/QuartetBuddy.log` (menu: *Advanced →
-  Open Debug Log…*) — every slider move, mute change, and write is recorded.
+- Everything logs to `~/Library/Logs/QuartetBuddy.log` (Settings ▸ General ▸
+  *Open Debug Log…*) — every slider move, mute change, and write is recorded.
 - **MIDI learn finds nothing** — the keyboard must be plugged into the
   Quartet's MIDI port (CoreMIDI source named "Quartet"); it won't see USB
   keyboards connected directly to the Mac.
