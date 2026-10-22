@@ -21,7 +21,7 @@ the persistent monitor bar (Speakers · Headphones with their M/D/∑ chips),
 plus the live sample-rate readout — and clicking the menubar Apogee logo
 toggles it.
 
-![Quartet Buddy — Quartet Control](docs/screenshots/screenshot-3.jpg)
+![Quartet Buddy — Quartet Control](docs/screenshots/screenshot-3.jpeg)
 
 ## Features
 
