@@ -236,37 +236,118 @@ enum GGSpace {
 /// thin accent marker beside the strip's header (see updateCardHighlights).
 final class CardView: NSView {}
 
-/// A discreet "pinned" indicator — a small pushpin glyph that appears
-/// ONLY while the control panel is pinned (⌘P). Quiet: soft gray ink,
-/// no fill, no glow — obvious at a glance, never shouting.
-final class PinIndicatorView: NSView {
+/// Pin — a compact STATE TOGGLE that sits BESIDE the utility tray (its
+/// own footprint, not inside it): clicking it (or ⌘P) floats the window
+/// above ordinary ones. The two states are unmistakable —
+///   unpinned → an OUTLINED pushpin on the classic 45° diagonal, muted
+///              gray on a transparent bed (a neutral lift on hover);
+///   pinned   → the bundled upright pushpin art, filled, control-accent
+///              blue on a subtle blue-tinted bed with a restrained blue
+///              border — visible WITHOUT hover.
+/// Same 32-pt chip and corner treatment as the neighboring utility
+/// buttons, with a smaller glyph; the footprint never changes between
+/// the states.
+final class PinIconButton: IconButton {
 
-    var isPinned = false { didSet { needsDisplay = true } }
+    var isPinned: Bool {
+        get { isEnabled && state == .on }
+        set { state = newValue ? .on : .off }
+    }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 12, height: 16) }
+    private func refreshTooltip() {
+        toolTip = (state == .on)
+            ? "Window stays on top — click to unpin"
+            : "Keep window on top"
+    }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        toolTip = "Pinned · ⌘P"
+    override var state: NSControl.StateValue {
+        didSet { needsDisplay = true; refreshTooltip() }
+    }
+
+    init(tag: Int, target: AnyObject?, action: Selector) {
+        super.init(tag: tag, accent: GGTheme.accent, target: target, action: action)
+        refreshTooltip()
+        setAccessibilityLabel("Pin window on top")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isPinned else { return }
+        let pinned = state == .on
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        if pinned {
+            // the SELECTED look: subtle blue bed + restrained blue
+            // border — steady, shown whether or not the pointer is here
+            GGTheme.accent.withAlphaComponent(0.16).setFill()
+            path.fill()
+            GGTheme.accent.withAlphaComponent(0.45).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        } else if hovering {
+            // transparent at rest; a brief neutral lift on hover only
+            GGTheme.hoverFill.setFill()
+            path.fill()
+        }
+        drawGlyph(color: pinned ? GGTheme.accent : GGTheme.softGray)
+    }
+
+    override func drawGlyph(color: NSColor) {
+        if state == .on {
+            // PINNED — the bundled filled art stood upright (+45° puts
+            // its shipped 45°-tilt vertical: needle down), slightly
+            // smaller than the utility icons, vertically centered
+            GGIconAsset.drawRotated("push-pin", degrees: 45, tint: color,
+                                    in: bounds.insetBy(dx: 9.5, dy: 9.5))
+            if GGIconAsset.tinted("push-pin", color) != nil { return }
+            drawVectorPin(color: color, filled: true)
+        } else {
+            // UNPINNED — the same silhouette as a thin OUTLINE, back on
+            // the art's 45° diagonal (needle to the lower left)
+            drawVectorPin(color: color, filled: false)
+        }
+    }
+
+    /// The pushpin as a vector fallback (also the unpinned OUTLINE):
+    /// ring head, angled shoulders, tapered needle — in an UPRIGHT
+    /// local frame, rotated −45° for the rest pose. Same silhouette in
+    /// both states, so the shape change (none) is never the message —
+    /// the color treatment is.
+    private func drawVectorPin(color: NSColor, filled: Bool) {
+        let u = bounds.height / 32
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
-        GGTheme.softGray.setStroke()
-        GGTheme.softGray.setFill()
-        // the pin's head — a small solid disc
-        NSBezierPath(ovalIn: NSRect(x: c.x - 3, y: c.y + 1,
-                                    width: 6, height: 6)).fill()
-        // the needle — a thin stroke straight down
-        let needle = NSBezierPath()
-        needle.move(to: NSPoint(x: c.x, y: c.y + 1))
-        needle.line(to: NSPoint(x: c.x, y: c.y - 6))
-        needle.lineWidth = 1.4
-        needle.lineCapStyle = .round
-        needle.stroke()
+        NSGraphicsContext.saveGraphicsState()
+        let tr = NSAffineTransform()
+        tr.translateX(by: c.x, yBy: c.y)
+        tr.rotate(byDegrees: -45)
+        tr.translateX(by: -c.x, yBy: -c.y)
+        tr.concat()
+        // UPRIGHT local silhouette (y-up, stylized units):
+        //   top of body → left wing tip → waist → needle tip (mirrored)
+        let body = NSBezierPath()
+        body.move(to: NSPoint(x: c.x - 1.5 * u, y: c.y + 2.6 * u))
+        body.line(to: NSPoint(x: c.x - 4.2 * u, y: c.y + 0.6 * u))  // angled shoulder
+        body.line(to: NSPoint(x: c.x - 1.2 * u, y: c.y - 1.0 * u))
+        body.line(to: NSPoint(x: c.x, y: c.y - 7.4 * u))            // needle
+        body.line(to: NSPoint(x: c.x + 1.2 * u, y: c.y - 1.0 * u))
+        body.line(to: NSPoint(x: c.x + 4.2 * u, y: c.y + 0.6 * u))  // angled shoulder
+        body.line(to: NSPoint(x: c.x + 1.5 * u, y: c.y + 2.6 * u))
+        body.close()
+        let head = NSBezierPath(ovalIn: NSRect(x: c.x - 2.9 * u, y: c.y + 1.9 * u,
+                                               width: 5.8 * u, height: 5.4 * u))
+        if filled {
+            color.setFill()
+            body.fill()
+            head.fill()
+        } else {
+            color.setStroke()
+            body.lineWidth = 1.3 * u
+            body.lineCapStyle = .round
+            body.lineJoinStyle = .round
+            body.stroke()
+            head.lineWidth = 1.3 * u
+            head.stroke()
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -371,6 +452,23 @@ enum GGIconAsset {
         let scale = min(rect.width / s.width, rect.height / s.height)
         let w = s.width * scale, h = s.height * scale
         icon.draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+    }
+
+    /// Aspect-fit tinted draw, ROTATED by degrees about `rect`'s center.
+    /// For the bundled push-pin art, which ships on a 45° diagonal
+    /// (head upper-right, needle lower-left) and is stood upright when
+    /// the window is pinned.
+    static func drawRotated(_ name: String, degrees: Double, tint: NSColor,
+                            in rect: NSRect) {
+        guard tinted(name, tint) != nil else { return }
+        NSGraphicsContext.saveGraphicsState()
+        let tr = NSAffineTransform()
+        tr.translateX(by: rect.midX, yBy: rect.midY)
+        tr.rotate(byDegrees: CGFloat(degrees))
+        tr.translateX(by: -rect.midX, yBy: -rect.midY)
+        tr.concat()
+        draw(name, tint: tint, in: rect)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -2640,12 +2738,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         pinned = !pinned
     }
 
-    /// Apply the current pin state to the window + indicator:
+    /// Apply the current pin state to the window + toggle:
     ///   pinned   → floats above ordinary app windows (no forced focus)
     ///   unpinned → normal level; the window hides on outside focus loss
     private func applyPinState() {
         window?.level = pinned ? .floating : .normal
-        pinIndicator?.isPinned = pinned
+        pinButton?.isPinned = pinned
     }
 
     /// TEMPORARY-panel behavior: an UNPINNED panel hides when the focus
@@ -3286,7 +3384,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// The scroll area's document view (top-scroll on open).
     private var scrollDoc: NSView?
     /// The monitor bar's pin indicator (the panel's pinned state).
-    private var pinIndicator: PinIndicatorView?
+    private var pinButton: PinIconButton?
 
     // MARK: keyboard-shortcut selection state (see extension at file end)
 
@@ -3627,11 +3725,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         ])
         row.addArrangedSubview(tray)
 
-        // the PIN indicator — discreet, at the row's very end (visible
-        // only while the panel is pinned; toggled by ⌘P)
-        let pin = PinIndicatorView(frame: .zero)
+        // the PIN toggle — its own footprint just OUTSIDE the tray's
+        // utility group (a small, consistent gap), vertically centered
+        // with it. Click (or ⌘P) flips the window's floating behavior.
+        let pinGap = NSView()
+        pinGap.translatesAutoresizingMaskIntoConstraints = false
+        pinGap.widthAnchor.constraint(equalToConstant: 9).isActive = true
+        row.addArrangedSubview(pinGap)
+
+        let pin = PinIconButton(tag: 0, target: self,
+                                action: #selector(pinClicked(_:)))
         row.addArrangedSubview(pin)
-        pinIndicator = pin
+        pinButton = pin
 
         bar.addSubview(row)
         let divider = Hairline()
@@ -4534,6 +4639,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     @objc private func settingsClicked(_ sender: NSButton) {
         onOpenSettings?()
+    }
+
+    /// The pin toggle: flips the window's floating state in place — the
+    /// window neither hides nor moves, and the button's selected state
+    /// paints from the SAME `pinned` flag ⌘P drives.
+    @objc private func pinClicked(_ sender: NSButton) {
+        togglePinned()
     }
 
     /// The input-mode menu items (refLevel values → labels).
