@@ -238,15 +238,15 @@ final class CardView: NSView {}
 
 /// Pin — a compact STATE TOGGLE that sits BESIDE the utility tray (its
 /// own footprint, not inside it): clicking it (or ⌘P) floats the window
-/// above ordinary ones. The two states are unmistakable —
+/// above ordinary ones. Same 32-pt chip, corner treatment and rest
+/// treatment (neutral dark bed + subtle border) as the individual
+/// utility buttons, with a slightly smaller glyph; the footprint is
+/// identical in both states —
 ///   unpinned → an OUTLINED pushpin on the classic 45° diagonal, muted
-///              gray on a transparent bed (a neutral lift on hover);
+///              gray on the neutral dark bed;
 ///   pinned   → the bundled upright pushpin art, filled, control-accent
 ///              blue on a subtle blue-tinted bed with a restrained blue
 ///              border — visible WITHOUT hover.
-/// Same 32-pt chip and corner treatment as the neighboring utility
-/// buttons, with a smaller glyph; the footprint never changes between
-/// the states.
 final class PinIconButton: IconButton {
 
     var isPinned: Bool {
@@ -276,17 +276,25 @@ final class PinIconButton: IconButton {
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
         if pinned {
-            // the SELECTED look: subtle blue bed + restrained blue
-            // border — steady, shown whether or not the pointer is here
+            // SELECTED: subtle blue bed + restrained blue border — steady;
+            // shown whether or not the pointer is here. (Keyboard focus is
+            // a SEPARATE, system-level exterior ring — see FunctionButton —
+            // so the blue border never reads as focus.)
             GGTheme.accent.withAlphaComponent(0.16).setFill()
             path.fill()
             GGTheme.accent.withAlphaComponent(0.45).setStroke()
             path.lineWidth = 1
             path.stroke()
-        } else if hovering {
-            // transparent at rest; a brief neutral lift on hover only
-            GGTheme.hoverFill.setFill()
+        } else {
+            // REST: the inactive utility buttons' own treatment — neutral
+            // dark fill with the same subtle border — so the toggle reads
+            // as part of the toolbar, not a loose attachment; hover gets
+            // the shared lift.
+            (hovering ? GGTheme.hoverFill : GGTheme.idleFill).setFill()
             path.fill()
+            GGTheme.idleBorder.setStroke()
+            path.lineWidth = 1
+            path.stroke()
         }
         drawGlyph(color: pinned ? GGTheme.accent : GGTheme.softGray)
     }
@@ -294,10 +302,11 @@ final class PinIconButton: IconButton {
     override func drawGlyph(color: NSColor) {
         if state == .on {
             // PINNED — the bundled filled art stood upright (+45° puts
-            // its shipped 45°-tilt vertical: needle down), slightly
-            // smaller than the utility icons, vertically centered
+            // its shipped 45°-tilt vertical: needle down). A nudge under
+            // the Settings gear's 18 pt box — similar ink weight, never
+            // the loudest icon in the row.
             GGIconAsset.drawRotated("push-pin", degrees: 45, tint: color,
-                                    in: bounds.insetBy(dx: 9.5, dy: 9.5))
+                                    in: bounds.insetBy(dx: 8.5, dy: 8.5))
             if GGIconAsset.tinted("push-pin", color) != nil { return }
             drawVectorPin(color: color, filled: true)
         } else {
@@ -3730,7 +3739,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // with it. Click (or ⌘P) flips the window's floating behavior.
         let pinGap = NSView()
         pinGap.translatesAutoresizingMaskIntoConstraints = false
-        pinGap.widthAnchor.constraint(equalToConstant: 9).isActive = true
+        pinGap.widthAnchor.constraint(equalToConstant: 8).isActive = true
         row.addArrangedSubview(pinGap)
 
         let pin = PinIconButton(tag: 0, target: self,
@@ -3770,7 +3779,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.alignment = .centerX
         stack.spacing = GGSpace.related
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 6, right: 0)
+        // END MARGIN: the routing section's last row gets real clearance
+        // above the monitor bar — the same outer-section padding the
+        // Inputs section enjoys at its own boundaries (the old 6 pt left
+        // the strips glued to the bottom strip's edge).
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: GGSpace.section, right: 0)
         doc.addSubview(stack)
 
         // INPUTS section header: title only — the Auto Gain Target /
