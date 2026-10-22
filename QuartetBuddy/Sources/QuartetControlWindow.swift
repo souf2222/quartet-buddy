@@ -1017,6 +1017,13 @@ final class GainKnob: NSControl {
     }
 
     // MARK: mouse (vertical drag; ⇧ = slow; ⌘ = zero; double-click → type)
+    /// True while the pointer DRAGS the knob (mouseDown runs its own
+    /// synchronous event loop until release). Observers get onDragChange
+    /// at both the start and the end — scroll/keyboard steps never flip
+    /// it.
+    private(set) var isDragging = false
+    var onDragChange: ((GainKnob, Bool) -> Void)?
+
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
         // ⌘-CLICK — reset to zero (the same path a typed 0 takes).
@@ -1030,6 +1037,12 @@ final class GainKnob: NSControl {
             return
         }
         var lastY = event.locationInWindow.y
+        isDragging = true
+        onDragChange?(self, true)
+        defer {
+            isDragging = false
+            onDragChange?(self, false)
+        }
         var keep = true
         while keep {
             guard let ev = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { break }
@@ -1729,14 +1742,12 @@ final class PluginSlotView: NSControl {
     private var hasPlugin: Bool { pluginName != nil }
     /// While the strip's TRIM is being adjusted (drag/scroll/typing), the
     /// dropdown's ENTIRE content is temporarily replaced by the trim's dB
-    /// number — the plug-in name (or "Add Plug-in…") returns when the
-    /// adjustment ends. nil = show the normal content.
+    /// number — centered across the full field: no plug-in name, no
+    /// "Add Plug-in…", no chevron, nothing else. nil = the normal content,
+    /// which returns on its own (800 ms after the last adjustment; a drag
+    /// holds the readout until the pointer is released). Display-only: it
+    /// never touches the loaded plug-in.
     var overrideText: String? { didSet { namePaint.needsDisplay = true } }
-    /// The strip's TRIM readout — RIGHT-ALIGNED inside the dropdown,
-    /// before the divider: "[ ARC X        −4.3 dB │ ⌄ ]". Display-only:
-    /// turning the small knob beside the slot updates it; it is NOT a
-    /// plug-in parameter. Empty = hidden (while no trim is known).
-    var trimText: String = "" { didSet { namePaint.needsDisplay = true } }
     /// Chip geometry — the SHARED dropdown height (36 pt): the slot and
     /// the small trim knob beside it share ONE height (the knob's whole
     /// diameter), like every other dropdown.
@@ -1828,6 +1839,18 @@ final class PluginSlotView: NSControl {
     // MARK: the name layer (normal state)
 
     private func drawName(_ rect: NSRect) {
+        // THE TRIM'S TEMPORARY READOUT — while the knob beside the field
+        // is adjusted, the field's ENTIRE content is replaced: only the
+        // live trim value in dB, centered horizontally + vertically. No
+        // plug-in name, no "Add Plug-in…", no chevron, no separator. The
+        // field itself (size, fill, border, position) is untouched, so
+        // nothing shifts, and the normal content returns when the
+        // adjustment ends.
+        if let o = overrideText {
+            drawCentered(o, in: rect, color: GGTheme.primary)
+            return
+        }
+
         // NO vertical divider — the chevron area separates itself by
         // alignment alone
         let dx = rect.maxX - SourceMenuButton.chevronArea
@@ -1835,35 +1858,13 @@ final class PluginSlotView: NSControl {
         let cx = dx + SourceMenuButton.chevronArea / 2
         drawChevronGlyph(in: NSPoint(x: cx, y: rect.midY), color: GGTheme.muted)
 
-        // the TRIM readout — RIGHT-aligned inside the field, before the
-        // chevron area: "[ ARC X            −4.3 dB  ⌄ ]". Present for
-        // EMPTY slots too (output trim is independent of the plug-in);
-        // while the trim is being ADJUSTED, it brightens (overrideText).
-        let trimColor: NSColor = overrideText != nil ? GGTheme.primary : GGTheme.softGray
-        let trimShown = overrideText ?? (trimText.isEmpty ? nil : trimText)
-        if let trim = trimShown {
-            let para = NSMutableParagraphStyle()
-            para.alignment = .right
-            let attr = NSAttributedString(string: trim, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: trimColor,
-                .paragraphStyle: para,
-            ])
-            let tr = NSRect(x: dx - 58, y: 0, width: 50, height: rect.height)
-            let h = ceil(attr.size().height)
-            attr.draw(in: NSRect(x: tr.minX, y: tr.midY - h / 2,
-                                 width: tr.width, height: h))
-        }
-
         // the content: the plug-in's name (or the empty slot's
         // "Add Plug-in…" invitation), left-aligned — truncated only when
-        // necessary, never pushing the trim readout or chevron.
+        // necessary. No permanent trim label: the trim value appears in
+        // this field ONLY while it is being adjusted (overrideText).
         let title: String
         let color: NSColor
-        if let o = overrideText {
-            title = o
-            color = GGTheme.primary
-        } else if let name = pluginName {
+        if let name = pluginName {
             title = name
             color = processingEnabled ? GGTheme.primary : GGTheme.softGray
         } else {
@@ -1879,7 +1880,7 @@ final class PluginSlotView: NSControl {
             .paragraphStyle: para,
         ])
         let box = NSRect(x: rect.minX + SourceMenuButton.contentPad, y: 0,
-                         width: dx - SourceMenuButton.contentPad - 62, height: rect.height)
+                         width: dx - SourceMenuButton.contentPad, height: rect.height)
         let h = ceil(attr.size().height)
         attr.draw(in: NSRect(x: box.minX, y: box.midY - h / 2,
                              width: max(10, box.width), height: h))
@@ -1890,7 +1891,8 @@ final class PluginSlotView: NSControl {
         para.alignment = .center
         para.lineBreakMode = .byTruncatingTail   // only when necessary
         let attr = NSAttributedString(string: s, attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            // tabular numerals — the dB digits don't jitter as they step
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
             .foregroundColor: color,
             .paragraphStyle: para,
         ])
@@ -1910,6 +1912,11 @@ final class PluginSlotView: NSControl {
     // MARK: the controls layer (hover/focus state)
 
     private func drawControls(_ rect: NSRect) {
+        // The segmented hover state HIDES while the trim's temporary
+        // readout occupies the field — the replacement is total. Nothing
+        // about this disables the controls; it is purely visual and only
+        // lasts for the adjustment.
+        if overrideText != nil { return }
         // ONE continuous segmented control — the fills run EDGE TO EDGE
         // (no inset, no per-area rounding); only the container's rounded
         // clip shapes the outside ends, so the three areas read as parts
@@ -2815,10 +2822,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             trimKnobs[i].valueKind = .saved
             // The ARC carries the level: gray at unity (0 dB), green
             // below it (attenuation — the safe direction), red above it
-            // (boost — it can clip). The dial's center is EMPTY — the
-            // readout lives INSIDE the plug-in field, right-aligned.
+            // (boost — it can clip). The dial's center is EMPTY and the
+            // field beside it shows NO permanent number — the value only
+            // appears there while the trim is being adjusted.
             trimKnobs[i].arcColor = Self.trimArcColor(trimKnobs[i].doubleValue)
-            pluginSlots[i].trimText = String(format: "%+.1f dB", trim)
         }
 
         // MONITOR
@@ -4158,13 +4165,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             // BODY — the COMPACT control pair:
             //
-            //     [ plug-in slot · trim readout ▾ ]  ◉ (small empty knob)
+            //     [ plug-in slot ▾ ]  ◉ (small empty knob)
             //
             // ONE horizontal row: the slot and the knob share ONE height
             // (30 pt — the knob's whole diameter, arc included) and one
-            // vertical centerline, 8 pt apart. No arrow, no caption — the
-            // trim readout lives INSIDE the slot, the dial's center is
-            // empty.
+            // vertical centerline, 8 pt apart. No arrow, no caption. The
+            // knob is silent until touched: while the trim is adjusted
+            // the slot's content is TEMPORARILY replaced by the dB value
+            // (centered), then the plug-in section returns.
             let tsl = GainKnob()
             tsl.minValue = -64
             tsl.maxValue = 6
@@ -4175,6 +4183,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tsl.sendsContinuously = true
             tsl.controlName = "Trim"
             tsl.showsCenterValue = false   // the readout lives in the slot
+            // DRAG lifecycle for the field readout: while the pointer
+            // holds the knob, the readout stays up; on release the
+            // restore timer gives it 800 ms more before the normal
+            // plug-in content returns
+            tsl.onDragChange = { [weak self] knob, dragging in
+                guard let self, knob.tag >= 2600, knob.tag < 2604 else { return }
+                let i = knob.tag - 2600
+                if dragging {
+                    self.trimDisplayTimers[i]?.invalidate()
+                    self.trimDisplayTimers[i] = nil
+                } else {
+                    self.restartTrimRestore(i)
+                }
+            }
             tsl.widthAnchor.constraint(equalToConstant: SourceMenuButton.height).isActive = true
             tsl.heightAnchor.constraint(equalToConstant: SourceMenuButton.height).isActive = true
             trimKnobs.append(tsl)
@@ -4892,24 +4914,34 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// Output-trim knob (tag = 2600 + pair) — whole-number steps.
-    /// Restores a strip's dropdown content (the plug-in name / invitation)
-    /// a beat after the last trim adjustment — the dB number that replaced
-    /// it steps away when the knob stops moving.
+    /// The strip's plug-in section is TEMPORARILY replaced by the live
+    /// trim value (see PluginSlotView.overrideText). The normal content
+    /// returns 800 ms after the last adjustment — the timer restarts on
+    /// every step — and a DRAG holds the readout until the pointer is
+    /// released (the knob's drag-end hook schedules the restore here).
     private var trimDisplayTimers: [Timer?] = [nil, nil, nil, nil]
 
     @objc private func trimSlid(_ sender: NSControl) {
         let i = sender.tag - 2600
         let v = sender.doubleValue   // already whole (knob rounds)
         InsertServer.shared.setTrim(i, v, notify: false)
-        // the ARC follows the drag live; the readout inside the field
-        // brightens while the trim is being ADJUSTED (overrideText),
-        // settling back a beat after the last step
+        // the ARC follows the drag live; the field beside it shows the
+        // trim value ONLY while it is being adjusted — appearance and
+        // disappearance of the readout never touch the plug-in itself
         trimKnobs[i].arcColor = Self.trimArcColor(v)
-        let slot = pluginSlots[i]
-        slot.trimText = String(format: "%+.1f dB", v)
-        slot.overrideText = String(format: "%+.1f dB", v)
+        pluginSlots[i].overrideText = String(format: "%+.1f dB", v)
+        // A drag keeps the readout up until release — the drag-end hook
+        // schedules the restore. Scroll/keyboard steps restore 800 ms
+        // after the last one (scheduledTimer restarts the delay).
+        if !trimKnobs[i].isDragging { restartTrimRestore(i) }
+    }
+
+    /// Puts the strip's normal plug-in content back 800 ms after the
+    /// last trim adjustment.
+    private func restartTrimRestore(_ i: Int) {
         trimDisplayTimers[i]?.invalidate()
-        trimDisplayTimers[i] = Timer.scheduledTimer(withTimeInterval: 0.9, repeats: false) {
+        let slot = pluginSlots[i]
+        trimDisplayTimers[i] = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) {
             [weak self, weak slot] _ in
             slot?.overrideText = nil
             self?.trimDisplayTimers[i] = nil
