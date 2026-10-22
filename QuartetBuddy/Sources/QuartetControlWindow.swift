@@ -236,17 +236,18 @@ enum GGSpace {
 /// thin accent marker beside the strip's header (see updateCardHighlights).
 final class CardView: NSView {}
 
-/// Pin — a compact STATE TOGGLE that sits BESIDE the utility tray (its
-/// own footprint, not inside it): clicking it (or ⌘P) floats the window
-/// above ordinary ones. Same 32-pt chip, corner treatment and rest
-/// treatment (neutral dark bed + subtle border) as the individual
-/// utility buttons, with a slightly smaller glyph; the footprint is
-/// identical in both states —
-///   unpinned → an OUTLINED pushpin on the classic 45° diagonal, muted
-///              gray on the neutral dark bed;
-///   pinned   → the bundled upright pushpin art, filled, control-accent
-///              blue on a subtle blue-tinted bed with a restrained blue
-///              border — visible WITHOUT hover.
+/// Pin — a STATE TOGGLE in the utility tray, between Mute All and
+/// Settings: clicking it (or ⌘P) floats the window above ordinary ones.
+/// THE SAME bundled push-pin art in BOTH states — identical footprint,
+/// identical size — COLOR carries the state:
+///   unpinned → muted gray ink on the shared neutral bed + subtle
+///              border (the inactive utility buttons' own treatment),
+///              a neutral hover lift;
+///   pinned   → control-accent blue ink on a subtle blue-tinted bed
+///              with a restrained blue border — visible WITHOUT hover:
+///              the look persists no matter where the pointer goes.
+/// Keyboard focus stays a separate, system-level exterior ring (see
+/// FunctionButton), so the blue border never reads as focus.
 final class PinIconButton: IconButton {
 
     var isPinned: Bool {
@@ -300,28 +301,19 @@ final class PinIconButton: IconButton {
     }
 
     override func drawGlyph(color: NSColor) {
-        if state == .on {
-            // PINNED — the bundled filled art stood upright (+45° puts
-            // its shipped 45°-tilt vertical: needle down). A nudge under
-            // the Settings gear's 18 pt box — similar ink weight, never
-            // the loudest icon in the row.
-            GGIconAsset.drawRotated("push-pin", degrees: 45, tint: color,
-                                    in: bounds.insetBy(dx: 8.5, dy: 8.5))
-            if GGIconAsset.tinted("push-pin", color) != nil { return }
-            drawVectorPin(color: color, filled: true)
-        } else {
-            // UNPINNED — the same silhouette as a thin OUTLINE, back on
-            // the art's 45° diagonal (needle to the lower left)
-            drawVectorPin(color: color, filled: false)
-        }
+        // BOTH STATES: the same bundled filled art, shipped diagonal
+        // (head upper-right, needle lower-left), aspect-fit and
+        // centered — just under the Settings gear's 18 pt box.
+        GGIconAsset.draw("push-pin", tint: color,
+                         in: bounds.insetBy(dx: 8.5, dy: 8.5))
+        if GGIconAsset.tinted("push-pin", color) != nil { return }
+        drawVectorPin(color: color)
     }
 
-    /// The pushpin as a vector fallback (also the unpinned OUTLINE):
-    /// ring head, angled shoulders, tapered needle — in an UPRIGHT
-    /// local frame, rotated −45° for the rest pose. Same silhouette in
-    /// both states, so the shape change (none) is never the message —
-    /// the color treatment is.
-    private func drawVectorPin(color: NSColor, filled: Bool) {
+    /// The pushpin as a vector fallback: ring head, angled shoulders,
+    /// tapered needle — an UPRIGHT local frame rotated −45° into the
+    /// art's rest pose (head upper-right, needle lower-left), filled.
+    private func drawVectorPin(color: NSColor) {
         let u = bounds.height / 32
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
         NSGraphicsContext.saveGraphicsState()
@@ -343,19 +335,9 @@ final class PinIconButton: IconButton {
         body.close()
         let head = NSBezierPath(ovalIn: NSRect(x: c.x - 2.9 * u, y: c.y + 1.9 * u,
                                                width: 5.8 * u, height: 5.4 * u))
-        if filled {
-            color.setFill()
-            body.fill()
-            head.fill()
-        } else {
-            color.setStroke()
-            body.lineWidth = 1.3 * u
-            body.lineCapStyle = .round
-            body.lineJoinStyle = .round
-            body.stroke()
-            head.lineWidth = 1.3 * u
-            head.stroke()
-        }
+        color.setFill()
+        body.fill()
+        head.fill()
         NSGraphicsContext.restoreGraphicsState()
     }
 }
@@ -461,23 +443,6 @@ enum GGIconAsset {
         let scale = min(rect.width / s.width, rect.height / s.height)
         let w = s.width * scale, h = s.height * scale
         icon.draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
-    }
-
-    /// Aspect-fit tinted draw, ROTATED by degrees about `rect`'s center.
-    /// For the bundled push-pin art, which ships on a 45° diagonal
-    /// (head upper-right, needle lower-left) and is stood upright when
-    /// the window is pinned.
-    static func drawRotated(_ name: String, degrees: Double, tint: NSColor,
-                            in rect: NSRect) {
-        guard tinted(name, tint) != nil else { return }
-        NSGraphicsContext.saveGraphicsState()
-        let tr = NSAffineTransform()
-        tr.translateX(by: rect.midX, yBy: rect.midY)
-        tr.rotate(byDegrees: CGFloat(degrees))
-        tr.translateX(by: -rect.midX, yBy: -rect.midY)
-        tr.concat()
-        draw(name, tint: tint, in: rect)
-        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -3709,17 +3674,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         mute.setAccessibilityLabel("Mute all outputs")
         muteAllButton = mute
 
+        // the pin sits BETWEEN its toolbar neighbors — Mute All and
+        // Settings — one of the tile row, not an appendix after the tray;
+        // click (or ⌘P) flips the window's floating behavior
+        let pin = PinIconButton(tag: 0, target: self,
+                                action: #selector(pinClicked(_:)))
+
         let settings = SettingsIconButton(tag: 0, accent: GGTheme.accent,
                                           target: self, action: #selector(settingsClicked(_:)))
         settings.toolTip = "Settings…"
         settings.setAccessibilityLabel("Settings")
 
-        let tiles = NSStackView(views: [ag, mic, mute, settings])
+        let tiles = NSStackView(views: [ag, mic, mute, pin, settings])
         tiles.spacing = 6
         tiles.translatesAutoresizingMaskIntoConstraints = false
 
         // the TRAY — equal-sized tiles inside a subtle dark translucent
-        // rounded bed (the shared surface that groups the four)
+        // rounded bed (the shared surface that groups the five)
         let tray = NSView()
         tray.translatesAutoresizingMaskIntoConstraints = false
         tray.wantsLayer = true
@@ -3733,18 +3704,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tiles.bottomAnchor.constraint(equalTo: tray.bottomAnchor, constant: -5),
         ])
         row.addArrangedSubview(tray)
-
-        // the PIN toggle — its own footprint just OUTSIDE the tray's
-        // utility group (a small, consistent gap), vertically centered
-        // with it. Click (or ⌘P) flips the window's floating behavior.
-        let pinGap = NSView()
-        pinGap.translatesAutoresizingMaskIntoConstraints = false
-        pinGap.widthAnchor.constraint(equalToConstant: 8).isActive = true
-        row.addArrangedSubview(pinGap)
-
-        let pin = PinIconButton(tag: 0, target: self,
-                                action: #selector(pinClicked(_:)))
-        row.addArrangedSubview(pin)
         pinButton = pin
 
         bar.addSubview(row)
