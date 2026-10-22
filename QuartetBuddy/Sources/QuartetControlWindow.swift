@@ -82,6 +82,11 @@ enum GGTheme {
     /// Auto Gain running).
     static let accent = NSColor.controlAccentColor
 
+    /// The pin's SELECTED blue — every blue on the pin toggle (ink,
+    /// bed, border) is this one flat color with alpha, not the system
+    /// accent, so the toggle's selected look is its own.
+    static let pinBlue = hex("266FB6")
+
     // Function accents — flat fills when engaged, neutral otherwise.
     // ONE job per color:
     //   blue   — selection, focus, enabled processing
@@ -266,7 +271,7 @@ final class PinIconButton: IconButton {
     }
 
     init(tag: Int, target: AnyObject?, action: Selector) {
-        super.init(tag: tag, accent: GGTheme.accent, target: target, action: action)
+        super.init(tag: tag, accent: GGTheme.pinBlue, target: target, action: action)
         refreshTooltip()
         setAccessibilityLabel("Pin window on top")
     }
@@ -281,9 +286,9 @@ final class PinIconButton: IconButton {
             // shown whether or not the pointer is here. (Keyboard focus is
             // a SEPARATE, system-level exterior ring — see FunctionButton —
             // so the blue border never reads as focus.)
-            GGTheme.accent.withAlphaComponent(0.16).setFill()
+            GGTheme.pinBlue.withAlphaComponent(0.16).setFill()
             path.fill()
-            GGTheme.accent.withAlphaComponent(0.45).setStroke()
+            GGTheme.pinBlue.withAlphaComponent(0.5).setStroke()
             path.lineWidth = 1
             path.stroke()
         } else {
@@ -297,7 +302,7 @@ final class PinIconButton: IconButton {
             path.lineWidth = 1
             path.stroke()
         }
-        drawGlyph(color: pinned ? GGTheme.accent : GGTheme.softGray)
+        drawGlyph(color: pinned ? GGTheme.pinBlue : GGTheme.softGray)
     }
 
     override func drawGlyph(color: NSColor) {
