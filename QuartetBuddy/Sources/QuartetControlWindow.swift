@@ -2123,7 +2123,7 @@ final class BankSegmentedControl: NSView {
 /// chain-link toggles that live ON each pair's divider between the two
 /// channels instead of the Inputs header, so the relationship is
 /// visible where it matters. The glyph is the bundled chain artwork
-/// (assets/app.png), tinted per state — never a pasted black bitmap.
+/// (assets/link.png), tinted per state — never a pasted black bitmap.
 ///
 /// One state carrier, one color — the channel styling never changes:
 ///
@@ -2194,21 +2194,23 @@ final class LinkPairButton: FunctionButton {
             path.fill()
         }
         let color: NSColor = !isEnabled ? .disabledControlTextColor
-            : engaged ? Self.ink : GGTheme.softGray
+            : engaged ? Self.ink : .separatorColor
         drawChain(color: color, linked: engaged)
     }
 
-    /// The chain glyph: the bundled chain artwork (assets/app.png),
-    /// tinted to the state ink — the SAME ART in both states with an
-    /// identical fitted footprint (the pin toggle's rule: color carries
-    /// the state). A linked pair shows the chain whole; an unlinked
-    /// pair shows the same chain TORN at the interlock — the art is
-    /// drawn twice, each pass clipped to one side of a thin void band
-    /// across the center, so the two halves read as a broken link
-    /// without any repositioning or rescaling. Fallback (asset
+    /// The chain glyph: the bundled chain artwork, tinted to the state
+    /// ink — identical fitted footprint in both states (the pin toggle's
+    /// rule: color carries the state). A linked pair shows the whole
+    /// chain (assets/link.png); an unlinked pair shows the dedicated
+    /// broken chain (assets/broken-link.png), so the tear is real ink
+    /// from the bundled art, not a clipped pass. Fallback (asset
     /// missing): the equivalent two-stadium vector chain.
     private func drawChain(color: NSColor, linked: Bool) {
-        if let icon = GGIconAsset.tinted("app", color) {
+        // the dedicated artwork per state — (linked: assets/link.png,
+        // unlinked: assets/broken-link.png). Both canvases measure the
+        // SAME ink footprint (118×54 inside 128×128), so the fitted box
+        // — and the button's visual weight — is identical either way.
+        if let icon = GGIconAsset.tinted(linked ? "link" : "broken-link", color) {
             let s = icon.size
             guard s.width > 0, s.height > 0 else { return }
             // ~22 × 10 of visible INK, centered: the artwork's canvas is
@@ -2221,19 +2223,7 @@ final class LinkPairButton: FunctionButton {
             let fitted = NSRect(x: box.midX - s.width * scale / 2,
                                 y: box.midY - s.height * scale / 2,
                                 width: s.width * scale, height: s.height * scale)
-            if linked {
-                icon.draw(in: fitted)
-            } else {
-                let gap: CGFloat = 1.5
-                for (lo, hi) in [(-1000.0, Double(fitted.midX - gap)),
-                                 (Double(fitted.midX + gap), 1000.0)] {
-                    NSGraphicsContext.saveGraphicsState()
-                    NSBezierPath(rect: NSRect(x: lo, y: 0, width: hi - lo,
-                                              height: bounds.height)).addClip()
-                    icon.draw(in: fitted)
-                    NSGraphicsContext.restoreGraphicsState()
-                }
-            }
+            icon.draw(in: fitted)
             return
         }
         // OFFLINE FALLBACK: two stadium links, ~22×12 pt, light 1.5 pt
