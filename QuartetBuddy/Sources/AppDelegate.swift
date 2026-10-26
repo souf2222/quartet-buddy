@@ -343,17 +343,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         3: ["hwout6", "hwout7"],
     ]
 
+    /// Firmware trim hard range: −24…0 dB (attenuation only). Clamped on
+    /// EVERY path — settings write, reconnect push, DB readback — so no
+    /// write and no saved value can leave the window.
+    static let hwoutTrimMin = -24.0
+    static let hwoutTrimMax = 0.0
+
     /// The saved settings-side hardware trims (`hwout.trim.<pair>`, set in
     /// Settings ▸ Quartet ▸ Output Levels) → the unit. Called on every
     /// tree arrival; each value writes exactly once per value. A pair with
     /// NO saved key is skipped — the first run after an upgrade must not
-    /// stomp trims the unit already carries.
+    /// stomp trims the unit already carries. Out-of-range saved values are
+    /// clamped (the in-range value is rewritten back to the key) so the
+    /// push can never leave the window.
     private func syncSavedHardwareTrims() {
         guard case .connected = glue.state, PathIds.activeSerial != nil else { return }
         var pushedAny = false
         for pair in Self.hwoutTrimNodes.keys {
             guard UserDefaults.standard.object(forKey: "hwout.trim.\(pair)") != nil else { continue }
-            let db = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            let raw = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            let db = min(Self.hwoutTrimMax, max(Self.hwoutTrimMin, raw))
+            if raw != db {
+                UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+                QBLog.log(String(format: "trim: pair %d saved %.1f dB out of range — clamped to %.1f", pair, raw, db))
+            }
             guard pushedHardwareTrims[pair] != db else { continue }
             for h in Self.hwoutTrimNodes[pair] ?? [] {
                 guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
@@ -1357,11 +1370,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let propsR = right.flatMap { $0["props"] as? [String: Any] }
                 let nameL = (propsL?["name"] as? String) ?? "Analog Out \(2 * pair - 1)"
                 let nameR = (propsR?["name"] as? String) ?? "Analog Out \(2 * pair)"
-                return ("\(nameL) / \(nameR)", propsL.flatMap { GlueClient.doubleProp($0, "trim") })
+                return ("\(nameL) / \(nameR)", left.flatMap { GlueClient.doubleProp($0, "trim") })
             }
         }
         settingsWindow.writeHwoutTrim = { [weak self] pair, db in
             guard let self, case .connected = self.glue.state else { return }
+            let db = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
             for h in Self.hwoutTrimNodes[pair] ?? [] {
                 guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
                 self.glue.setDouble(id: id, db)

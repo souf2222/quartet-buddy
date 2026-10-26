@@ -1246,8 +1246,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             label.setContentCompressionResistancePriority(
                 NSLayoutConstraint.Priority(751), for: .horizontal)
             label.translatesAutoresizingMaskIntoConstraints = false
-            let slider = NSSlider(value: 0, minValue: -64, maxValue: 6,
-                                  target: self, action: #selector(hwoutTrimChanged(_:)))
+            let slider = HwoutTrimSlider(value: 0, minValue: -24, maxValue: 0,
+                                         target: self, action: #selector(hwoutTrimChanged(_:)))
             slider.tag = 3700 + pair
             slider.translatesAutoresizingMaskIntoConstraints = false
             let readout = NSTextField(labelWithString: "0.0 dB")
@@ -1271,14 +1271,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             ])
         }
         stack.addArrangedSubview(SettingsHelpText.label(
-            "The Quartet's own output trim, applied by the firmware at the\nDAC — downstream of everything macOS sends, so it affects every\napp. Rows carry the strips' hardware names; the routing window's\ncards are one pair number up (Out 3‑4 card ⟶ Analog Out 1/2 …\nOut 7‑8 card ⟶ Analog Out 5/6). Range −64…+6 dB; saved values\nre-push to the unit after every reconnect or power cycle."))
+            "The Quartet's own output trim, applied by the firmware at the\nDAC — downstream of everything macOS sends, so it affects every\napp. Rows carry the strips' hardware names; the routing window's\ncards are one pair number up (Out 3‑4 card ⟶ Analog Out 1/2 …\nOut 7‑8 card ⟶ Analog Out 5/6). Range −24…0 dB (attenuation\nonly); ⌘+click a slider to reset it to 0 dB. Saved values re-push\nto the unit after every reconnect or power cycle."))
+    }
+
+    /// Slider that ⌘+click snaps to 0 dB (unity) instead of jumping to the
+    /// click position — the reset gesture for the hardware trims.
+    final class HwoutTrimSlider: NSSlider {
+        override func mouseDown(with event: NSEvent) {
+            if event.modifierFlags.contains(.command) {
+                doubleValue = 0
+                if let target, let action {
+                    NSApp.sendAction(action, to: target, from: self)
+                }
+                return
+            }
+            super.mouseDown(with: event)
+        }
     }
 
     @objc private func hwoutTrimChanged(_ sender: NSSlider) {
-        QBLog.log("DBG hwoutTrim action fired tag=\(sender.tag) value=\(sender.doubleValue) enabled=\(sender.isEnabled)")
         let pair = sender.tag - 3700
         guard !hwoutTrimSuppress, (1...3).contains(pair) else { return }
-        let db = (sender.doubleValue * 2).rounded() / 2   // 0.5 dB steps
+        let db = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin,
+            (sender.doubleValue * 2).rounded() / 2))   // 0.5 dB steps, clamped
         sender.doubleValue = db
         hwoutTrimReadouts[pair - 1].stringValue = String(format: "%.1f dB", db)
         writeHwoutTrim?(pair, db)
@@ -1290,9 +1305,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         hwoutTrimSuppress = true
         defer { hwoutTrimSuppress = false }
         let read = readHwoutTrims?() ?? []
-        QBLog.log("DBG hwoutTrim refresh: rows=\(read.count) " +
-                  read.enumerated().map { String(format: "p%d name=%@ trim=%@", $0.offset + 1, $0.element.name, $0.element.trim.map { String($0) } ?? "nil") }.joined() +
-                  " enabled=[" + hwoutTrimSliders.map { String($0.isEnabled) }.joined(separator: ",") + "]")
         for pair in 1...3 {
             let row = pair - 1
             guard pair <= read.count else {
@@ -1302,9 +1314,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             let entry = read[row]
             hwoutTrimNameLabels[row].stringValue = entry.name
             if let db = entry.trim {
+                // tree values outside the hard range can't be shown — the
+                // slider clamps them (the next change writes the clamp back)
+                let shown = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
                 hwoutTrimSliders[row].isEnabled = true
-                hwoutTrimSliders[row].doubleValue = db
-                hwoutTrimReadouts[row].stringValue = String(format: "%.1f dB", db)
+                hwoutTrimSliders[row].doubleValue = shown
+                hwoutTrimReadouts[row].stringValue = String(format: "%.1f dB", shown)
             } else {
                 hwoutTrimSliders[row].isEnabled = false
                 hwoutTrimReadouts[row].stringValue = "—"
