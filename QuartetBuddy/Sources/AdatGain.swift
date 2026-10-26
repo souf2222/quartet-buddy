@@ -37,11 +37,12 @@ import CoreAudio
 /// assumed.
 ///
 /// Unreliable measurements get explicit treatment, never a confident
-/// number: no meaningful signal → "Not enough signal" (never a huge
-/// gain recommendation out of silence); a peak at the ceiling →
-/// "clipped — reduce gain" (the level above full scale is
-/// unknowable). A result says "verified during the last check", never
-/// "permanently safe".
+/// number: no meaningful signal → "No signal during measurement"
+/// (never a huge gain recommendation out of silence — and worded about
+/// the TAKE, so signal arriving later still shows on the live meter);
+/// a peak at the ceiling → "Input clipped · Reduce external gain" (the
+/// level above full scale is unknowable). A result says "verified
+/// during the last check", never "permanently safe".
 ///
 /// Threading mirrors AutoGain: the audio callback folds the stream
 /// into pre-allocated 20 ms windows, a 10 Hz main-thread timer drains
@@ -142,16 +143,17 @@ final class AdatGainEngine {
 
     private var livePeak = [Double](repeating: 0,
                                     count: analogChannels + maxAdatChannels)
-    /// Display PEAK HOLD for the ADAT dial (device channels, linear):
+    /// Display PEAK HOLD for the ADAT meter readout (device channels,
+    /// linear):
     /// a sample peak catches the hold instantly; it holds still for
-    /// `holdSeconds`, then decays slowly so the dial stays readable
+    /// `holdSeconds`, then decays slowly so the readout stays readable
     /// after the gain knob was turned. Started over only by a new peak.
     private var holdPeak = [Double](repeating: 0,
                                     count: analogChannels + maxAdatChannels)
     private var holdStamp = [Date?](repeating: nil,
                                     count: analogChannels + maxAdatChannels)
-    /// Recent-clipping latch for the dial's red indication: a clipped
-    /// sample paints the arc red for 1 s (word: the dial is a live
+    /// Recent-clipping latch (device channels): a clipped
+    /// sample paints the meter red for 1 s (word: the meter is a live
     /// instrument, not a calibration result).
     private var clipLatch = [Date?](repeating: nil,
                                     count: analogChannels + maxAdatChannels)
@@ -211,24 +213,15 @@ final class AdatGainEngine {
         return Self.levelFraction(dbfs: 20 * log10(linear))
     }
 
-    // MARK: the ADAT dial's peak hold
+    // MARK: the ADAT meter's held-peak readout
 
-    /// The held peak in dBFS (nil = below the display floor — the dial
-    /// reads "−∞"). The center readout uses it.
+    /// The held peak in dBFS (nil = below the display floor — the
+    /// inline readout shows "−∞"). The meter's number + marker use it.
     func heldPeakDBFS(_ deviceChannel: Int) -> Double? {
         guard deviceChannel >= 0,
               deviceChannel < Self.analogChannels + Self.maxAdatChannels else { return nil }
         let p = holdPeak[deviceChannel]
         return p > 1e-10 ? 20 * log10(p) : nil
-    }
-
-    /// The center readout: the held peak as a WHOLE number ("−18") —
-    /// full precision is kept in holdPeak, only the display rounds —
-    /// "−∞" while silent, "—" when the channel is not on the stream.
-    func heldPeakText(_ deviceChannel: Int, unavailable: Bool) -> String {
-        if unavailable { return "—" }
-        guard let db = heldPeakDBFS(deviceChannel) else { return "−∞" }
-        return String(format: "%d", Int(db.rounded())).replacingOccurrences(of: "-", with: "−")
     }
 
     /// True within 1 s of a clipped sample on this device channel —
@@ -637,117 +630,42 @@ final class AdatGainEngine {
     }
 }
 
-// MARK: - ADAT level meter (flat bar, peak + target markers)
 
-/// A thin horizontal level bar: recessed bed, a flat dB-scale fill, a
-/// faint TARGET tick (always visible — the −12 dBFS line), a bright
-/// PEAK marker (the measured reference) — and a fill color that
-/// carries the assistance state: green normally, purple while a
-/// measurement runs, red when the channel clipped.
-// MARK: - ADAT circular input-level dial
-
-/// A READ-ONLY instrument display that borrows the analog knob's
-/// geometry (60-pt dial, thick 270° track, opening at the bottom) but
-/// not its interaction: no dragging, no editing, no hover affordance.
-/// Analog is a control; this is a meter. Kept deliberately MINIMAL:
-///   - the arc is the live input level, its whole illuminated length
-///     one flat color for the current band (Adobe Audition's meter
-///     coloring: green below −18 dBFS, amber from −18, red from −6 —
-///     an application convention, not a universal standard)
-///   - the center shows the held peak as a WHOLE number (full
-///     precision is kept internally; only the display rounds)
-///   - no unit label, no outer tick, no captions — the channel
-///     heading and the Assist button stay the strip's only text
-final class AdatLevelDial: NSView {
-
-    /// LIVE input level on the −60…0 dBFS display scale.
-    var level: Double = 0 { didSet { needsDisplay = true } }
-    /// The center readout — the whole-number held peak ("−18"),
-    /// "−∞" while silent, "—" when the channel is not on the stream.
-    var valueText: String = "−∞" { didSet { needsDisplay = true } }
-    /// No channel on the current stream — "—", no arc.
-    var unavailable = false { didSet { needsDisplay = true } }
-    /// A sample hit the digital ceiling within the last second (the
-    /// UNROUNDED sample peak decides — never the displayed integer).
-    var clipped = false { didSet { needsDisplay = true } }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: 60, height: 60) }
-
-    // the analog dial's geometry (GainKnob): a 60-pt dial = 5.1-pt stroke
-    private var stroke: CGFloat { max(2.2, bounds.width * 0.085) }
-    private var trackRadius: CGFloat { bounds.width / 2 - stroke / 2 - 0.75 }
-    private static let startAngle: CGFloat = 225
-    private static let sweepAngle: CGFloat = 270
-
-    override func draw(_ dirtyRect: NSRect) {
-        let c = NSPoint(x: bounds.midX, y: bounds.midY)
-
-        func arc(_ sweep: CGFloat) -> NSBezierPath {
-            let p = NSBezierPath()
-            p.appendArc(withCenter: c, radius: trackRadius,
-                        startAngle: Self.startAngle,
-                        endAngle: Self.startAngle - sweep, clockwise: true)
-            p.lineWidth = stroke
-            p.lineCapStyle = .butt
-            return p
-        }
-
-        // the quiet remainder of the dial + the LIVE level arc in the
-        // level band's flat color (on the −60…0 scale: −18 dBFS = 0.7,
-        // −6 dBFS = 0.9). The clip latch says "ceiling" in the same
-        // red — but it is driven by the unrounded sample peak.
-        GGTheme.knobTrack.setStroke()
-        arc(Self.sweepAngle).stroke()
-        if !unavailable {
-            let f = max(0, min(1, level))
-            if f > 0.002 {
-                (clipped || f >= 0.9 ? GGTheme.red
-                    : f >= 0.7 ? GGTheme.amber
-                    : GGTheme.knobArc).setStroke()
-                arc(CGFloat(f) * Self.sweepAngle).stroke()
-            }
-        }
-
-        // CENTER readout — the held peak, off-white, straight on the
-        // panel (no raised disc: this display never implies a control)
-        let valueString = unavailable ? "—" : valueText
-        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        let silent = valueString == "−∞" || valueString == "—"
-        let value = NSAttributedString(string: valueString, attributes: [
-            .font: valueFont,
-            .foregroundColor: silent ? GGTheme.muted : GGTheme.knobValue,
-        ])
-        if let ctx = NSGraphicsContext.current?.cgContext {
-            let line = CTLineCreateWithAttributedString(value)
-            let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-            // the ink's cap height rides baseline…baseline+capHeight —
-            // half of it below the dial's center centers the digits
-            ctx.textPosition = CGPoint(x: c.x - width / 2, y: c.y - valueFont.capHeight / 2)
-            CTLineDraw(line, ctx)
-        } else {
-            value.draw(at: NSPoint(x: c.x, y: c.y - valueFont.capHeight / 2))
-        }
-    }
-}
-// MARK: - ADAT channel tile (with the inline assistant)
-
-/// One ADAT channel strip in the SAME open, divided-column structure
-/// as the analog bank: name + hairline on top; the circular read-only
-/// dial LEFT on the knob's spot; and the assist control RIGHT on the
-/// Auto Gain spot — ONE button whose label follows the session state
-/// (Gain Assist… → Stop while listening → Recheck when frozen), with
-/// a RESERVED two-line feedback column beneath it so the row never
-/// jumps when a status arrives or leaves:
+/// One ADAT channel strip — COMPACT by design: the analog bank's
+/// horizontal meter carries it, the circular readout is gone. The old
+/// circle repeated the level the meter already shows and consumed most
+/// of each strip's height, pushing the second ADAT row and the Outputs
+/// section far down. Now:
 ///
-///     ── ADAT 1 ─────────────────────
-///     ( −20 )    [ Recheck ]
-///     ────────   ↑ Increase by 8 dB
-///                On external preamp    Done
+///     ADAT 1                     [ Assist… ]
+///     [━━━━━━━━━━ 4-pt meter ━━━━━━━━━━━ ▪ −24.1]
 ///
-/// No card, no border, no heading — the assistant is inline text,
-/// left-aligned with the button inside the button column. Purple is
-/// the measuring color, amber the adjustment, green success, red a
-/// clip — always WITH words next to the color.
+///     ↑ Increase external gain by 12 dB      ← only while the
+///                                        Done   session runs
+///
+///   - ONE control row to every strip: the channel heading left, the
+///     session button right — the SAME control in every state
+///     (Assist… → Stop while listening → Recheck when frozen)
+///   - the shared horizontal input meter beneath, full width, with the
+///     inline held-peak readout at its right end (one decimal, colored
+///     by the held value's own band — never the live level's)
+///   - a TRANSIENT two-line guidance under the meter: inserted only
+///     while THIS strip hosts the assistant session (measuring or a
+///     frozen verdict), collapsed on Done — the idle strip carries NO
+///     reserved space, so all eight strips stay compact and the second
+///     row sits close; the host strip's row grows just the two lines'
+///     height while it runs, its neighbours staying top-aligned
+///   - Done sits TRAILING on the second guidance line, never attached
+///     to the instruction's tail ("Play the source" and Done stay two
+///     separate things)
+///   - no card, no border, no extra numeric readout: the meter's
+///     inline number IS the readout
+///
+/// Purple is the measuring color, amber the adjustment, green success,
+/// red a clip — always with words beside the color. No 48V/Soft-Limit/
+/// polarity, no hardware gain: the strip measures and guides, the
+/// external converter owns the preamp. One assistant runs at a time;
+/// the controller owns the transitions, the tile mirrors them.
 
 final class AdatTile: NSView {
 
@@ -759,15 +677,19 @@ final class AdatTile: NSView {
     private let marker = NSView()             // the assistant's focus marker
     private let numberLabel = NSTextField(labelWithString: "ADAT 1")
     private let nameLabel = NSTextField(labelWithString: "")
-    private let dial = AdatLevelDial()
+    /// The shared horizontal input meter with its inline held-peak
+    /// readout — the analog bank's own meter occupies the strip's body.
+    private let levelMeter = GGLevelMeter()
     private let assistButton: NSButton
     private let line1 = NSTextField(labelWithString: "")
     private let line2 = NSTextField(labelWithString: "")
     private let doneButton: NSButton
+    /// The transient two-line guidance block — collapsed while idle.
+    private let guideCol = NSStackView()
 
     init(index: Int) {
         self.index = index
-        assistButton = NSButton(title: "Gain Assist…", target: nil, action: nil)
+        assistButton = NSButton(title: "Assist…", target: nil, action: nil)
         doneButton = NSButton(title: "Done", target: nil, action: nil)
         super.init(frame: .zero)
         build()
@@ -775,7 +697,18 @@ final class AdatTile: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func build() {
+        // HEADER — number + custom name (Settings ▸ Channel Names) left,
+        // the compact session button right. One control-sized row: no
+        // 32-pt header, no reserved dropdown space — the analog bank's
+        // mode dropdown has no ADAT counterpart, and nothing in a
+        // compact strip should take an empty row. Same name typography
+        // as the analog strips (13-pt medium): one name treatment.
         numberLabel.stringValue = "ADAT \(index + 1)"
+        numberLabel.font = GGTheme.nameFont
+        numberLabel.textColor = GGTheme.primary
+        numberLabel.lineBreakMode = .byTruncatingTail
+        numberLabel.setContentCompressionResistancePriority(.init(1000), for: .horizontal)
+        numberLabel.setContentHuggingPriority(.init(1000), for: .horizontal)
         let col = NSStackView()
         col.orientation = .vertical
         col.alignment = .leading
@@ -784,48 +717,24 @@ final class AdatTile: NSView {
         addSubview(col)
         NSLayoutConstraint.activate([
             col.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            col.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            col.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            col.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            col.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            col.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            // CONTENT-SIZED idle strip: 8 top + 24 header + 8 gap +
+            // 12 meter + 14 bottom ≈ 66 pt. The bottom pad is the
+            // strip's ONLY idle air below the meter — no reserved
+            // instruction space (the guidance inserts itself while a
+            // session runs and collapses on Done).
+            col.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
         ])
 
-        // HEADER — number + custom name (Settings ▸ Channel Names),
-        // the purple focus marker is an edge remnant that lights up
-        // while THIS tile hosts the assistant session (mirrors the
-        // analog strips' selection marker)
+        // the purple focus marker — an edge remnant that lights up while
+        // THIS strip hosts the assistant session (the analog strips'
+        // 2×14 selection marker geometry)
         marker.wantsLayer = true
-        marker.layer?.cornerRadius = 1.5
+        marker.layer?.cornerRadius = 1
         marker.translatesAutoresizingMaskIntoConstraints = false
-        marker.widthAnchor.constraint(equalToConstant: 3).isActive = true
-        marker.heightAnchor.constraint(equalToConstant: 15).isActive = true
-        let headerSpacer = NSView()
-        headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let headerRow = NSStackView(views: [marker, numberLabel, nameLabel, headerSpacer])
-        headerRow.orientation = .horizontal
-        headerRow.alignment = .centerY
-        headerRow.spacing = GGSpace.tight
-        headerRow.translatesAutoresizingMaskIntoConstraints = false
-        col.addArrangedSubview(headerRow)
-        headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
-
-        // the analog section's separator treatment: one hairline under
-        // the name (the analog strips' meter row sits in this slot)
-        let rule = NSView()
-        rule.translatesAutoresizingMaskIntoConstraints = false
-        rule.wantsLayer = true
-        rule.layer?.backgroundColor = NSColor.separatorColor.cgColor
-        rule.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        col.addArrangedSubview(rule)
-        rule.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
-
-        // CONTROL ROW — the circular meter LEFT on the knob's spot;
-        // RIGHT the assist column: the session button + the reserved
-        // two-line feedback area (both always present — width and
-        // heights fixed so no row ever jumps on a status update)
-        dial.translatesAutoresizingMaskIntoConstraints = false
-        dial.toolTip = "ADAT input level · Adjust gain on the external preamp"
-        dial.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        dial.heightAnchor.constraint(equalToConstant: 60).isActive = true
+        marker.widthAnchor.constraint(equalToConstant: 2).isActive = true
+        marker.heightAnchor.constraint(equalToConstant: 14).isActive = true
 
         assistButton.bezelStyle = .recessed
         assistButton.controlSize = .small
@@ -834,16 +743,43 @@ final class AdatTile: NSView {
         assistButton.target = self
         assistButton.action = #selector(assistClicked)
         assistButton.translatesAutoresizingMaskIntoConstraints = false
-        assistButton.widthAnchor.constraint(equalToConstant: 108).isActive = true
         assistButton.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        // compact: the button hugs its label ("Assist…" / "Stop" /
+        // "Recheck") — no Auto Gain width to share, no other button
+        // beside it to align with
 
+        let headerSpacer = NSView()
+        headerSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let headerRow = NSStackView(views: [marker, numberLabel, nameLabel,
+                                            headerSpacer, assistButton])
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .centerY
+        headerRow.spacing = GGSpace.tight
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+        col.addArrangedSubview(headerRow)
+        headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+
+        // BODY — the analog bank's own meter: a 4-pt continuous peak
+        // track with the inline held-peak readout ("−24.1", one decimal,
+        // band-colored) riding the row's right end — the same fixed
+        // line in every state, so no reflow. Zones + held-peak marker +
+        // transient target + clip lamp (click to reset) all inside.
+        levelMeter.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        levelMeter.toolTip = "ADAT input level · Adjust gain on the external preamp"
+        col.addArrangedSubview(levelMeter)
+        levelMeter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+
+        // FEEDBACK — the guidance's two lines, built once and toggled
+        // visible by the session state: line1 the instruction (colored
+        // by meaning), line2 the secondary cue with the TRAILING Done
+        // action. Collapsed while idle — the strip returns to its
+        // compact height and nothing here is ever a placeholder.
         line1.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         line1.lineBreakMode = .byTruncatingTail
         line1.usesSingleLineMode = true
         line1.textColor = GGTheme.primary
         line1.translatesAutoresizingMaskIntoConstraints = false
         line1.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        line1.widthAnchor.constraint(equalToConstant: 148).isActive = true
 
         line2.font = NSFont.systemFont(ofSize: 10.5)
         line2.lineBreakMode = .byTruncatingTail
@@ -851,9 +787,11 @@ final class AdatTile: NSView {
         line2.textColor = GGTheme.muted
         line2.translatesAutoresizingMaskIntoConstraints = false
         line2.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        line2.setContentHuggingPriority(.init(1), for: .horizontal)
+        // the instruction keeps the line's left edge; Done keeps the
+        // right edge and never touches the instruction's tail
+        line2.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
-        // the QUIET dismissal — a plain text action after measurement
+        // the QUIET dismissal — a dedicated plain text action, trailing
         doneButton.isBordered = false
         doneButton.attributedTitle = NSAttributedString(string: "Done", attributes: [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
@@ -865,40 +803,46 @@ final class AdatTile: NSView {
         doneButton.translatesAutoresizingMaskIntoConstraints = false
         doneButton.isHidden = true
 
-        let line2Row = NSStackView(views: [line2, doneButton])
+        let guideSpacer = NSView()
+        guideSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let line2Row = NSStackView(views: [line2, guideSpacer, doneButton])
         line2Row.orientation = .horizontal
         line2Row.alignment = .centerY
         line2Row.spacing = 2
         line2Row.translatesAutoresizingMaskIntoConstraints = false
-        line2Row.widthAnchor.constraint(equalToConstant: 148).isActive = true
 
-        let assistCol = NSStackView(views: [assistButton, line1, line2Row])
-        assistCol.orientation = .vertical
-        assistCol.alignment = .leading
-        assistCol.spacing = 5
-        assistCol.translatesAutoresizingMaskIntoConstraints = false
-
-        let midSpacer = NSView()
-        midSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let controlRow = NSStackView(views: [dial, midSpacer, assistCol])
-        controlRow.orientation = .horizontal
-        controlRow.alignment = .top
-        controlRow.spacing = GGSpace.related
-        controlRow.translatesAutoresizingMaskIntoConstraints = false
-        col.addArrangedSubview(controlRow)
-        controlRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+        guideCol.addArrangedSubview(line1)
+        guideCol.addArrangedSubview(line2Row)
+        guideCol.orientation = .vertical
+        guideCol.alignment = .leading
+        guideCol.spacing = 3
+        guideCol.translatesAutoresizingMaskIntoConstraints = false
+        // TRANSIENT, not reserved: the guidance exists in the stack but
+        // is COLLAPSED while idle (NSStackView drops hidden arranged
+        // views from layout — the same pattern as the optional channel
+        // name in the header). Only the strip hosting a session grows;
+        // the other seven stay compact and top-aligned.
+        guideCol.isHidden = true
+        col.addArrangedSubview(guideCol)
+        guideCol.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+        // common ancestor holds — the row spans the guidance area
+        line2Row.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
     }
 
     @objc private func assistClicked() { assistAction?() }
     @objc private func doneClicked() { doneAction?() }
 
-    /// The 10 Hz fast path: arc and center readout only.
-    func setLevels(live: Double, holdText: String,
+    /// The 10 Hz fast path: the meter row's feed, nothing else. The
+    /// horizontal meter takes the same consolidated feed the analog
+    /// strips get — live level, held-peak marker + inline readout,
+    /// transient target while THIS channel is being measured, and the
+    /// clip flag (the LATCH is the meter's; click to reset). Off-stream
+    /// channels read "—".
+    func setLevels(live: Double, peakFraction: Double?, targetFraction: Double?,
                    clipped: Bool, unavailable: Bool) {
-        dial.level = live
-        dial.valueText = holdText
-        dial.clipped = clipped
-        dial.unavailable = unavailable
+        levelMeter.update(level: live, peakFraction: peakFraction,
+                          targetFraction: targetFraction, clip: clipped,
+                          holdText: unavailable ? "—" : nil)
     }
 
     /// One full-state application from the controller's tick. The
@@ -917,7 +861,7 @@ final class AdatTile: NSView {
         assistButton.isEnabled = available
         doneButton.isHidden = true
 
-        var title = "Gain Assist…"
+        var title = "Assist…"
         var line1Text = "", line1Color = GGTheme.primary
         var line2Text = "", line2Color = GGTheme.muted
         var frozen = false          // a measured verdict → Done + Recheck
@@ -932,21 +876,18 @@ final class AdatTile: NSView {
         case .increase(let d):
             title = "Recheck"
             frozen = true
-            line1Text = "↑ Increase by \(Int(d.rounded())) dB"
+            line1Text = "↑ Increase external gain by \(Int(d.rounded())) dB"
             line1Color = GGTheme.amber
-            line2Text = "On external preamp"
         case .reduce(let d):
             title = "Recheck"
             frozen = true
-            line1Text = "↓ Reduce by \(Int(d.rounded())) dB"
+            line1Text = "↓ Reduce external gain by \(Int(d.rounded())) dB"
             line1Color = GGTheme.amber
-            line2Text = "On external preamp"
-        case .withinTarget(let peak):
+        case .withinTarget:
             title = "Recheck"
             frozen = true
             line1Text = "✓ Within target"
             line1Color = GGTheme.green
-            line2Text = "Target \(Int(peak.rounded())) dBFS"
         case .clipped:
             title = "Recheck"
             frozen = true
@@ -956,18 +897,34 @@ final class AdatTile: NSView {
         case .noSignal:
             title = "Recheck"
             frozen = true
-            line1Text = "No signal detected"
+            // "during measurement" — the failure is about the take, not
+            // the input: if signal NOW exists the meter already shows it
+            line1Text = "No signal during measurement"
             line1Color = GGTheme.primary
             line2Text = "Play the source"
         case .idle:
             break
         }
-        assistButton.title = focus ? title : "Gain Assist…"
+        assistButton.title = focus ? title : "Assist…"
         line1.stringValue = focus ? line1Text : ""
         line1.textColor = line1Color
         line2.stringValue = focus ? line2Text : ""
         line2.textColor = line2Color
         doneButton.isHidden = !(focus && frozen)
+        // the guidance RIDES the session: visible only while THIS strip
+        // hosts one (measuring or a frozen verdict), collapsed the
+        // moment it ends — the strip returns to its compact height and
+        // the window re-fits once (the controller schedules it)
+        guideCol.isHidden = !focus || status == .idle
+    }
+
+    /// Live countdown while THIS strip measures — a text-only touch
+    /// from the 10 Hz tick ("Listening · 3 s" counts down second by
+    /// second without a full refresh; the line's height is fixed, so
+    /// no layout and no resize ever follow).
+    func updateCountdown() {
+        guard !guideCol.isHidden, line2.stringValue.hasPrefix("Listening") else { return }
+        line2.stringValue = engineRemainingText
     }
 
     /// The session's countdown ("Listening · 3 s") from the engine.
@@ -978,12 +935,12 @@ final class AdatTile: NSView {
         return "Listening…"
     }
 
-    /// DEBUG-ONLY (QB_AUTO_ASSIST harness): the assistant column's
-    /// real geometry, so headless runs can verify what actually laid
-    /// out instead of guessing from bitmaps.
+    /// DEBUG-ONLY (QB_AUTO_ASSIST harness): the strip's real geometry,
+    /// so headless runs can verify what actually laid out instead of
+    /// guessing from bitmaps.
     func debugLogGeometry(_ tag: String) {
         guard ProcessInfo.processInfo.environment["QB_AUTO_ASSIST"] != nil else { return }
         layoutSubtreeIfNeeded()
-        QBLog.log("geo \(tag): tile \(Int(bounds.width))×\(Int(bounds.height)) dial.x \(Int(dial.frame.minX)) dial.w \(Int(dial.frame.width)) line1.x \(Int(line1.frame.minX)) line1.w \(Int(line1.frame.width)) line2.x \(Int(line2.frame.minX)) line2.w \(Int(line2.frame.width)) done.w \(Int(doneButton.frame.width))")
+        QBLog.log("geo \(tag): tile \(Int(bounds.width))×\(Int(bounds.height)) meter.y \(Int(levelMeter.frame.minY)) meter.w \(Int(levelMeter.frame.width)) meter.h \(Int(levelMeter.frame.height)) btn.x \(Int(assistButton.frame.minX)) btn.w \(Int(assistButton.frame.width)) btn.h \(Int(assistButton.frame.height)) line1.x \(Int(line1.frame.minX)) line1.w \(Int(line1.frame.width)) line2.x \(Int(line2.frame.minX)) line2.w \(Int(line2.frame.width)) done.x \(Int(doneButton.frame.minX)) done.w \(Int(doneButton.frame.width))")
     }
 }

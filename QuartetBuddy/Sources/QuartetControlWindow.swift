@@ -737,34 +737,67 @@ final class TinyGlyphView: NSView {
     }
 }
 
-/// A compact horizontal signal meter: 20 square segments, green → amber →
-/// red, in a flat recessed bed. Level is 0…1; segments light from the
-/// left. Quiet at rest.
-/// The analog channel's INPUT LEVEL bargraph — the continuous
-/// horizontal peak meter under the channel heading, spanning the
-/// channel width. READ-ONLY, and deliberately SEPARATE from the gain
-/// knob: the knob shows the hardware preamp GAIN, the bar shows the
-/// incoming SIGNAL.
+/// The INPUT LEVEL bargraph under every channel heading — the
+/// continuous horizontal peak meter spanning the channel width, shared
+/// by the analog strips and the ADAT tiles. READ-ONLY, and deliberately
+/// SEPARATE from the gain knob: the knob shows the hardware preamp
+/// GAIN, the bar shows the incoming SIGNAL.
 ///
-/// A flat 6-pt track with a recessed graphite bed; the level rises as a
-/// CONTINUOUS fill through fixed color zones — green below −18 dBFS,
-/// amber to −6, red above — so the bar's POSITION reads the level
-/// instead of the whole strip changing color on every peak. A thin
-/// off-white peak-hold marker rides inside the track (the tap's
+/// A compact flat 4-pt track with a recessed graphite bed; the level
+/// rises as a CONTINUOUS fill through fixed color zones — green below
+/// −18 dBFS, amber to −6, red above — so the bar's POSITION reads the
+/// level instead of the whole strip changing color on every peak. A
+/// thin off-white peak-hold marker rides inside the track (the tap's
 /// instantiate-catch/2 s-hold/fall behavior drives it); at the far
 /// right edge a small CLIP lamp — ignited when the channel's samples
 /// touch full scale, staying red until CLICKED: entering the red zone
 /// is a warning, the lamp is the record of an actual clip (its own
-/// latch). No permanent numbers: the held peak reads in the tooltip
-/// ("Peak −14 dBFS"), and the Auto Gain target shows as a transient
+/// latch).
+///
+/// ONE held-peak NUMBER rides immediately right of the track,
+/// vertically centered on it: one decimal ("−12.0"), tabular numerals
+/// RIGHT-aligned in a FIXED-width area — sized for the widest value
+/// the scale can produce, so the line never reflows — and colored by
+/// the HELD value's own band, the same green/amber/red boundaries the
+/// fill respects. No current-level readout, no scale markings, no
+/// "Peak" label, no unit; silence — or a peak below the −60 floor —
+/// and an off-stream ADAT channel read a muted em dash ("No signal"
+/// in the tooltip). The Auto Gain target still shows as a transient
 /// blue marker only while the channel is being calibrated.
 final class GGLevelMeter: NSView {
 
     /// Fixed zone boundaries on the shared −60…0 dBFS display scale
     /// (fraction 1 = 0 dBFS): −18 dBFS = 0.7, −6 dBFS = 0.9 — the SAME
-    /// thresholds the ADAT dial's arc uses.
+    /// thresholds the ADAT readout's colors use.
     private static let amberZone: CGFloat = 0.7
     private static let redZone: CGFloat = 0.9
+
+    /// The track itself — one compact 4-pt line, vertically centered in
+    /// the row; the readout's line height sets the row.
+    private static let trackHeight: CGFloat = 4
+
+    /// The held-peak readout: a FIXED-width area right of the track,
+    /// after a small 7-pt gap — sized for the widest value the −60…0
+    /// scale can produce ("−60.0" at 10-pt tabular numerals, with
+    /// headroom) — and the number RIGHT-aligns inside it, so the area
+    /// never resizes and the meter's width never changes.
+    private static let readoutWidth: CGFloat = 36
+    private static let readoutGap: CGFloat = 7
+    /// Silence — or a held peak below the −60 display floor — and an
+    /// off-stream ADAT channel read this muted em dash, never "−∞":
+    /// the same size and alignment convention as the numbers.
+    private static let silentText = "—"
+
+    /// Optical correction for the readout's vertical centering: the
+    /// string's own ink band (glyph path bounds) goes exactly on the
+    /// track's centerline, but in a SIGNED number the minus sign rides
+    /// low in the digit band — the font's math axis sits ~0.7 pt below
+    /// the band's center at 10 pt — and drags the perceived center
+    /// down with it. Half a point of raise (one device pixel on
+    /// Retina) levels the number with the track; applied to NUMERIC
+    /// states only, because the silence dash has no such asymmetry and
+    /// centers by its own ink. The meter itself never moves.
+    private static let readoutOpticalLift: CGFloat = 0.5
 
     /// The live level fraction (tap feed: fast rise, smooth decay).
     private(set) var level: Double = 0
@@ -776,35 +809,68 @@ final class GGLevelMeter: NSView {
     private(set) var targetFraction: Double?
     /// The lamp's latch — set by a full-scale sample, cleared by a click.
     private var clipLatched = false { didSet { needsDisplay = true } }
+    /// An explicit readout override — the ADAT tile keeps its dial's
+    /// "—" while the channel is not on the stream; nil = derive the
+    /// text from the held fraction.
+    private var readoutOverride: String?
 
     /// ONE 10 Hz feed (adatUpdateTick): the live level, the held peak,
     /// the transient Auto Gain target and the engine's full-scale-sample
     /// flag — the LATCH itself lives here, so the lamp stays red until
     /// the user resets it even when the tick's flag auto-decays.
     func update(level: Double, peakFraction: Double?,
-                targetFraction: Double?, clip: Bool) {
+                targetFraction: Double?, clip: Bool,
+                holdText: String? = nil) {
         self.level = level
         self.peakFraction = peakFraction
         self.targetFraction = targetFraction
+        readoutOverride = holdText
         if clip { clipLatched = true }
         needsDisplay = true
-        // the peak value reads in the hover tooltip — "Peak −14 dBFS"
-        var tip = "Peak " + Self.dbfsText(peakFraction)
+        // the peak value reads in the hover tooltip — "Peak −14 dBFS";
+        // silence (or a peak under the display floor) reads "No signal"
+        var tip = "No signal"
+        if let f = peakFraction, f.isFinite, f > 0 {
+            tip = "Peak " + Self.dbfsText(peakFraction)
+        }
         if clipLatched { tip += " · clipped — click to reset" }
         if toolTip != tip { toolTip = tip }
     }
 
-    /// A display fraction → "−14 dBFS" text (U+2212); no known peak →
-    /// "−∞", so the tooltip stays honest about silence.
+    /// A display fraction → "−14 dBFS" text (U+2212) — the tooltip's
+    /// whole-number form; the caller only asks with a known peak in
+    /// hand (silence reads "No signal" before this is reached).
     private static func dbfsText(_ fraction: Double?) -> String {
         guard let f = fraction, f.isFinite, f > 0 else { return "−∞" }
         let db = Int((f * 60 - 60).rounded())
         return "\(db) dBFS".replacingOccurrences(of: "-", with: "−")
     }
 
-    /// A 6-pt row is a needle to click — the lamp's reset target spans a
-    /// taller band around the track (the row spacings, not the neighbor
-    /// controls).
+    /// The HELD peak as a one-decimal number ("−12.0") — carved out of
+    /// the SAME fraction the marker uses (display scale: dbfs = f·60 −
+    /// 60). Single digits stay unpadded ("−6.2", never "−06.2"), a
+    /// rounding to "−0.0" normalizes to "0.0", and no peak above the
+    /// display floor → the muted em dash: silence never reads "−∞".
+    private static func peakReadoutText(_ fraction: Double?) -> String {
+        guard let f = fraction, f.isFinite, f > 0 else { return silentText }
+        let text = String(format: "%.1f", f * 60 - 60)
+            .replacingOccurrences(of: "-", with: "−")
+        return text == "−0.0" ? "0.0" : text
+    }
+
+    /// The number's color — decided by the HELD peak's fraction, never
+    /// the live level: green below −18, amber to −6, red at −6 and
+    /// above (the fill's own zone boundaries); no hold → muted.
+    private static func readoutColor(_ fraction: Double?) -> NSColor {
+        guard let f = fraction, f.isFinite, f > 0 else { return GGTheme.muted }
+        return f < amberZone ? GGTheme.green
+            : f < redZone ? GGTheme.amber
+            : GGTheme.red
+    }
+
+    /// A one-line row is a needle to click — the lamp's reset target
+    /// spans a taller band around the track (the row spacings, not the
+    /// neighbor controls).
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         guard local.x >= bounds.minX, local.x <= bounds.maxX else { return nil }
@@ -820,7 +886,11 @@ final class GGLevelMeter: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = bounds
+        // the compact 4-pt track sits LEFT, vertically centered in the
+        // readout's line — one row holds track + gap + number
+        let track = NSRect(x: bounds.minX, y: bounds.midY - Self.trackHeight / 2,
+                           width: bounds.width - Self.readoutWidth - Self.readoutGap,
+                           height: Self.trackHeight)
         let trackPath = NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2)
         GGTheme.inset.setFill()
         trackPath.fill()
@@ -876,6 +946,46 @@ final class GGLevelMeter: NSView {
         }
 
         NSGraphicsContext.restoreGraphicsState()
+
+        drawReadout()
+    }
+
+    /// The held peak's NUMBER right of the clipping indicator: tabular
+    /// numerals RIGHT-aligned against the fixed-width area's right
+    /// edge — every state ends flush there, so the digits never wander
+    /// and the decimal point holds its slot while a magnitude is
+    /// steady — and one decimal, the strip's SINGLE readout: no dial,
+    /// no second number, no unit. Vertically the string's OWN ink band
+    /// is centered on the track's centerline (never a baseline anchor,
+    /// no uneven top/bottom air), raised the optical half-point for
+    /// the minus sign's low ride in numeric states; the silence dash
+    /// centers by its own ink — same alignment rule, same size, muted
+    /// color.
+    private func drawReadout() {
+        let text = readoutOverride ?? Self.peakReadoutText(peakFraction)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        let value = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: text == Self.silentText
+                ? GGTheme.muted : Self.readoutColor(peakFraction),
+        ])
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            let line = CTLineCreateWithAttributedString(value)
+            // RIGHT edge — advance width, so every state ends flush
+            let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            // VERTICAL — the glyph-path bounds are baseline-relative
+            // (y-up): baseline = centerline − ink midpoint, then the
+            // numeric optical raise. This centers digits and dash by
+            // what is actually INK, not by font plumbing.
+            let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            let lift = text == Self.silentText ? 0 : Self.readoutOpticalLift
+            ctx.textPosition = CGPoint(x: bounds.maxX - width,
+                                       y: bounds.midY - ink.midY + lift)
+            CTLineDraw(line, ctx)
+        } else {
+            value.draw(at: NSPoint(x: bounds.maxX - value.size().width,
+                                   y: bounds.midY - font.capHeight / 2))
+        }
     }
 }
 
@@ -2977,8 +3087,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// window, popovers, dropdown menu tracking, plug-in editors) never
     /// dismiss it, and a PINNED panel never auto-hides at all. Hiding is
     /// orderOut only — nothing quits and audio processing is untouched.
-    func windowDidResignKey(_ notification: Notification) {
-        guard !pinned, window?.isVisible == true else { return }
+    func windowDidResignKey(_ notification: Notification) {        guard !pinned, window?.isVisible == true else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             // focus came BACK (menu tracking closed, popover dismissed
@@ -3128,12 +3237,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // ADAT TILES — focus markers + availability. Assistance is a
         // Core-Audio measurement: it needs the stream, not the glue
         // tree, so tiles stay active whenever the channel exists.
-        let adatEngine = AdatGainEngine.shared
-        for i in 0..<adatTiles.count {
-            adatTiles[i].update(status: adatEngine.statuses[i],
-                                focus: adatEngine.focusedChannel == i,
-                                available: adatEngine.channelAvailable(i))
-        }
+        applyAdatTileStates()
 
         for i in 0..<4 {
             inputHeaders[i]?.stringValue = inputs[i].name ?? "Analog In \(i + 1)"
@@ -4225,14 +4329,26 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
+        let clip = scroll.contentView
         // doc tracks the clip view's width (no h-scroll) and HUGS its
         // content's height — the sections size to their content instead
         // of being stretched to fill the window (that stretch was the
         // big empty band under every strip). The scroll view scrolls
         // when the content is taller than the window.
-        let clip = scroll.contentView
+        //
+        // The width equality sits at 999 (NOT required): with a LEGACY
+        // scroller (the user's System Settings "Always" pref) the clip
+        // narrows by the scroller's ~17 pt whenever the content is
+        // taller than the viewport — and a required equality would push
+        // that deficit up the chain (strips' required width → doc →
+        // clip → scroll → window), WIDENING the window by the overflow,
+        // permanently. At 999 a momentary/narrow overflow simply clips
+        // at the doc's right edge (there is no horizontal scroller to
+        // show) — the window's width is the user's, never the content's.
+        let docWidth = doc.widthAnchor.constraint(equalTo: clip.widthAnchor)
+        docWidth.priority = .init(999)
         NSLayoutConstraint.activate([
-            doc.widthAnchor.constraint(equalTo: clip.widthAnchor),
+            docWidth,
             doc.heightAnchor.constraint(equalTo: stack.heightAnchor),
         ])
         scrollDoc = doc
@@ -4409,11 +4525,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
             // SIGNAL LEVEL bargraph between the header and the controls
-            // — a 6-pt continuous peak meter (zones + peak-hold + clip
-            // lamp; read-only, the knob above/below shows GAIN, this
-            // shows LEVEL) spanning the whole channel width.
+            // — a compact 4-pt continuous peak meter (zones + peak-hold
+            // + clip lamp; read-only, the knob above/below shows GAIN,
+            // this shows LEVEL) spanning the whole channel width, the
+            // held peak's one-decimal readout riding at its right end
+            // (the 12-pt row centers the 4-pt track in the number's
+            // line).
             let meter = GGLevelMeter()
-            meter.heightAnchor.constraint(equalToConstant: 6).isActive = true
+            meter.heightAnchor.constraint(equalToConstant: 12).isActive = true
             col.addArrangedSubview(meter)
             meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             meters.append(meter)
@@ -4532,20 +4651,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: ADAT bank
 
-    /// The ADAT bank: eight compact channel tiles in the app's
-    /// four-column geometry (two rows). Each tile: channel number +
-    /// optional name, live meter with peak/target markers, assistance
-    /// status, and an Assist action — no gain knob, no 48V: the
-    /// external converter owns the preamp, and the interface must not
-    /// suggest control the app does not have.
+    /// The ADAT bank: eight COMPACT, CONTENT-SIZED channel strips in
+    /// the app's four-column geometry (two rows). Each strip: the
+    /// channel heading with its Assist button, the shared horizontal
+    /// meter (with the inline held-peak readout) — and nothing else at
+    /// idle. The two-line guidance exists ONLY while a strip hosts the
+    /// assistant; its row then grows just that height, neighbours stay
+    /// top-aligned, and the window re-fits once per open/close. The
+    /// vertical rules follow the strip height (they pin to the strip's
+    /// edges — no old channel height to stretch into). No circular
+    /// readout, no cards, no hardware controls — the external converter
+    /// owns the preamp, and the strip must not suggest operations the
+    /// app does not have.
     private func makeAdatGrid() -> NSView {
         let wrap = NSStackView()
         wrap.orientation = .vertical
-        wrap.spacing = GGSpace.related
+        // the two rows sit CLOSE: 18 pt between the compact strips
+        wrap.spacing = 18
         wrap.translatesAutoresizingMaskIntoConstraints = false
         for row in 0..<2 {
             let strip = NSStackView()
             strip.orientation = .horizontal
+            // TOP-ALIGNED neighbours: when one strip's guidance grows
+            // its row, the other three keep their position — no
+            // centering drift, no placeholders
+            strip.alignment = .top
             strip.spacing = GGSpace.related
             strip.translatesAutoresizingMaskIntoConstraints = false
             for col in 0..<4 {
@@ -4637,7 +4767,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         if engine.isMeasuringChannel(index) {
             engine.stopMeasuring()
             QBLog.log("adatgain: assist stopped on ADAT \(index + 1)")
+            // a stop with no previous result restores .idle — the
+            // guidance collapses and the strip shrinks back
             refresh()
+            syncAdatGuidanceLayout()
             return
         }
         if engine.isMeasuring {
@@ -4663,10 +4796,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
         }
         refresh()
+        syncAdatGuidanceLayout()
     }
 
     /// Done: close this channel's guidance and clear its
-    /// recommendation — the button returns to "Gain Assist…".
+    /// recommendation — the button returns to "Assist…".
     func dismissAssistant(_ index: Int) {
         let engine = AdatGainEngine.shared
         engine.clearResult(index)
@@ -4674,6 +4808,40 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             engine.focusedChannel = nil
         }
         refresh()
+        syncAdatGuidanceLayout()
+    }
+
+    /// The ADAT tiles' state application — shared by refreshNow and the
+    /// synchronous guidance transitions.
+    private func applyAdatTileStates() {
+        let engine = AdatGainEngine.shared
+        for i in 0..<adatTiles.count {
+            adatTiles[i].update(status: engine.statuses[i],
+                                focus: engine.focusedChannel == i,
+                                available: engine.channelAvailable(i))
+        }
+    }
+
+    /// The inline guidance's open/close is the ONE layout change the
+    /// assistant makes: the hosting strip grows (or shrinks back) by
+    /// the two lines' height. Applied SYNCHRONOUSLY — the bank-switch
+    /// pattern: a deferred refresh would let a layout pass run with the
+    /// content taller than the viewport, where a legacy scroller
+    /// appears, narrows the clip and lets the strips' required width
+    /// widen the window itself. Then the window re-fits ONCE — never on
+    /// ticks, meters or countdowns.
+    private func syncAdatGuidanceLayout() {
+        applyAdatTileStates()
+        resizeWindowToFitContent()
+        // the doc is unflipped (origin at the bottom): growing or
+        // shrinking it at the TOP edge leaves the scroll offset
+        // pointing at the bottom region — re-anchor to the top so the
+        // Inputs section (and the just-opened guidance) stays in view,
+        // exactly like the bank switch does
+        if let doc = scrollArea?.documentView {
+            doc.layoutSubtreeIfNeeded()
+            doc.scroll(NSPoint(x: 0, y: doc.bounds.maxY))
+        }
     }
 
     /// The 10 Hz engine tick: meters fast-path here (never a full
@@ -4703,18 +4871,35 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         for i in 0..<adatTiles.count {
             let ch = AdatGainEngine.analogChannels + i
             let available = engine.channelAvailable(i)
+            // the SAME consolidated feed the analog strips get: level +
+            // held peak + (while THIS channel is being measured) the
+            // assistant's transient target marker + the full-scale flag
             adatTiles[i].setLevels(
                 live: engine.levelFraction(ch),
-                holdText: engine.heldPeakText(ch, unavailable: !available),
+                peakFraction: engine.heldPeakDBFS(ch)
+                    .map { AdatGainEngine.levelFraction(dbfs: $0) },
+                targetFraction: engine.isMeasuringChannel(i)
+                    ? AdatGainEngine.levelFraction(dbfs: AdatGainEngine.targetDBFS)
+                    : nil,
                 clipped: engine.liveClipActive(ch),
                 unavailable: !available)
+            // the measuring strip's countdown counts second-by-second
+            // as a text-only touch (fixed line height — no layout,
+            // no resize)
+            if engine.isMeasuringChannel(i), engine.focusedChannel == i {
+                adatTiles[i].updateCountdown()
+            }
         }
         if engine.isMeasuring {
             adatWasMeasuring = true
         } else if adatWasMeasuring {
-            // measurement finished → frozen results: one full refresh
+            // measurement finished → frozen results: one full refresh;
+            // the guidance text swaps but its two lines stay — the sync
+            // no-ops unless a height actually changed (e.g. an Auto Gain
+            // takeover collapsed a cancelled strip's guidance)
             adatWasMeasuring = false
             refresh()
+            syncAdatGuidanceLayout()
         }
     }
 
