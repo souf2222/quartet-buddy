@@ -795,7 +795,9 @@ final class InputTap {
         return unsafeBitCast(sym, to: RemoveIOProcFn.self)
     }()
 
-    private static func inputChannelCount(_ dev: AudioDeviceID) -> Int {
+    /// Internal so the ADAT Assisted Gain engine can read the live
+    /// stream layout (the ADAT bank's channel count derives from it).
+    static func inputChannelCount(_ dev: AudioDeviceID) -> Int {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
                                               mScope: kAudioDevicePropertyScopeInput,
                                               mElement: kAudioObjectPropertyElementMain)

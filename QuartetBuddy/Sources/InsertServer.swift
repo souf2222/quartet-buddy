@@ -38,6 +38,20 @@ final class InsertServer: NSObject {
     /// permission (it silences taps instead of failing them).
     private(set) var tapSilent = true
 
+    // MARK: - Trim (software)
+
+    /// The routing cards' trim is SOFTWARE: a linear factor applied in the
+    /// capture chain (`trimFactors`, see `setTrim`). The firmware has its
+    /// own per-line-out trim — `/dev/<serial>/hwout/hwout2…7/trim`, a dB
+    /// double applied at the DAC (live-verified 2026‑10‑26,
+    /// docs/protocol-notes.md) — but that is DEVICE state, owned by
+    /// Settings ▸ Quartet ▸ Output Levels, not chain state.
+    ///
+    /// Label map (live-mapped Oct 26 2026): hwout2…7 are MONO strips named
+    /// "Analog Out 1..6"; pairs are  Out 3‑4 → hwout2+3, Out 5‑6 → hwout4
+    /// +5, Out 7‑8 → hwout6+7. Out 1‑2 (Main Out) has NO trim property —
+    /// the main bus rides `gain`, which the OS fader binding owns.
+
     // MARK: - The 4 stereo pairs
 
     static let pairNames = [
@@ -257,7 +271,23 @@ final class InsertServer: NSObject {
             } else if let m = UserDefaults.standard.string(forKey: Self.mirrorKey(i)) {
                 p.stage = (m == "before") ? .pre : .postTrim
             }
-            // input trim (Level) — clamp to −64…+6 dB
+            // input trim (Level) — clamp to −64…+6 dB, applied as a
+            // software factor in the capture chain.
+            //
+            // One-time migration (2026‑10‑26): a live experiment briefly
+            // made the knobs write the firmware trim instead, so pairs
+            // 1…3's saved values may sit ON THE HARDWARE. Move them to the
+            // Settings-side `hwout.trim.*` keys and zero the knobs here —
+            // otherwise the level would double-apply (software × hardware).
+            if !UserDefaults.standard.bool(forKey: "hwout.trim.migratedFromKnobs") {
+                UserDefaults.standard.set(true, forKey: "hwout.trim.migratedFromKnobs")
+                for j in 1...3 where UserDefaults.standard.object(forKey: Self.trimKey(j)) != nil {
+                    let db = UserDefaults.standard.double(forKey: Self.trimKey(j))
+                    UserDefaults.standard.set(db, forKey: "hwout.trim.\(j)")
+                    UserDefaults.standard.set(0.0, forKey: Self.trimKey(j))
+                    QBLog.log(String(format: "migrate: knob trim pair %d %.1f dB → hwout.trim.%d (settings)", j, db, j))
+                }
+            }
             let savedTrim = UserDefaults.standard.double(forKey: Self.trimKey(i))
             if savedTrim != 0 {
                 p.trim = Float(min(6, max(-64, savedTrim)))
@@ -272,7 +302,9 @@ final class InsertServer: NSObject {
             }
             return p
         }
-        trimFactors = pairs.map { pow(10, $0.trim / 20) }
+        for i in 0..<pairs.count {
+            trimFactors[i] = pow(10, pairs[i].trim / 20)
+        }
     }
 
     private func saveSource(_ i: Int) {
@@ -650,6 +682,51 @@ final class InsertServer: NSObject {
                                           UInt32(MemoryLayout<Double>.size), &r) == noErr
     }
 
+    // MARK: - Device buffer size (Settings ▸ Processing ▸ Audio engine)
+
+    /// The Quartet's device IO buffer (frames) read straight from Core
+    /// Audio. NOTE: the glue tree's `dev/preferredBufferSize` is a daemon
+    /// preference that never reaches the HAL (verified live Oct 25 2026 —
+    /// even across a USB replug) — so a real buffer selector writes the
+    /// CoreAudio property directly, like setDeviceSampleRate does.
+    static func deviceBufferFrames() -> UInt32? {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return nil }
+        var v = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr else { return nil }
+        return v
+    }
+
+    /// The device's allowed buffer range; the manager clamps and rounds
+    /// (the driver takes anything 15…4096 — snap to the classic sizes).
+    static func deviceBufferRange() -> ClosedRange<UInt32>? {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return nil }
+        var range = AudioValueRange()
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &range) == noErr else { return nil }
+        return UInt32(range.mMinimum)...UInt32(range.mMaximum)
+    }
+
+    /// Write the device IO buffer; true when Core Audio accepted it. The
+    /// HAL reconfigures all the device's clients (a short audio hiccup at
+    /// re-lock) — callers should restart the insert right after.
+    @discardableResult
+    static func setDeviceBufferFrames(_ frames: UInt32) -> Bool {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return false }
+        var v = frames
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(dev, &addr, 0, nil,
+                                          UInt32(MemoryLayout<UInt32>.size), &v) == noErr
+    }
+
     // MARK: - Sample-rate change → insert restart
 
     /// The Quartet device our rate listener is attached to (0 = none).
@@ -1013,9 +1090,12 @@ final class InsertServer: NSObject {
         onStateChange?()
     }
 
-    /// Input trim (Level) for pair i, dB in −64…+6. Applied to the
-    /// pair's input before its plug-in; routing-level (unaffected by
-    /// Bypass All Plug-ins). Minimum = effective silence.
+    /// Input trim (Level) for pair i, dB in −64…+6 — SOFTWARE, applied in
+    /// the capture chain via `trimFactors` (routing-level: unaffected by
+    /// Bypass All Plug-ins). The firmware's own line-out trim is separate
+    /// device state, owned by Settings ▸ Quartet ▸ Output Levels (its
+    /// saved values live under `hwout.trim.*` and are pushed to the unit
+    /// by the AppDelegate's sync-on-reconnect).
     func setTrim(_ i: Int, _ db: Double, notify: Bool = true) {
         let clamped = min(6.0, max(-64.0, db))
         pairs[i].trim = Float(clamped)

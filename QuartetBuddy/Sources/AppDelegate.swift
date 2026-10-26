@@ -95,6 +95,24 @@ enum PathIds {
                 UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]
     }
 
+    /// Path-id of ANY property under the connected Quartet's device node,
+    /// computed on the fly — the sample-rate precedent (protocol-notes.md,
+    /// "Device sample rate — WRITABLE via Glue"): every path-id is the
+    /// java31 hash of the slash path, so nothing beyond the serial is
+    /// needed. nil when no device is tree-connected (nothing to hash
+    /// against — callers must handle the nil and log).
+    static func dev(_ rel: String) -> [UInt8]? {
+        guard let serial = activeSerial else { return nil }
+        return hash("/dev/\(serial)/" + rel)
+    }
+
+    /// Path-id of an app-scoped property — `/Apps/<rel>` (Talkback lives
+    /// under `/Apps/Apogee Talkback helper/Talkback/…`; identical on
+    /// every unit because it carries no serial).
+    static func app(_ rel: String) -> [UInt8] {
+        hash("/Apps/" + rel)
+    }
+
     /// The complete id table for a serial — every control the console and
     /// menubar features touch, computed, nothing captured.
     static func computedTable(serial: String) -> DeviceTable {
@@ -301,6 +319,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    /// Hardware trims last pushed to the unit (pair → dB) — dedup for
+    /// `syncSavedHardwareTrims`: each tree arrival tries once per
+    /// connection (the record is cleared on disconnect). The Quartet may
+    /// come back from a power cycle at 0, so the app's saved hardware-trim
+    /// settings must re-apply, but tree arrivals triggered by other
+    /// clients' hellos must not spam identical writes.
+    private var pushedHardwareTrims: [Int: Double] = [:]
+
+    /// The line-out strips' firmware trim, pairs 1…3 — mono strips, so a
+    /// pair is TWO hwout nodes (hwout names are strip names "Analog Out
+    /// 1..6" = hwout2…7):
+    ///
+    ///     pair 1 → hwout2 + hwout3 · pair 2 → hwout4 + hwout5 ·
+    ///     pair 3 → hwout6 + hwout7
+    ///
+    /// (LABEL TRAP, live-mapped Oct 26 2026: the touchscreen calls these
+    /// strips "Analog Out 5/6" where macOS cards say "Out 7‑8" — one pair
+    /// up, because the main bus consumes macOS channels 1‑2.)
+    private static let hwoutTrimNodes: [Int: [String]] = [
+        1: ["hwout2", "hwout3"],
+        2: ["hwout4", "hwout5"],
+        3: ["hwout6", "hwout7"],
+    ]
+
+    /// Firmware trim hard range: −24…0 dB (attenuation only). Clamped on
+    /// EVERY path — settings write, reconnect push, DB readback — so no
+    /// write and no saved value can leave the window.
+    static let hwoutTrimMin = -24.0
+    static let hwoutTrimMax = 0.0
+
+    /// The saved settings-side hardware trims (`hwout.trim.<pair>`, set in
+    /// Settings ▸ Quartet ▸ Output Levels) → the unit. Called on every
+    /// tree arrival; each value writes exactly once per value. A pair with
+    /// NO saved key is skipped — the first run after an upgrade must not
+    /// stomp trims the unit already carries. Out-of-range saved values are
+    /// clamped (the in-range value is rewritten back to the key) so the
+    /// push can never leave the window.
+    private func syncSavedHardwareTrims() {
+        guard case .connected = glue.state, PathIds.activeSerial != nil else { return }
+        var pushedAny = false
+        for pair in Self.hwoutTrimNodes.keys {
+            guard UserDefaults.standard.object(forKey: "hwout.trim.\(pair)") != nil else { continue }
+            let raw = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            let db = min(Self.hwoutTrimMax, max(Self.hwoutTrimMin, raw))
+            if raw != db {
+                UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+                QBLog.log(String(format: "trim: pair %d saved %.1f dB out of range — clamped to %.1f", pair, raw, db))
+            }
+            guard pushedHardwareTrims[pair] != db else { continue }
+            for h in Self.hwoutTrimNodes[pair] ?? [] {
+                guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
+                glue.setDouble(id: id, db)
+            }
+            pushedHardwareTrims[pair] = db
+            pushedAny = true
+        }
+        if pushedAny {
+            QBLog.log("trim: saved hardware trims synced to the unit" +
+                      pushedHardwareTrims.keys.sorted().map { String(format: " pair%d %.1f", $0, pushedHardwareTrims[$0] ?? 0) }.joined())
+        }
+    }
+
     /// The macOS mute changed (F10, Control Center): apply it to the
     /// Quartet's hardware mute. Normally one-way (see OSVolumeMirror's
     /// header); the one exception is a target switch, where the OS mute is
@@ -359,6 +439,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QuartetControlController.shared.show()
             }
         }
+        if ProcessInfo.processInfo.environment["QB_AUTO_ASSIST"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                QBLog.log("control: AUTO-ASSIST debug trigger (ADAT bank + overlay)")
+                NSApp.activate(ignoringOtherApps: true)
+                // keep the panel up through the headless dumps: the
+                // unpinned auto-hide treats any key shift as "the user
+                // moved on" and closes the panel (and the assistant)
+                QuartetControlController.shared.pinned = true
+                UserDefaults.standard.set(1, forKey: "inputsBankPinned")
+                QuartetControlController.shared.show()
+                // the real path is click → refresh → resize; show() alone
+                // doesn't re-fit an already-built window
+                QuartetControlController.shared.resizeWindowToFitContent()
+                QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_adat.png")
+                // exercise the per-channel path exactly like a tile's Assist…
+                QuartetControlController.shared.assistChannel(0)
+                QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_listen.png")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                    // the 5 s measurement has finished → result state
+                    QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_result.png")
+                    // DEBUG: force the frozen guidance compositions —
+                    // the adjustment amount as the focal number, and
+                    // the clipped state without any exact amount
+                    AdatGainEngine.shared.debugForceStatus(0, .increase(8.4))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_guidance.png")
+                        AdatGainEngine.shared.debugForceStatus(0, .clipped(-2.0))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_clipped.png")
+                            QuartetControlController.shared.adatTiles[0].debugLogGeometry("clipped")
+                            AdatGainEngine.shared.debugForceStatus(0, .idle)
+                            // now the reverse direction: back to the
+                            // ANALOG bank — the grid must reappear
+                            // (it was hidden at build time)
+                            QuartetControlController.shared.dismissAssistant(0)
+                            QuartetControlController.shared.pinned = false   // restore the auto-hide default
+                            UserDefaults.standard.set(0, forKey: "inputsBankPinned")
+                            QuartetControlController.shared.refresh()
+                            // bank switch layout change → the window must shrink
+                            // back to the analog content height (top edge pinned)
+                            QuartetControlController.shared.resizeWindowToFitContent()
+                            QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_analog.png")
+                            // The USER-path repro: real bank-button presses
+                            // (bankClicked) instead of the forced refresh+resize
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                QuartetControlController.shared.debugClickBank(1)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_realpath_adat.png")
+                                    QuartetControlController.shared.debugClickBank(0)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                        QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_realpath_analog.png")
+                                        // leave the analog bank persisted for the user
+                                        UserDefaults.standard.set(0, forKey: "inputsBankPinned")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
@@ -401,6 +542,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         glue.onState = { [weak self] state in
             self?.refreshMenu()
             if state == .disconnected {
+                // per-connection push records reset — the next tree re-applies
+                self?.pushedHardwareTrims.removeAll()
                 self?.scheduleReconnect()
             }
         }
@@ -410,6 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The device node's type is its serial — path-ids are hashed
             // per-serial, so pick this unit's id table before anything else.
             PathIds.select(serial: GlueClient.quartetSerial(in: tree))
+            self.syncSavedHardwareTrims()
             if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
@@ -1024,6 +1168,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    // MARK: - Device node flags (touchscreen settings + identify)
+
+    /// The connected Quartet's own node from the latest glue tree (the
+    /// node's type IS the serial — see PathIds.dev).
+    private func deviceNode() -> [String: Any]? {
+        guard let tree = lastTree,
+              let serial = GlueClient.quartetSerial(in: tree) else { return nil }
+        return GlueClient.findNode(in: tree, type: serial)
+    }
+
+    /// Current boolean state of a device-node property (`peakHold`,
+    /// `overHold`, `lockHomeScreen`, `identify`, …) for the Settings
+    /// checkboxes. nil when no tree has arrived (checkboxes stay disabled).
+    func deviceFlag(_ name: String) -> Bool? {
+        guard let node = deviceNode(),
+              let v = GlueClient.intProp(node, name) else { return nil }
+        return v == 1
+    }
+
+    /// Write a device-node flag. Everything here is a 0/1 hardware
+    /// preference (the touchscreen's settings page) — no level quantities,
+    /// so the dB range-validation story doesn't apply.
+    func setDeviceFlag(_ name: String, on: Bool) {
+        guard let id = PathIds.dev(name) else {
+            QBLog.log("device: \(name) — no serial connected, write dropped")
+            return
+        }
+        QBLog.log("device: \(name) \(on ? "1" : "0")")
+        glue.setBool(id: id, on)
+    }
+
+    // MARK: - Talkback source (the "who's talking" input the helper uses)
+
+    struct TalkbackSourceDescription {
+        /// The selectable sources, in tree order — device name + its
+        /// numberOfInputChannels.
+        var sources: [(device: String, channels: Int)]
+        /// Currently selected device name ("" when unknown).
+        var selectedDevice: String
+        /// Currently selected channel index.
+        var selectedChannel: Int
+    }
+
+    /// Read the talkback subtree for the Settings ▸ Talkback picker.
+    /// nil while no tree has arrived or the helper app section is absent.
+    ///
+    /// Tree layout (verified live): the source devices live UNDER the
+    /// `talkbackSources` container node — Talkback → talkbackSources →
+    /// Quartet / MacBook Air Microphone / … — not as Talkback's direct
+    /// children. Reading Talkback's own children yielded the container
+    /// itself as one bogus "source" (its `numberOfInputChannels` absent →
+    /// always 1 channel → grayed channel picker).
+    func talkbackDescription() -> TalkbackSourceDescription? {
+        guard let tree = lastTree,
+              let talkback = GlueClient.findNode(in: tree, type: "Talkback"),
+              let props = talkback["props"] as? [String: Any] else { return nil }
+        // the container node, else the Talkback node itself (tolerates a
+        // layout where the sources ARE direct children)
+        var container = talkback
+        if let srcNode = GlueClient.findNode(in: talkback, type: "talkbackSources") {
+            container = srcNode
+        }
+        var sources: [(String, Int)] = []
+        if let children = container["children"] as? [[String: Any]] {
+            for child in children where (child["type"] as? String) != "talkbackSources" {
+                guard let name = child["type"] as? String else { continue }
+                let channels = GlueClient.intProp(child, "numberOfInputChannels") ?? 1
+                sources.append((name, channels))
+            }
+        }
+        let selected = props["selectedTalkbackSourceDevice"] as? String ?? ""
+        let channel = props["selectedTalkbackSourceChannel"] as? Int ?? 0
+        return TalkbackSourceDescription(sources: sources.map { ($0.0, $0.1) },
+                                         selectedDevice: selected,
+                                         selectedChannel: channel)
+    }
+
+    /// Pick a talkback source device (+ channel): writes the helper app's
+    /// `selectedTalkbackSourceDevice` (string) and
+    /// `selectedTalkbackSourceChannel` — the exact properties Apogee
+    /// Control 2's Talkback pane edits. Verified against the capture's
+    /// live values ("Quartet" + channel 0); the sources' own `active`
+    /// flags are presence bits — never written.
+    func selectTalkbackSource(device: String, channel: Int) {
+        let devId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice")
+        let chId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceChannel")
+        QBLog.log("talkback: source '\(device)' channel \(channel)")
+        glue.setString(id: devId, device)
+        glue.setInt(id: chId, Int32(channel))
+    }
+
     // MARK: - Windows
 
     private lazy var settingsWindow = SettingsWindowController()
@@ -1041,8 +1276,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupConsoleWindow() {
         let control = QuartetControlController.shared
         control.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        // (The routing cards' trim knobs are SOFTWARE trim, applied inside
+        // InsertServer's chain. The firmware's line-out trim lives in
+        // Settings ▸ Quartet ▸ Output Levels, wired in setupSettingsWindow.)
         control.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
         control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
@@ -1086,8 +1325,144 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refreshMenu()
         }
         settingsWindow.onMidiClear = { [weak self] in
+            self?.learningMidi = false
             self?.midiTrigger = nil
             UserDefaults.standard.removeObject(forKey: "midiTrigger")
+        }
+        // Learn state + cancel (the MIDI watcher is owned here).
+        settingsWindow.isMidiLearning = { [weak self] in self?.learningMidi ?? false }
+        settingsWindow.onMidiCancel = { [weak self] in
+            guard self?.learningMidi == true else { return }
+            self?.learningMidi = false
+            self?.refreshMenu()
+        }
+        // Device-node flags (Settings ▸ Quartet ▸ Controls): the
+        // window reads raw dev-node props and asks us for each write.
+        settingsWindow.readDeviceProps = { [weak self] in
+            self.flatMap { $0.deviceNode().flatMap { $0["props"] as? [String: Any] } }
+        }
+        settingsWindow.writeDeviceFlag = { [weak self] name, on in
+            self?.setDeviceFlag(name, on: on)
+        }
+        // Talkback source picker (Settings ▸ Talkback).
+        settingsWindow.readTalkback = { [weak self] in self?.talkbackDescription() }
+        settingsWindow.writeTalkbackSource = { [weak self] device, channel in
+            self?.selectTalkbackSource(device: device, channel: channel)
+        }
+        // Line-out hardware levels (Settings ▸ Quartet ▸ Output Levels):
+        // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
+        settingsWindow.readLineOutLevels = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return [] }
+            return (0..<6).map { i -> (name: String, refLevel: Int?) in
+                guard let node = GlueClient.findNode(in: dev, type: "hwout\(i + 2)") else {
+                    return ("Analog Out \(i + 1)", nil)
+                }
+                let name = (node["props"] as? [String: Any])?["name"] as? String
+                    ?? "Analog Out \(i + 1)"
+                return (name, GlueClient.intProp(node, "analogRefLevel"))
+            }
+        }
+        settingsWindow.writeLineOutLevel = { [weak self] i, v in
+            guard let self, let id = PathIds.dev("hwout/hwout\(i + 2)/analogRefLevel") else { return }
+            QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
+            self.glue.setInt(id: id, Int32(v))
+        }
+        // Line-out firmware TRIM (Settings ▸ Quartet ▸ Output Levels).
+        // The strips' `trim` is a dB double applied by the firmware at the
+        // DAC — downstream of everything macOS sends — so it listens to
+        // ALL apps, not just this one's chain. Rows are PAIRS of the mono
+        // strips (Analog Out 1/2 = hwout2+hwout3 … 5/6 = hwout6+hwout7);
+        // a write goes to BOTH strips so the pair tracks together. Reads
+        // take the left strip's value: a pair whose strips were trimmed
+        // apart on the touchscreen shows the left one until touched.
+        settingsWindow.readHwoutTrims = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return [] }
+            return (1...3).map { pair -> (name: String, trim: Double?) in
+                let left = GlueClient.findNode(in: dev, type: "hwout\(2 * pair)")
+                let right = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 1)")
+                let propsL = left.flatMap { $0["props"] as? [String: Any] }
+                let propsR = right.flatMap { $0["props"] as? [String: Any] }
+                let nameL = (propsL?["name"] as? String) ?? "Analog Out \(2 * pair - 1)"
+                let nameR = (propsR?["name"] as? String) ?? "Analog Out \(2 * pair)"
+                return ("\(nameL) / \(nameR)", left.flatMap { GlueClient.doubleProp($0, "trim") })
+            }
+        }
+        settingsWindow.writeHwoutTrim = { [weak self] pair, db in
+            guard let self, case .connected = self.glue.state else { return }
+            let db = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
+            for h in Self.hwoutTrimNodes[pair] ?? [] {
+                guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
+                self.glue.setDouble(id: id, db)
+            }
+            self.pushedHardwareTrims[pair] = db
+            UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+            QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
+        }
+        // Settings ▸ Quartet ▸ Channel Names — hardware inputs/outputs
+        // (glue string writes) and the app-side stereo-pair names.
+        settingsWindow.readNames = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return nil }
+            var out: [String] = []
+            for i in 0..<4 {
+                out.append(GlueClient.findNode(in: dev, type: "hwin\(i)")
+                    .flatMap { ($0["props"] as? [String: Any])?["name"] as? String } ?? "")
+            }
+            for i in 0..<8 {
+                out.append(GlueClient.findNode(in: dev, type: "hwout\(i)")
+                    .flatMap { ($0["props"] as? [String: Any])?["name"] as? String } ?? "")
+            }
+            out.append(contentsOf: (0..<4).map { QuartetControlController.savedName($0) })
+            out.append(contentsOf: (0..<8).map { AdatGainEngine.adatName($0) })
+            return out
+        }
+        settingsWindow.writeName = { [weak self] i, name in
+            guard let self else { return }
+            switch i {
+            case 0..<4:
+                if let id = PathIds.dev("hwin/hwin\(i)/name") {
+                    self.glue.setString(id: id, name)
+                    QBLog.log("settings: hwin\(i).name = '\(name)'")
+                }
+            case 4..<12:
+                let o = i - 4
+                if let id = PathIds.dev("hwout/hwout\(o)/name") {
+                    self.glue.setString(id: id, name)
+                    QBLog.log("settings: hwout\(o).name = '\(name)'")
+                }
+            case 12..<16:
+                let p = i - 12
+                QuartetControlController.setSavedName(p, name)
+                QBLog.log("settings: pair \(p) name = '\(name)'")
+            default:
+                let a = i - 16
+                guard a >= 0, a < 8 else { return }
+                AdatGainEngine.setAdatName(a, name)
+                QBLog.log("settings: ADAT \(a + 1) name = '\(name)'")
+                QuartetControlController.shared.refresh()
+            }
+        }
+        // Front-panel pad assignments (Settings ▸ Quartet ▸ Controls):
+        // the tree's actionButtons children — the remap path
+        // live-verified Oct 26 2026 (probe write → pad followed).
+        settingsWindow.readPadAssignments = { [weak self] in
+            guard let self, let dev = self.deviceNode(),
+                  let ab = GlueClient.findNode(in: dev, type: "actionButtons") else {
+                return [Int?](repeating: nil, count: 4)
+            }
+            // one entry per pad, tree order: A, B, C, Encoder_Push
+            return ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"].map { name in
+                GlueClient.findNode(in: ab, type: name).flatMap {
+                    GlueClient.intProp($0, "actionButton")
+                }
+            }
+        }
+        settingsWindow.writePadAssignment = { [weak self] slot, value in
+            guard let self else { return }
+            let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
+            guard slot >= 0, slot < names.count,
+                  let id = PathIds.dev("appState/actionButtons/\(names[slot])/actionButton") else { return }
+            QBLog.log("settings: pad slot \(slot) actionButton ← \(String(value, radix: 16))")
+            self.glue.setInt(id: id, Int32(value))
         }
         NotificationCenter.default.addObserver(forName: .init("qb.momentaryChanged"),
                                                object: nil, queue: .main) { [weak self] _ in
