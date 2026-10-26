@@ -650,6 +650,51 @@ final class InsertServer: NSObject {
                                           UInt32(MemoryLayout<Double>.size), &r) == noErr
     }
 
+    // MARK: - Device buffer size (Settings ▸ Audio)
+
+    /// The Quartet's device IO buffer (frames) read straight from Core
+    /// Audio. NOTE: the glue tree's `dev/preferredBufferSize` is a daemon
+    /// preference that never reaches the HAL (verified live Oct 25 2026 —
+    /// even across a USB replug) — so a real buffer selector writes the
+    /// CoreAudio property directly, like setDeviceSampleRate does.
+    static func deviceBufferFrames() -> UInt32? {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return nil }
+        var v = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr else { return nil }
+        return v
+    }
+
+    /// The device's allowed buffer range; the manager clamps and rounds
+    /// (the driver takes anything 15…4096 — snap to the classic sizes).
+    static func deviceBufferRange() -> ClosedRange<UInt32>? {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return nil }
+        var range = AudioValueRange()
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSizeRange,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &range) == noErr else { return nil }
+        return UInt32(range.mMinimum)...UInt32(range.mMaximum)
+    }
+
+    /// Write the device IO buffer; true when Core Audio accepted it. The
+    /// HAL reconfigures all the device's clients (a short audio hiccup at
+    /// re-lock) — callers should restart the insert right after.
+    @discardableResult
+    static func setDeviceBufferFrames(_ frames: UInt32) -> Bool {
+        guard let dev = OSVolumeMirror.scanForQuartet() else { return false }
+        var v = frames
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        return AudioObjectSetPropertyData(dev, &addr, 0, nil,
+                                          UInt32(MemoryLayout<UInt32>.size), &v) == noErr
+    }
+
     // MARK: - Sample-rate change → insert restart
 
     /// The Quartet device our rate listener is attached to (0 = none).

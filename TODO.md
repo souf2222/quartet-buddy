@@ -40,3 +40,17 @@
 
 ## Phase 8 — Serial number
 - [x] 8.1 "Apogee Quartet · <serial>" moved to the footer's bottom-right (muted label, hidden when no serial)
+
+## Phase 9 — Small RE batch (implemented + LIVE-VERIFIED Oct 25 2026)
+- [x] 9.1 `GlueClient.setString` (var-tag 5, NUL-terminated) — transport for all string writes
+- [x] 9.2 Identify — **dead end (verified live)**: `dev/identify` consumes writes of every encoding but the front panel never blinks; type-7 Command strings inert. Front-panel-only mirror. UI **removed**; findings in docs/protocol-notes.md ("Verified writes")
+- [x] 9.3 Touchscreen prefs — Settings ▸ General: peakHold / overHold / lockHomeScreen — **all three live-verified** (lock + holds user-confirmed on the unit). Note: `intProp` hardened for bool/string-typed tree props; probe gotcha: setProperty tag-3 value byte is 1/0, NOT JUCE var markers 2/3
+- [x] 9.4 Line-out levels — Analog Out 1–6 (`hwout2..7.analogRefLevel`): write +4/−10 live-verified (int32), restored — **UI moved to Settings ▸ Audio ▸ Line Out Levels** (Oct 25 2026, user request; the control window's row is gone)
+- [x] 9.5 Talkback source picker — Settings ▸ Talkback: `selectedTalkbackSourceDevice`/`Channel` write live-verified (set "Quartet"/0). Oct 25 fix: the sources live UNDER the `talkbackSources` container node — the picker read Talkback's direct children and showed one bogus "source"; now lists Quartet / MacBook Air Microphone / iPhone mic with the channel picker enabled per device
+- [x] 9.6 Renaming — hardware `hwinN.name` round-trip verified live ("Analog IN 1" ↔ "Kick"). Oct 25: **inline double-click removed** (never engaged reliably) → Settings ▸ Names pane: Quartet inputs (hwin0..3.name), Quartet outputs (hwout0..7.name — write path same pattern, not separately spot-checked), and the app-side stereo-pair names
+- [x] 9.7 LIVE-VERIFY every 9.1–9.6 write with `tools/prop_probe.py` — done Oct 25 2026 (see docs/protocol-notes.md § Verified writes)
+- [x] 9.8 Buffer-size selector — probe verdict: `preferredBufferSize` NEVER reaches the HAL (verified across a USB replug) → shipped as a **direct CoreAudio write** (Settings ▸ Audio "Device buffer", 32…4096 frames; CoreAudio write + read-back verified; insert restarts)
+- [ ] 9.9 HP routeSource menu — SKIPPED: hwout1.routeSource showed no change/traffic while switching HP source (semantics unverified; revisit if Apogee Control 2's HP routing page can be instrumented)
+- [x] 9.10 Input ganging (`hwin.group`) — probe verdict: toggling on the touchscreen sets BOTH pair members' group bits, but hardware does NOT mirror externally written gains (hwin0→30.5, ganged partner stayed 0.5) → app mirrors writes itself; Link 1+2 / Link 3+4 toggles in the Inputs header + ganged active-gain mirroring
+- [x] 9.11 Front-panel touchpad actions — **SHIPPED Oct 26 2026**: full action enum captured by cycling AC2's dropdown under `tools/watch_features.py`; external round-trip write verified (Dim All, then Mute Headphone on the encoder push). UI: Settings ▸ General ▸ **Front Panel Pads** — grouped popups (Mute ▸ / Dim ▸ / Sum to Mono ▸ / Toggle ▸ / Clear Meters / Engage Speaker Set ▸); the **encoder gets its own 4-option menu** (out-of-menu values left its action at 0x0 — inert). Footgun documented for future drives: NSPopUpButton can't display a selection inside a submenu — grouped look must use section headers + indented top-level items, and the popup needs BOTH action + target wired or nothing fires.
+

@@ -95,6 +95,24 @@ enum PathIds {
                 UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)]
     }
 
+    /// Path-id of ANY property under the connected Quartet's device node,
+    /// computed on the fly — the sample-rate precedent (protocol-notes.md,
+    /// "Device sample rate — WRITABLE via Glue"): every path-id is the
+    /// java31 hash of the slash path, so nothing beyond the serial is
+    /// needed. nil when no device is tree-connected (nothing to hash
+    /// against — callers must handle the nil and log).
+    static func dev(_ rel: String) -> [UInt8]? {
+        guard let serial = activeSerial else { return nil }
+        return hash("/dev/\(serial)/" + rel)
+    }
+
+    /// Path-id of an app-scoped property — `/Apps/<rel>` (Talkback lives
+    /// under `/Apps/Apogee Talkback helper/Talkback/…`; identical on
+    /// every unit because it carries no serial).
+    static func app(_ rel: String) -> [UInt8] {
+        hash("/Apps/" + rel)
+    }
+
     /// The complete id table for a serial — every control the console and
     /// menubar features touch, computed, nothing captured.
     static func computedTable(serial: String) -> DeviceTable {
@@ -1024,6 +1042,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    // MARK: - Device node flags (touchscreen settings + identify)
+
+    /// The connected Quartet's own node from the latest glue tree (the
+    /// node's type IS the serial — see PathIds.dev).
+    private func deviceNode() -> [String: Any]? {
+        guard let tree = lastTree,
+              let serial = GlueClient.quartetSerial(in: tree) else { return nil }
+        return GlueClient.findNode(in: tree, type: serial)
+    }
+
+    /// Current boolean state of a device-node property (`peakHold`,
+    /// `overHold`, `lockHomeScreen`, `identify`, …) for the Settings
+    /// checkboxes. nil when no tree has arrived (checkboxes stay disabled).
+    func deviceFlag(_ name: String) -> Bool? {
+        guard let node = deviceNode(),
+              let v = GlueClient.intProp(node, name) else { return nil }
+        return v == 1
+    }
+
+    /// Write a device-node flag. Everything here is a 0/1 hardware
+    /// preference (the touchscreen's settings page) — no level quantities,
+    /// so the dB range-validation story doesn't apply.
+    func setDeviceFlag(_ name: String, on: Bool) {
+        guard let id = PathIds.dev(name) else {
+            QBLog.log("device: \(name) — no serial connected, write dropped")
+            return
+        }
+        QBLog.log("device: \(name) \(on ? "1" : "0")")
+        glue.setBool(id: id, on)
+    }
+
+    // MARK: - Talkback source (the "who's talking" input the helper uses)
+
+    struct TalkbackSourceDescription {
+        /// The selectable sources, in tree order — device name + its
+        /// numberOfInputChannels.
+        var sources: [(device: String, channels: Int)]
+        /// Currently selected device name ("" when unknown).
+        var selectedDevice: String
+        /// Currently selected channel index.
+        var selectedChannel: Int
+    }
+
+    /// Read the talkback subtree for the Settings ▸ Talkback picker.
+    /// nil while no tree has arrived or the helper app section is absent.
+    ///
+    /// Tree layout (verified live): the source devices live UNDER the
+    /// `talkbackSources` container node — Talkback → talkbackSources →
+    /// Quartet / MacBook Air Microphone / … — not as Talkback's direct
+    /// children. Reading Talkback's own children yielded the container
+    /// itself as one bogus "source" (its `numberOfInputChannels` absent →
+    /// always 1 channel → grayed channel picker).
+    func talkbackDescription() -> TalkbackSourceDescription? {
+        guard let tree = lastTree,
+              let talkback = GlueClient.findNode(in: tree, type: "Talkback"),
+              let props = talkback["props"] as? [String: Any] else { return nil }
+        // the container node, else the Talkback node itself (tolerates a
+        // layout where the sources ARE direct children)
+        var container = talkback
+        if let srcNode = GlueClient.findNode(in: talkback, type: "talkbackSources") {
+            container = srcNode
+        }
+        var sources: [(String, Int)] = []
+        if let children = container["children"] as? [[String: Any]] {
+            for child in children where (child["type"] as? String) != "talkbackSources" {
+                guard let name = child["type"] as? String else { continue }
+                let channels = GlueClient.intProp(child, "numberOfInputChannels") ?? 1
+                sources.append((name, channels))
+            }
+        }
+        let selected = props["selectedTalkbackSourceDevice"] as? String ?? ""
+        let channel = props["selectedTalkbackSourceChannel"] as? Int ?? 0
+        return TalkbackSourceDescription(sources: sources.map { ($0.0, $0.1) },
+                                         selectedDevice: selected,
+                                         selectedChannel: channel)
+    }
+
+    /// Pick a talkback source device (+ channel): writes the helper app's
+    /// `selectedTalkbackSourceDevice` (string) and
+    /// `selectedTalkbackSourceChannel` — the exact properties Apogee
+    /// Control 2's Talkback pane edits. Verified against the capture's
+    /// live values ("Quartet" + channel 0); the sources' own `active`
+    /// flags are presence bits — never written.
+    func selectTalkbackSource(device: String, channel: Int) {
+        let devId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice")
+        let chId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceChannel")
+        QBLog.log("talkback: source '\(device)' channel \(channel)")
+        glue.setString(id: devId, device)
+        glue.setInt(id: chId, Int32(channel))
+    }
+
     // MARK: - Windows
 
     private lazy var settingsWindow = SettingsWindowController()
@@ -1043,6 +1152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
         control.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
         control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
@@ -1088,6 +1198,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.onMidiClear = { [weak self] in
             self?.midiTrigger = nil
             UserDefaults.standard.removeObject(forKey: "midiTrigger")
+        }
+        // Device-node flags (Settings ▸ General ▸ Touchscreen): the
+        // window reads raw dev-node props and asks us for each write.
+        settingsWindow.readDeviceProps = { [weak self] in
+            self.flatMap { $0.deviceNode().flatMap { $0["props"] as? [String: Any] } }
+        }
+        settingsWindow.writeDeviceFlag = { [weak self] name, on in
+            self?.setDeviceFlag(name, on: on)
+        }
+        // Talkback source picker (Settings ▸ Talkback).
+        settingsWindow.readTalkback = { [weak self] in self?.talkbackDescription() }
+        settingsWindow.writeTalkbackSource = { [weak self] device, channel in
+            self?.selectTalkbackSource(device: device, channel: channel)
+        }
+        // Line-out hardware levels (Settings ▸ Audio ▸ Line Out Levels):
+        // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
+        settingsWindow.readLineOutLevels = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return [] }
+            return (0..<6).map { i -> (name: String, refLevel: Int?) in
+                guard let node = GlueClient.findNode(in: dev, type: "hwout\(i + 2)") else {
+                    return ("Analog Out \(i + 1)", nil)
+                }
+                let name = (node["props"] as? [String: Any])?["name"] as? String
+                    ?? "Analog Out \(i + 1)"
+                return (name, GlueClient.intProp(node, "analogRefLevel"))
+            }
+        }
+        settingsWindow.writeLineOutLevel = { [weak self] i, v in
+            guard let self, let id = PathIds.dev("hwout/hwout\(i + 2)/analogRefLevel") else { return }
+            QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
+            self.glue.setInt(id: id, Int32(v))
+        }
+        // Settings ▸ Names — hardware inputs/outputs (glue string writes)
+        // and the app-side stereo-pair names (UserDefaults via the window).
+        settingsWindow.readNames = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return nil }
+            var out: [String] = []
+            for i in 0..<4 {
+                out.append(GlueClient.findNode(in: dev, type: "hwin\(i)")
+                    .flatMap { ($0["props"] as? [String: Any])?["name"] as? String } ?? "")
+            }
+            for i in 0..<8 {
+                out.append(GlueClient.findNode(in: dev, type: "hwout\(i)")
+                    .flatMap { ($0["props"] as? [String: Any])?["name"] as? String } ?? "")
+            }
+            out.append(contentsOf: (0..<4).map { QuartetControlController.savedName($0) })
+            return out
+        }
+        settingsWindow.writeName = { [weak self] i, name in
+            guard let self else { return }
+            switch i {
+            case 0..<4:
+                if let id = PathIds.dev("hwin/hwin\(i)/name") {
+                    self.glue.setString(id: id, name)
+                    QBLog.log("settings: hwin\(i).name = '\(name)'")
+                }
+            case 4..<12:
+                let o = i - 4
+                if let id = PathIds.dev("hwout/hwout\(o)/name") {
+                    self.glue.setString(id: id, name)
+                    QBLog.log("settings: hwout\(o).name = '\(name)'")
+                }
+            default:
+                let p = i - 12
+                QuartetControlController.setSavedName(p, name)
+                QBLog.log("settings: pair \(p) name = '\(name)'")
+            }
+        }
+        // Front-panel pad assignments (Settings ▸ General ▸ Front Panel
+        // Pads): the tree's actionButtons children — the remap path
+        // live-verified Oct 26 2026 (probe write → pad followed).
+        settingsWindow.readPadAssignments = { [weak self] in
+            guard let self, let dev = self.deviceNode(),
+                  let ab = GlueClient.findNode(in: dev, type: "actionButtons") else {
+                return [Int?](repeating: nil, count: 4)
+            }
+            // one entry per pad, tree order: A, B, C, Encoder_Push
+            return ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"].map { name in
+                GlueClient.findNode(in: ab, type: name).flatMap {
+                    GlueClient.intProp($0, "actionButton")
+                }
+            }
+        }
+        settingsWindow.writePadAssignment = { [weak self] slot, value in
+            guard let self else { return }
+            let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
+            guard slot >= 0, slot < names.count,
+                  let id = PathIds.dev("appState/actionButtons/\(names[slot])/actionButton") else { return }
+            QBLog.log("settings: pad slot \(slot) actionButton ← \(String(value, radix: 16))")
+            self.glue.setInt(id: id, Int32(value))
         }
         NotificationCenter.default.addObserver(forName: .init("qb.momentaryChanged"),
                                                object: nil, queue: .main) { [weak self] _ in

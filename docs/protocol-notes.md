@@ -232,3 +232,95 @@ The device node itself carries a `samplerate` property (JUCE double):
   float32 pairs (L/R per output; 0.0 = silent).
 * Glue keeps per-connection state; multiple clients are fine (we ran as a 5th).
 * writes are accepted from any connected client (flag=0).
+
+## Verified writes (batch — live-tested Oct 25 2026, Quartet connected)
+
+All go through plain `setProperty` (type 3, flag 0). Serendipity file:
+`tools/prop_probe.py` runs each one; `tools/watch_features.py` observes the
+stream while the unit's own UI is driven.
+
+### var-tag taxonomy (setProperty value encodings)
+
+| tag | payload | notes |
+|---|---|---|
+| 1 | int32 LE | **the universally applied numeric write** |
+| 4 | double LE | sample rate, preamp gains |
+| 5 | NUL-terminated UTF-8 | string props (`name` etc.) |
+| 3 | ONE byte, **1 = true / 0 = false** | bool-typed props |
+
+⚠ bool gotcha: tag `3`'s value byte is a raw 1/0 — NOT the JUCE var
+bool-markers 2/3. Glue treats any nonzero byte as true (probe initially
+sent markers and "false" writes kept properties true). The app's Swift
+`setBool` was always correct.
+
+Glue does not echo setProperty back to the WRITER's socket (other clients
+get the echo; we see our own writes only via tree re-reads).
+
+### Applied by hardware (verified end-to-end)
+
+| write | path | payload |
+|---|---|---|
+| line-out reference level | `/dev/<serial>/hwout/hwout2..7/analogRefLevel` | int32 2 (+4 dBu) / 3 (−10 dBV) |
+| input rename | `/dev/<serial>/hwin/hwinN/name` | string ("Kick" ↔ "Analog IN 1", round-trip verified) |
+| touchscreen lock | `/dev/<serial>/lockHomeScreen` | bool 1/0 — **user-confirmed the touchscreen locks/unlocks** |
+| meter peak hold | `/dev/<serial>/peakHold` | bool 1/0 — user-confirmed holds release |
+| meter clip hold | `/dev/<serial>/overHold` | bool 1/0 — user-confirmed |
+| talkback source | `/Apps/Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice` (+ `…Channel`) | string + int32 |
+
+Accepted but NOT hardware-visible:
+
+* `dev/identify` — consumes every encoding (bool/int/flag1/string), the
+  tree's value even follows the tag, but **the front panel never blinks**.
+  Type-7 `Command` strings (`"identify"`, `"Identify"`, `"identify=1"`,
+  `"blink"`, `"identify 1"`) all inert. Front-panel-only mirror, like the
+  OS master volume. QuartetBuddy therefore ships no Identify UI.
+* `dev/preferredBufferSize` — tree accepts and persists (int/string),
+  but CoreAudio's `kAudioDevicePropertyBufferFrameSize` never follows —
+  verified across a USB replug (preference 160 latched, HAL stayed 512).
+  DEAD for a buffer selector; a real selector writes CoreAudio directly
+  (full 15…4096 range — verified write + read-back).
+
+### Input ganging (hwinN.group)
+
+* Ganging two inputs on the touchscreen sets BOTH members' `group` bit
+  (hwin0.group = hwin1.group = True; bool-typed). Anyone can write these
+  bits (bool 1/0 verified).
+* BUT the firmware does NOT mirror externally written preamp gains even
+  when ganged — live test: hwin0 → 30.5 dB while its ganged partner hwin1
+  stayed at 0.5 dB. **Ganging is enforced by the touchscreen's UI, not
+  the DSP** — an app must mirror the gain write itself (QuartetBuddy's
+  Link toggles do: pair members' group bits are set together and the
+  ACTIVE-mode gain is written to both, Mic/Instrument matched only).
+
+### Front-panel touchpad assignments (dev/appState/actionButtons) — DECODED Oct 26 2026
+
+* Pad presses themselves produce **no glue traffic** — but assignment
+  changes DO: setProperty echo (int32) + tree update on the pad's
+  `actionButton` property. Path:
+  `/dev/<serial>/appState/actionButtons/<Touchpad_A|Touchpad_B|Touchpad_C|Encoder_Push>/actionButton`
+  (ids re-derived with tools/prop_probe.py's java31 hash: c68d9cb1 /
+  65577a93 / 04215875 / 1fa7bebf for this unit).
+* **Full enum, captured by cycling Apogee Control 2's dropdown while
+  recording** (order = AC2's list; `(group << 16) | target` where
+  target 2/3/4 = Speaker/Headphone/All Outputs):
+  Pads A/B/C accept ALL 15:
+  `0x20002 Mute−Speaker · 0x20003 Mute−Headphone · 0x20004 Mute−All ·
+   0x30002 Dim−Speaker · 0x30003 Dim−Headphone · 0x30004 Dim−All ·
+   0x40002 SumMono−Speaker · 0x40003 SumMono−Headphone · 0x40004 SumMono−All ·
+   0x5000B Toggle−Mute Speaker/HP · 0x5000C Toggle−Speaker Set 1/2 ·
+   0x60001 Clear Meters · 0x70005/6/7 Engage Speaker Set 1/2/3`
+* **Encoder Push has a shorter menu in AC2** (Mute ▸3 + Toggle ▸ Mute
+  Speaker/HP). Writing an out-of-menu value to the encoder left its
+  action at 0x0 (inert push — verified); a valid value applied and the
+  push followed. QuartetBuddy's UI therefore offers the pads all 15 and
+  the encoder only its 4.
+* External write round-trip: setProperty int32 → the pad performs the
+  new action immediately (user-verified: Dim All, Mute Headphone).
+  Factory (round-1 baseline): A=0x20002 · B=0x30002 · C=0x40004 ·
+  Encoder=0x5000B.
+
+### HP routeSource (hwout1)
+
+* 402653190 while switching the touchscreen's HP source produced no tree
+  change and no traffic — semantics unverified; no UI shipped.
+

@@ -9,7 +9,7 @@ import ServiceManagement
 /// Hotkey registration and MIDI learning stay owned by AppDelegate — this
 /// window calls back through the closures it wires up. Shortcut bindings
 /// live in ShortcutManager (wired in as `shortcuts`).
-final class SettingsWindowController: NSObject, NSWindowDelegate {
+final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
 
     /// Wired by AppDelegate.
     var onMidiLearn: (() -> Void)?
@@ -17,13 +17,68 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// The shortcut engine (bindings, conflicts, defaults).
     var shortcuts: ShortcutManager?
 
+    /// Device-node plumbing (wired by AppDelegate):
+    /// - `readDeviceProps` → the connected Quartet's dev-node props dict
+    ///   (nil = no tree/Quartet away).
+    /// - `writeDeviceFlag` → a 0/1 hardware preference write (identified
+    ///   by its property name).
+    var readDeviceProps: (() -> [String: Any]?)?
+    var writeDeviceFlag: ((String, Bool) -> Void)?
+
+    /// Talkback source picker: `readTalkback` → the helper app's subtree
+    /// description (sources + selection), `writeTalkbackSource` → the
+    /// source-device + channel writes.
+    var readTalkback: (() -> AppDelegate.TalkbackSourceDescription?)?
+    var writeTalkbackSource: ((String, Int) -> Void)?
+
+    /// Front-panel pad assignments: `readPadAssignments` → the tree's
+    /// four `actionButton` values (Touchpad_A/B/C, Encoder_Push, nil when
+    /// absent), `writePadAssignment(slot, actionValue)` → one int32
+    /// setProperty (live-verified remap path).
+    var readPadAssignments: (() -> [Int?])?
+    var writePadAssignment: ((Int, Int) -> Void)?
+
     private var window: NSWindow?
     private var sidebarButtons: [Pane: NSButton] = [:]
     private var paneViews: [Pane: NSView] = [:]
     private var currentPane: Pane = .general
 
+    // MARK: Names pane (Settings ▸ Names)
+
+    /// Renames live here instead of the control window's inline
+    /// double-click (which never stuck reliably). Three groups:
+    /// the Quartet's hardware input names, its hardware output names
+    /// (both written THROUGH ApogeeGlue — the touchscreen follows), and
+    /// the app-side stereo-pair display names.
+    ///
+    /// `readNames` → current values in ROW ORDER (nil = not connected),
+    /// `writeName` is routed by the row's kind + index.
+    struct NameRow {
+        enum Kind { case hwInput, hwOutput, pair }
+        let kind: Kind
+        /// hardware/pair index for the write routing
+        let index: Int
+    }
+    var readNames: (() -> [String]?)?
+    var writeName: ((Int, String) -> Void)?
+
+    /// The FIXED row list (order = the read/write callback order).
+    private let nameRows: [NameRow] = (0..<4).map { NameRow(kind: .hwInput, index: $0) }
+        + (0..<8).map { NameRow(kind: .hwOutput, index: $0) }
+        + (0..<4).map { NameRow(kind: .pair, index: $0) }
+    /// Static row labels — fixed defaults, so a renamed input doesn't
+    /// shift the row the user is looking for.
+    private static let hwInLabels = ["Input 1 (Mic/line)", "Input 2 (Mic/line)",
+                                     "Input 3 (Mic/line)", "Input 4 (Mic/line)"]
+    private static let hwOutLabels = ["Main Out", "Headphones", "Analog Out 1", "Analog Out 2",
+                                      "Analog Out 3", "Analog Out 4", "Analog Out 5", "Analog Out 6"]
+    private static let pairLabels = ["Pair 1", "Pair 2", "Pair 3", "Pair 4"]
+
+    private var nameFields: [NSTextField] = []
+    private var nameSuppress = false
+
     enum Pane: Int, CaseIterable {
-        case general, shortcuts, autoGain, audio, talkback, plugins, about
+        case general, shortcuts, autoGain, audio, names, talkback, plugins, about
 
         var icon: String {
             switch self {
@@ -31,6 +86,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             case .shortcuts: return "⌘"
             case .autoGain: return "◤"
             case .audio: return "♫"
+            case .names: return "✎"
             case .talkback: return "◉"
             case .plugins: return "◇"
             case .about: return "ⓘ"
@@ -42,6 +98,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             case .shortcuts: return "Shortcuts"
             case .autoGain: return "Auto Gain"
             case .audio: return "Audio"
+            case .names: return "Names"
             case .talkback: return "Talkback"
             case .plugins: return "Plug-ins"
             case .about: return "About"
@@ -76,6 +133,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         rebuildAutoGain()
         rebuildPlugins()
         rebuildShortcuts()
+        refreshTouchscreen()
+        refreshTalkbackSource()
+        refreshPads()
+        rebuildNames()
     }
 
     // MARK: - build
@@ -183,10 +244,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Sidebar rows (the highlight carriers).
     private var paneRows: [Pane: NSView] = [:]
 
-    /// A pane = title + body, pinned directly under the title. Only the
-    /// Shortcuts table scrolls — everything else fits and must hug its
-    /// content (a scroll view around a plain NSView stretches it, which
-    /// pushed the controls down and showed a phantom scrollbar).
+    /// A pane = title + body, pinned directly under the title. The
+    /// Shortcuts / Audio / Names panes may exceed the window (they
+    /// scroll); everything else fits and must hug its content (a scroll
+    /// view around a plain NSView stretches it, which pushed the
+    /// controls down and showed a phantom scrollbar).
     private func makePane(_ pane: Pane) -> NSView {
         let v = NSView()
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -207,9 +269,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         bodyViews[pane] = body
         body.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
 
-        if pane == .shortcuts {
-            // The table can outgrow the window — this one pane scrolls.
-            // The document view is FULLY chained to the body (top, leading,
+        if pane == .shortcuts || pane == .audio || pane == .names {
+            // These panes can outgrow the window — they scroll. The
+            // document view is FULLY chained to the body (top, leading,
             // trailing AND bottom) and width-locked to the clip view, so its
             // height derives from the table — without the bottom link Auto
             // Layout cannot size a plain NSView document and the scroll view
@@ -260,6 +322,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         case .shortcuts: buildShortcuts(into: body)
         case .autoGain: buildAutoGain(into: body)
         case .audio: buildAudio(into: body)
+        case .names: buildNames(into: body)
         case .talkback: buildTalkback(into: body)
         case .plugins: buildPlugins(into: body)
         case .about: buildAbout(into: body)
@@ -329,11 +392,190 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         invertSub.font = .systemFont(ofSize: 10)
         body.addArrangedSubview(invertSub)
         addDivider(to: body)
+        // Touchscreen preferences — the same bits the Quartet's own
+        // touchscreen settings page flips, written straight through
+        // ApogeeGlue (dev/<serial>/{peakHold, overHold, lockHomeScreen}).
+        body.addArrangedSubview(sectionLabel("Touchscreen"))
+        for (key, title, tip) in [
+            ("peakHold", "Meter peak hold",
+             "Level meters hold a peak marker on the touchscreen."),
+            ("overHold", "Overload hold",
+             "Hold the red clip indicator until acknowledged."),
+            ("lockHomeScreen", "Lock home screen",
+             "Locks the touchscreen to its home screen (needs the touchscreen to unlock again)."),
+        ] {
+            let check = NSButton(checkboxWithTitle: title, target: self,
+                                 action: #selector(deviceFlagChanged(_:)))
+            check.identifier = NSUserInterfaceItemIdentifier(key)
+            check.toolTip = tip
+            body.addArrangedSubview(check)
+            touchscreenChecks[key] = check
+        }
+        let tsSub = NSTextField(labelWithString:
+            "The unit's touchscreen settings, mirrored here. Requires the Quartet to be connected.")
+        tsSub.textColor = .secondaryLabelColor
+        tsSub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(tsSub)
+        addDivider(to: body)
+        // FRONT-PANEL PADS — the three A/B/C touchpads + the encoder push,
+        // assignable like any output action (verified live: writing
+        // Touchpad_A.actionButton remaps the pad; the enum was captured by
+        // driving Apogee Control 2 — see docs/protocol-notes.md).
+        body.addArrangedSubview(sectionLabel("Front Panel Pads"))
+        for (i, title) in ["Pad A", "Pad B", "Pad C", "Encoder Push"].enumerated() {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 8
+            row.translatesAutoresizingMaskIntoConstraints = false
+            let label = NSTextField(labelWithString: title)
+            label.textColor = .secondaryLabelColor
+            label.font = .systemFont(ofSize: 12)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            row.addArrangedSubview(label)
+            let p = NSPopUpButton()
+            p.translatesAutoresizingMaskIntoConstraints = false
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            for (group, items) in (i == 3 ? Self.encoderGroups : Self.padGroups) {
+                if items.count == 1 {
+                    let item = menu.addItem(withTitle: group, action: nil, keyEquivalent: "")
+                    item.representedObject = items[0].value
+                    continue
+                }
+                // GROUP HEADER — non-selectable, like AC2's dropdown
+                menu.addItem(.sectionHeader(title: group))
+                for (leaf, value) in items {
+                    let item = menu.addItem(withTitle: "\(group) — \(leaf)",
+                                            action: nil, keyEquivalent: "")
+                    item.representedObject = value
+                    item.indentationLevel = 1
+                }
+            }
+            p.menu = menu
+            p.action = #selector(padAssignmentChanged(_:))
+            p.target = self
+            p.tag = 3700 + i
+            row.addArrangedSubview(p)
+            body.addArrangedSubview(row)
+            padPopups.append(p)
+            NSLayoutConstraint.activate([
+                p.widthAnchor.constraint(equalToConstant: 210),
+                label.widthAnchor.constraint(equalToConstant: 100),
+            ])
+        }
+        let padSub = NSTextField(labelWithString:
+            "What each pad does at a touch — the same assignments Apogee Control 2 edits. Requires the Quartet to be connected.")
+        padSub.textColor = .secondaryLabelColor
+        padSub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(padSub)
+        addDivider(to: body)
         // Debug log lives in its own Troubleshooting group.
         body.addArrangedSubview(sectionLabel("Troubleshooting"))
         let logButton = NSButton(title: "Open Debug Log…", target: self,
                                   action: #selector(openLog(_:)))
         body.addArrangedSubview(logButton)
+    }
+
+    /// The Touchscreen checkboxes (keyed by dev-node property name).
+    private var touchscreenChecks: [String: NSButton] = [:]
+    /// True while refresh is copying tree state into the checkboxes.
+    private var touchscreenSyncing = false
+
+    /// Front-panel pad assignment popups (Pad A/B/C, Encoder Push),
+    /// plus the action enum captured from Apogee Control 2 (Oct 25–26
+    /// 2026) — `padGroups` mirrors AC2's dropdown structure (grouped
+    /// submenus); `padActions` is the flat reverse lookup used by refresh.
+    private var padPopups: [NSPopUpButton] = []
+    private var padSyncing = false
+    static let padGroups: [(group: String, items: [(name: String, value: Int)])] = [
+        ("Mute", [("Speaker", 0x20002), ("Headphone", 0x20003), ("All Outputs", 0x20004)]),
+        ("Dim", [("Speaker", 0x30002), ("Headphone", 0x30003), ("All Outputs", 0x30004)]),
+        ("Sum to Mono", [("Speaker", 0x40002), ("Headphone", 0x40003), ("All Outputs", 0x40004)]),
+        ("Toggle", [("Mute Speaker/HP", 0x5000B), ("Speaker Set 1/2", 0x5000C)]),
+        ("Clear Meters", [("", 0x60001)]),
+        ("Engage Speaker Set", [("Set 1", 0x70005), ("Set 2", 0x70006), ("Set 3", 0x70007)]),
+    ]
+    /// Encoder Push restricted set — Apogee Control 2 gives the encoder a
+    /// SHORTER menu than the pads (Mute ▸… + Toggle ▸ Mute Speaker/HP).
+    /// An out-of-menu value written to the encoder left its action at 0x0
+    /// (inert — verified), so Pads A/B/C and the encoder get different
+    /// option sets.
+    static let encoderGroups: [(group: String, items: [(name: String, value: Int)])] = [
+        ("Mute", [("Speaker", 0x20002), ("Headphone", 0x20003), ("All Outputs", 0x20004)]),
+        ("Toggle", [("Mute Speaker/HP", 0x5000B)]),
+    ]
+    /// Flat list in AC2's dropdown order — labels exactly mirrored from
+    /// the group structure. Used by refresh + app-side mapping.
+    static var padActions: [(name: String, value: Int)] {
+        padGroups.flatMap { g in
+            g.items.map { item in
+                (g.items.count == 1 ? g.group : "\(g.group) — \(item.name)", item.value)
+            }
+        }
+    }
+
+    /// Copy the tree's pad assignments into the popups (bound to the
+    /// actionButtons children's `actionButton` values, latest tree state
+    /// is picked up by our tree polling).
+    private func refreshPads() {
+        guard !padPopups.isEmpty else { return }
+        padSyncing = true
+        defer { padSyncing = false }
+        let values = readPadAssignments?() ?? []
+        let connected = values.count == padPopups.count && values[0] != nil
+        for (i, popup) in padPopups.enumerated() {
+            popup.isEnabled = connected
+            if connected, let v = values[i],
+               let item = deepItem(in: popup.menu, value: v) {
+                popup.select(item)
+            }
+        }
+    }
+
+    /// Hierarchical menu lookup — the pad popups are NSMenus with
+    /// submenus, so selectItem(at:) alone can't reach the leaves.
+    private func deepItem(in menu: NSMenu?, value: Int) -> NSMenuItem? {
+        guard let menu else { return nil }
+        for it in menu.items {
+            if let r = it.representedObject as? Int, r == value { return it }
+            if let sub = it.submenu, let found = deepItem(in: sub, value: value) { return found }
+        }
+        return nil
+    }
+
+    /// A pad action was picked — one setProperty (int32) to
+    /// `dev/appState/actionButtons/<pad>/actionButton`. Verified live:
+    /// the pad performs the new action right away.
+    @objc private func padAssignmentChanged(_ sender: NSPopUpButton) {
+        guard !padSyncing, let v = sender.selectedItem?.representedObject as? Int else { return }
+        let slot = sender.tag - 3700
+        writePadAssignment?(slot, v)
+        QBLog.log("settings: pad \(slot) → \(String(v, radix: 16))")
+    }
+
+    /// Copy the tree's current flag values into the checkboxes (disabled
+    /// while the Quartet is away / no tree yet).
+    private func refreshTouchscreen() {
+        guard !touchscreenChecks.isEmpty else { return }
+        let props = readDeviceProps?()
+        touchscreenSyncing = true
+        defer { touchscreenSyncing = false }
+        for (key, check) in touchscreenChecks {
+            if let props, let v = GlueClient.intIn(props, key) {
+                check.state = v == 1 ? .on : .off
+                check.isEnabled = true
+            } else {
+                check.isEnabled = false
+            }
+        }
+    }
+
+    /// A Touchscreen checkbox flipped — one setProperty (bool) through the
+    /// glue; the hardware echoes it back and the tree refreshes the row.
+    @objc private func deviceFlagChanged(_ sender: NSButton) {
+        guard !touchscreenSyncing,
+              let key = sender.identifier?.rawValue else { return }
+        writeDeviceFlag?(key, sender.state == .on)
     }
 
     // MARK: - Shortcuts (the design's Keyboard Shortcuts table)
@@ -616,6 +858,88 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         rebuildShortcuts()
     }
 
+    // MARK: - Names
+
+    /// One rename row: fixed label + editable field with a commit hint.
+    private func nameRow(_ title: String, tag: Int) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        let label = NSTextField(labelWithString: title)
+        label.textColor = .secondaryLabelColor
+        label.font = .systemFont(ofSize: 12)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(label)
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 20))
+        field.font = .systemFont(ofSize: 12)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.delegate = self
+        field.tag = tag
+        row.addArrangedSubview(field)
+        nameFields.append(field)
+        NSLayoutConstraint.activate([
+            label.widthAnchor.constraint(equalToConstant: 118),
+            field.widthAnchor.constraint(equalToConstant: 220),
+        ])
+        return row
+    }
+
+    private func nameBlock(into body: NSStackView, _ title: String, _ subtitle: String,
+                           _ labels: [String], _ baseTag: Int) {
+        body.addArrangedSubview(sectionLabel(title))
+        let sub = secondary(subtitle)
+        sub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(sub)
+        for (i, label) in labels.enumerated() {
+            body.addArrangedSubview(nameRow(label, tag: baseTag + i))
+        }
+        addDivider(to: body)
+    }
+
+    private func buildNames(into body: NSStackView) {
+        nameBlock(into: body, "Quartet Inputs", "Written to the hardware — the touchscreen and Apogee Control 2 show these names.",
+                  Self.hwInLabels, 5000)
+        nameBlock(into: body, "Quartet Outputs", "Written to the hardware — Main Out, Headphones and the six ¼\" outputs.",
+                  Self.hwOutLabels, 5010)
+        nameBlock(into: body, "Stereo Pair Names", "Shown only in Quartet Buddy's window (defaults like \"Out 1–2\"); leave empty to fall back to the physical pair name.",
+                  Self.pairLabels, 5020)
+        rebuildNames()
+    }
+
+    /// Tree → the eleven fields (nil read = everything blank + disabled).
+    private func rebuildNames() {
+        guard !nameFields.isEmpty else { return }
+        nameSuppress = true
+        defer { nameSuppress = false }
+        let values = readNames?() ?? []
+        let connected = values.count == nameRows.count
+        for (i, field) in nameFields.enumerated() {
+            let v = i < values.count ? values[i] : ""
+            if field.stringValue != v, field.currentEditor() == nil {
+                field.stringValue = v
+            }
+            field.isEnabled = connected
+        }
+    }
+
+    /// A rename commit. Hardware names skip empty strings (the hardware
+    /// can hold an empty name but that looks like a bug on the screen);
+    /// pair names empty = revert to the physical pair name.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard !nameSuppress, let field = obj.object as? NSTextField,
+              field.tag >= 5000, field.tag < nameFields.count + 5000,
+              let i = nameFields.firstIndex(of: field) else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let row = nameRows[i]
+        if row.kind == .pair {
+            writeName?(i, name)          // empty = revert (handled app-side)
+        } else if !name.isEmpty {
+            writeName?(i, name)
+        }
+        rebuildNames()
+    }
+
     // MARK: - Talkback
 
     private var momentaryCheck: NSButton!
@@ -624,6 +948,35 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var midiSuppress = false
 
     private func buildTalkback(into body: NSStackView) {
+        body.addArrangedSubview(sectionLabel("Source"))
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(secondary("Device"))
+        sourcePopup = NSPopUpButton()
+        sourcePopup.translatesAutoresizingMaskIntoConstraints = false
+        sourcePopup.target = self
+        sourcePopup.action = #selector(talkbackSourceChanged(_:))
+        row.addArrangedSubview(sourcePopup)
+        body.addArrangedSubview(row)
+        let channelRow = NSStackView()
+        channelRow.orientation = .horizontal
+        channelRow.spacing = 8
+        channelRow.translatesAutoresizingMaskIntoConstraints = false
+        channelRow.addArrangedSubview(secondary("Channel"))
+        channelPopup = NSPopUpButton()
+        channelPopup.translatesAutoresizingMaskIntoConstraints = false
+        channelPopup.target = self
+        channelPopup.action = #selector(talkbackChannelChanged(_:))
+        channelRow.addArrangedSubview(channelPopup)
+        body.addArrangedSubview(channelRow)
+        let srcSub = NSTextField(labelWithString:
+            "Who the talkback listens to — the same setting Apogee Control 2's\nTalkback pane writes. Channel 1 is the device's first input.")
+        srcSub.textColor = .secondaryLabelColor
+        srcSub.font = .systemFont(ofSize: 10)
+        body.addArrangedSubview(srcSub)
+        addDivider(to: body)
         body.addArrangedSubview(sectionLabel("Mode"))
         momentaryCheck = NSButton(checkboxWithTitle: "Momentary mode (hold to talk)",
                                   target: self, action: #selector(momentaryChanged(_:)))
@@ -639,6 +992,60 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let clearMidi = NSButton(title: "Clear MIDI Trigger", target: self,
                                  action: #selector(midiClear(_:)))
         body.addArrangedSubview(clearMidi)
+    }
+
+    private var sourcePopup: NSPopUpButton!
+    private var channelPopup: NSPopUpButton!
+    private var sourceSuppress = false
+
+    /// Copy the tree's talkback subtree into the source/channel popups.
+    private func refreshTalkbackSource() {
+        guard sourcePopup != nil else { return }
+        sourceSuppress = true
+        defer { sourceSuppress = false }
+        guard let desc = readTalkback?(), !desc.sources.isEmpty else {
+            sourcePopup.removeAllItems()
+            sourcePopup.addItem(withTitle: "No sources")
+            sourcePopup.isEnabled = false
+            channelPopup.removeAllItems()
+            channelPopup.addItem(withTitle: "—")
+            channelPopup.isEnabled = false
+            return
+        }
+        sourcePopup.isEnabled = true
+        sourcePopup.removeAllItems()
+        for (device, _) in desc.sources { sourcePopup.addItem(withTitle: device) }
+        let target = desc.sources.first(where: { $0.device == desc.selectedDevice })
+        if let target { sourcePopup.selectItem(withTitle: target.device) }
+        rebuildChannelPopup(for: desc.selectedDevice, channels: target?.channels ?? 1,
+                            selectedChannel: desc.selectedChannel)
+    }
+
+    private func rebuildChannelPopup(for device: String, channels: Int, selectedChannel: Int) {
+        channelPopup.isEnabled = channels > 1
+        channelPopup.removeAllItems()
+        for c in 0..<max(1, channels) { channelPopup.addItem(withTitle: "Ch \(c + 1)") }
+        channelPopup.lastItem?.representedObject = max(0, channels - 1)
+        if selectedChannel < max(1, channels) {
+            channelPopup.selectItem(at: selectedChannel)
+        }
+    }
+
+    @objc private func talkbackSourceChanged(_ sender: NSPopUpButton) {
+        guard !sourceSuppress,
+              let device = sender.titleOfSelectedItem else { return }
+        // A new device resets to its first input channel; the selected
+        // device's channel count comes from the last description.
+        let channels = readTalkback?()?
+            .sources.first(where: { $0.device == device })?.channels ?? 1
+        rebuildChannelPopup(for: device, channels: channels, selectedChannel: 0)
+        writeTalkbackSource?(device, 0)
+    }
+
+    @objc private func talkbackChannelChanged(_ sender: NSPopUpButton) {
+        guard !sourceSuppress,
+              let device = sourcePopup.titleOfSelectedItem else { return }
+        writeTalkbackSource?(device, sender.indexOfSelectedItem)
     }
 
     private func rebuildTalkback() {
@@ -682,6 +1089,115 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NSLayoutConstraint.activate([
             latencyPopup.widthAnchor.constraint(equalToConstant: 160),
         ])
+        addDivider(to: body)
+        // DEVICE BUFFER — the Quartet's own IO buffer size. The glue
+        // tree's `preferredBufferSize` is a dead preference (verified:
+        // never reaches the HAL even across a replug), so this writes the
+        // CoreAudio property directly — the same knob the DAW buffer
+        // panels work through. The insert restarts after a change.
+        let devBufRow = NSStackView()
+        devBufRow.orientation = .horizontal
+        devBufRow.spacing = 8
+        devBufRow.translatesAutoresizingMaskIntoConstraints = false
+        devBufRow.addArrangedSubview(secondary("Device buffer"))
+        devBufPopup = NSPopUpButton()
+        devBufPopup.translatesAutoresizingMaskIntoConstraints = false
+        for frames in deviceBufferChoices {
+            devBufPopup.addItem(withTitle: "\(frames) frames")
+            devBufPopup.lastItem?.representedObject = frames
+        }
+        devBufPopup.action = #selector(deviceBufferChanged(_:))
+        devBufPopup.target = self
+        devBufRow.addArrangedSubview(devBufPopup)
+        body.addArrangedSubview(devBufRow)
+        devBufField = secondary("")
+        body.addArrangedSubview(devBufField)
+        NSLayoutConstraint.activate([
+            devBufPopup.widthAnchor.constraint(equalToConstant: 160),
+        ])
+        addDivider(to: body)
+        // HARDWARE LINE OUT LEVELS (Analog Out 1–6 = hwout2..7) — each
+        // ¼" output's own reference level (+4 dBu / −10 dBV), the same
+        // knob the touchscreen's output settings drive.
+        lineLevelRows(into: body)
+    }
+
+    private var devBufPopup: NSPopUpButton!
+    private var devBufField: NSTextField!
+    /// Classic HAL buffer sizes, snapped from the driver's 15…4096 range.
+    private let deviceBufferChoices: [UInt32] = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+
+    /// Line-out hardware levels (Analog Out 1–6 — hwout2..7), read from
+    /// the tree and written as int32 (+4 dBu = 2, −10 dBV = 3).
+    var readLineOutLevels: (() -> [(name: String, refLevel: Int?)])?
+    var writeLineOutLevel: ((Int, Int) -> Void)?
+
+    private var lineOutPopups: [NSPopUpButton] = []
+    private var lineOutLabels: [NSTextField] = []
+    private var lineOutSuppress = false
+    private var lineOutNames: [String] = []
+
+    /// The reference-level popup for one hardware line output (the same
+    /// analogRefLevel enum as the inputs: 2 = +4 dBu, 3 = −10 dBV).
+    private func lineLevelRows(into body: NSStackView) {
+        body.addArrangedSubview(sectionLabel("Line Out Levels"))
+        for i in 0..<6 {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 8
+            let label = NSTextField(labelWithString: "Analog Out \(i + 1)")
+            label.textColor = .secondaryLabelColor
+            label.font = .systemFont(ofSize: 12)
+            row.addArrangedSubview(label)
+            lineOutLabels.append(label)
+            let p = NSPopUpButton()
+            p.translatesAutoresizingMaskIntoConstraints = false
+            p.addItem(withTitle: "+4 dBu")
+            p.addItem(withTitle: "−10 dBV")
+            p.lastItem?.representedObject = 3
+            p.item(at: 0)?.representedObject = 2
+            p.action = #selector(lineOutLevelChanged(_:))
+            p.target = self
+            p.tag = 3600 + i
+            row.addArrangedSubview(p)
+            body.addArrangedSubview(row)
+            lineOutPopups.append(p)
+            NSLayoutConstraint.activate([
+                p.widthAnchor.constraint(equalToConstant: 110),
+                label.widthAnchor.constraint(equalToConstant: 90),
+            ])
+        }
+        lineOutNames = (0..<6).map { "Analog Out \($0 + 1)" }
+    }
+
+    private func rebuildLineOuts() {
+        guard !lineOutPopups.isEmpty else { return }
+        lineOutSuppress = true
+        defer { lineOutSuppress = false }
+        let read = readLineOutLevels?() ?? []
+        let ok = read.count == 6 && read[0].refLevel != nil
+        for i in 0..<6 {
+            let popup = lineOutPopups[i]
+            if i < read.count {
+                lineOutLabels[i].stringValue = read[i].name
+                if let v = read[i].refLevel {
+                    popup.isEnabled = true
+                    popup.selectItem(at: v == 3 ? 1 : 0)
+                } else {
+                    popup.isEnabled = false
+                }
+            } else {
+                popup.isEnabled = false
+            }
+        }
+    }
+
+    @objc private func lineOutLevelChanged(_ sender: NSPopUpButton) {
+        guard !lineOutSuppress,
+              let i = lineOutPopups.firstIndex(of: sender),
+              let v = sender.selectedItem?.representedObject as? Int else { return }
+        writeLineOutLevel?(i, v)
+        QBLog.log("settings: line out \(i + 1) level → \(v == 3 ? "−10 dBV" : "+4 dBu")")
     }
 
     private func rebuildAudio() {
@@ -690,7 +1206,46 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         defer { audioSuppress = false }
         let current = InsertServer.savedBufferFrames()
         latencyPopup.selectItem(at: InsertServer.bufferChoices.firstIndex { $0.frames == current } ?? 0)
-        rateField.stringValue = "Quartet · \(Int(InsertServer.shared.currentRate())) Hz"
+        let liveRate = InsertServer.shared.currentRate()
+        let khz = liveRate / 1000
+        rateField.stringValue = "Quartet · \(khz == khz.rounded() ? "\(Int(khz))" : String(format: "%.1f", khz)) kHz"
+        // Device buffer — live value from Core Audio; the field carries
+        // the ms figure at the live rate (e.g. "≈2.7 ms").
+        if let frames = InsertServer.deviceBufferFrames() {
+            let idx = deviceBufferChoices.enumerated().min {
+                abs(Int($0.element) - Int(frames)) < abs(Int($1.element) - Int(frames))
+            }
+            devBufPopup.selectItem(at: idx?.offset ?? 0)
+            let rate = InsertServer.deviceSampleRate() ?? 48000
+            let ms = Double(frames) / rate * 1000
+            devBufField.stringValue = String(format: "Quartet · %d frames ≈ %.1f ms", frames, ms)
+            devBufPopup.isEnabled = true
+        } else {
+            devBufPopup.isEnabled = false
+            devBufField.stringValue = "Quartet not connected"
+        }
+        rebuildLineOuts()
+    }
+
+    /// A device-buffer pick: write straight into Core Audio, then restart
+    /// the insert (its aggregate was built against the old buffer).
+    /// Persist the last REQUESTED size for a friendly restore read.
+    @objc private func deviceBufferChanged(_ sender: NSPopUpButton) {
+        guard !audioSuppress,
+              let frames = sender.selectedItem?.representedObject as? UInt32 else { return }
+        let live = InsertServer.deviceBufferFrames()
+        QBLog.log("settings: device buffer \(live.map(String.init) ?? "?") → \(frames)")
+        guard InsertServer.setDeviceBufferFrames(frames) else {
+            QBLog.log("settings: device buffer write rejected by Core Audio")
+            return rebuildAudio()
+        }
+        let wasRunning = InsertServer.shared.running
+        if wasRunning {
+            // re-close the tap/aggregate against the reconfigured stream
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                InsertServer.shared.setBufferFrames(InsertServer.savedBufferFrames())
+            }
+        }
     }
 
     // MARK: - Auto Gain

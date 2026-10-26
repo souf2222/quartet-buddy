@@ -359,43 +359,6 @@ final class Hairline: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 }
 
-/// A title that becomes an editable field on double-click — NOT a text
-/// box. Plain title text and an arrow cursor until the second click
-/// starts editing (the system focus ring shows the editing state).
-/// A SINGLE click selects the strip (see `onClick`).
-final class TitleField: NSTextField {
-    /// Single-click selects the channel strip.
-    var onClick: (() -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        isBordered = false
-        drawsBackground = false
-        isEditable = false
-        isSelectable = false
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override func mouseDown(with event: NSEvent) {
-        onClick?()   // single click: select the strip
-        guard event.clickCount >= 2 else { return }   // double click: edit
-        isEditable = true
-        isSelectable = true
-        super.mouseDown(with: event)   // begins editing
-        // safety: if editing didn't engage, revert to title mode
-        if currentEditor() == nil {
-            isEditable = false
-            isSelectable = false
-        }
-    }
-
-    override func textDidEndEditing(_ notification: Notification) {
-        super.textDidEndEditing(notification)
-        isEditable = false
-        isSelectable = false
-    }
-}
-
 /// A read-only channel title that SELECTS its strip on any click
 /// (input names — they come from the hardware, so there's nothing to
 /// edit; the click is pure selection).
@@ -1469,7 +1432,7 @@ final class SampleRateSelector: NSControl {
         isEnabled = current != nil
         toolTip = current != nil ? "Sample rate" : "Sample rate — the device is unavailable"
         needsDisplay = true
-        setAccessibilityLabel(current.map { "Sample rate, \(Int($0)) Hz" } ?? "Sample rate, unknown")
+        setAccessibilityLabel(current.map { "Sample rate, \(Self.menuTitle($0))" } ?? "Sample rate, unknown")
     }
 
     private func rebuildMenu() {
@@ -1511,22 +1474,11 @@ final class SampleRateSelector: NSControl {
     override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
 
     // MARK: drawing
-
-    /// "48000" → "48 000" — a NONBREAKING space between the thousands
-    /// (never a comma), so the value always stays on one line.
-    private static func grouped(_ r: Double) -> String {
-        let s = "\(Int(r.rounded()))"
-        guard s.count > 3 else { return s }
-        var out = ""
-        for (i, ch) in s.enumerated() {
-            if i > 0, (s.count - i) % 3 == 0 { out += "\u{00A0}" }
-            out.append(ch)
-        }
-        return out
-    }
-    /// Menu titles use a plain space (menus size to content anyway).
+    /// Menu titles — kHz, one decimal only when it matters:
+    /// "48 kHz", "44.1 kHz", "88.2 kHz", "192 kHz".
     private static func menuTitle(_ r: Double) -> String {
-        grouped(r).replacingOccurrences(of: "\u{00A0}", with: " ") + "Hz"
+        let k = r / 1000
+        return k == k.rounded() ? "\(Int(k)) kHz" : String(format: "%.1f kHz", k)
     }
 
     /// The FOOTER readout: quiet device information ("48 kHz" — the same
@@ -2545,6 +2497,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onWriteDouble: (([UInt8], Double) -> Void)?
     var onWriteBool: (([UInt8], Bool) -> Void)?
     var onWriteInt: (([UInt8], Int32) -> Void)?
+    var onWriteString: (([UInt8], String) -> Void)?
     var onRequestTree: (() -> Void)?
     var isGlueConnected: (() -> Bool)?
     /// The last tree the app received (seeds the window with real values).
@@ -2612,6 +2565,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         var phantom: Bool?
         var softLimit: Bool?
         var polarity: Bool?
+        /// The input's ganging bit (hwin<i>.group — the touchscreen's linked
+        /// faders). Hardware does NOT mirror externally written gains when
+        /// ganged (verified: hwin0 → 30.5, ganged partner hwin1 stayed put),
+        /// so the app mirrors the ACTIVE gain write itself.
+        var group: Bool?
     }
     /// Monitor outputs: 0 = Main Out (speakers), 1 = Headphones.
     struct MonitorState {
@@ -2622,6 +2580,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
     private var inputs: [InputState] = (0..<4).map { _ in InputState() }
     private var monitors: [MonitorState] = [.init(), .init()]
+
+    /// Input ganging bits — `hwin<i>.group` ids, same refresh cadence.
+    private var inputGroupIds: [[UInt8]] = Array(repeating: [], count: 4)
 
     private var window: NSWindow?
     private var suppressActions = false
@@ -2747,9 +2708,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
     }
 
-    /// The interface's display name (the serial moved to the footer).
+    /// The interface's display name — the device node's `name` (a
+    /// hardware property, renameable), falling back to the model string.
     private static func interfaceName(from tree: [String: Any]) -> String {
-        "Apogee Quartet"
+        guard let serial = GlueClient.quartetSerial(in: tree),
+              let dev = GlueClient.findNode(in: tree, type: serial),
+              let props = dev["props"] as? [String: Any],
+              let name = props["name"] as? String,
+              !name.isEmpty else { return "Apogee Quartet" }
+        return name
     }
 
     /// The connected unit's serial, when the tree carries one — shown at
@@ -2834,8 +2801,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                       enabled: connected && !learning && t.hwinSoftLimit[i] != nil)
             setToggle(polarityToggles[i], st.polarity,
                       enabled: connected && !learning && t.hwinPolarity[i] != nil)
+        }
 
-            inputHeaders[i]?.stringValue = st.name ?? "Analog In \(i + 1)"
+        // Ganging link toggles — engaged when the pair's hwinN.group bits
+        // are set (whoever set them: this app, the touchscreen, or Apogee
+        // Control 2). Enabled once both group ids are known (a serial).
+        for (a, l) in linkToggles.enumerated() {
+            let b1 = a * 2, b2 = b1 + 1
+            setToggle(l, (inputs[b1].group ?? false) && (inputs[b2].group ?? false),
+                      enabled: connected && !learning
+                          && !inputGroupIds[b1].isEmpty && !inputGroupIds[b2].isEmpty)
+        }
+
+        for i in 0..<4 {
+            inputHeaders[i]?.stringValue = inputs[i].name ?? "Analog In \(i + 1)"
 
             // the strip's menu — the Learn action lives there now (no
             // permanent Learn button under the strip). The chevron
@@ -3142,6 +3121,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                    let pre = findTyped(inst, "PreModelQuartet") {
                     st.instGain = GlueClient.doubleProp(pre, "gain")
                 }
+                st.group = (GlueClient.intProp(node, "group") ?? 0) == 1
             }
             inputs[i] = st
         }
@@ -3155,6 +3135,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             }
             monitors[o] = st
         }
+        // input ganging ids (hwinN.group) — for echo matching + writes
+        if let serial = Self.serial(from: tree) {
+            for i in 0..<4 { inputGroupIds[i] = PathIds.hash("/dev/\(serial)/hwin/hwin\(i)/group") }
+        } else {
+            for i in 0..<4 { inputGroupIds[i] = [] }
+        }
         refresh()
     }
 
@@ -3164,6 +3150,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         if isLearning { learnHandle(event); return }
         if AutoGainEngine.shared.isRunning {
             AutoGainEngine.shared.noteGlueEvent(id: event.id, tag: event.tag, value: event.value)
+        }
+        // ganging echoes (hwin<i>.group) — anyone can toggle a link
+        if event.tag == 3, !inputGroupIds.isEmpty,
+           let idx = inputGroupIds.firstIndex(of: event.id) {
+            if inputs[idx].group != (event.value.first == 1) {
+                inputs[idx].group = event.value.first == 1
+                refresh()
+            }
         }
         let t = PathIds.active
         for i in 0..<4 {
@@ -3348,6 +3342,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var feedbackTime: NSTextField?
     /// The unit's serial ID — quiet, at the footer's BOTTOM RIGHT.
     private var serialField: NSTextField?
+    /// The two ganging link toggles in the Inputs section header
+    /// (Link 1+2 / Link 3+4 — the hwinN.group bits).
+    private var linkToggles: [NSButton] = []
     /// What the footer's action button does right now.
     private var feedbackActionKind: FeedbackAction = .none
 
@@ -3387,8 +3384,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         UserDefaults.standard.string(forKey: nameKey(i)) ?? ""
     }
 
+    /// Settings ▸ Names: rename a stereo pair ("stay empty/physical to
+    /// revert" is handled by the caller — see nameKey).
+    static func setSavedName(_ i: Int, _ name: String) {
+        if name.isEmpty || name == InsertServer.pairNames[i] {
+            UserDefaults.standard.removeObject(forKey: nameKey(i))
+        } else {
+            UserDefaults.standard.set(name, forKey: nameKey(i))
+        }
+    }
+
     // tag namespaces (kept well apart so `tag - base` never collides):
     //   inputs:  100/200/250/300/400/500/1200/600 + i
+    //   ganging: 1400 + a (Link 1+2 / Link 3+4 toggles at the section head)
+    //   renaming: (NONE inline) — Settings ▸ Names owns renames
+    //             (hardware hwin/hwout names + the app-side pair names)
+    //   stage menus (pre-existing): 2300 + i (tap-point menus)
     //   routing: 2050/2100/2200/2600/2650 + i (the plug-in slot's menu
     //            items carry the bare pair index instead)
     //   monitor: 700/750/800/900/1000/1100 + o
@@ -3750,11 +3761,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: GGSpace.section, right: 0)
         doc.addSubview(stack)
 
-        // INPUTS section header: title only — the Auto Gain Target /
-        // Duration configuration moved to Settings ▸ Auto Gain (the
-        // settings apply to BOTH the per-input buttons and Auto Gain All,
-        // at the START of the next operation).
-        let inputsHeader = sectionHeader(title: "Inputs", trailingViews: [])
+        // INPUTS section header: title + the two ganging link toggles
+        // (Link 1+2 / Link 3+4) — the touchscreen's linked-fader pairs.
+        // The Auto Gain Target / Duration configuration moved to
+        // Settings ▸ Auto Gain (those settings apply to BOTH the
+        // per-input buttons and Auto Gain All, at the START of the next
+        // operation).
+        let link12 = FunctionToggle(title: "Link 1+2", tag: 1400,
+                                    accent: GGTheme.accent,
+                                    target: self, action: #selector(linkClicked(_:)))
+        let link34 = FunctionToggle(title: "Link 3+4", tag: 1401,
+                                    accent: GGTheme.accent,
+                                    target: self, action: #selector(linkClicked(_:)))
+        link12.toolTip = "Gang inputs 1+2 — moves both preamps together\n(the touchscreen's linked-fader pairs, hwin0/hwin1 group bits)"
+        link34.toolTip = "Gang inputs 3+4 — moves both preamps together\n(the touchscreen's linked-fader pairs, hwin2/hwin3 group bits)"
+        linkToggles = [link12, link34]
+        let inputsHeader = sectionHeader(title: "Inputs",
+                                         trailingViews: [link12, link34])
         stack.addArrangedSubview(inputsHeader)
 
         let inputGrid = makeInputGrid()
@@ -3930,11 +3953,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // chevron beside the name opens the strip's MENU — the home
             // of the Learn action. The compact type dropdown sits at
             // the right.
+            // SelectLabel: renaming lives in Settings ▸ Names (inline
+            // double-click editing was flaky and needed room) — click
+            // here is pure strip selection.
             let head = SelectLabel(frame: .zero)
             head.stringValue = "Analog In \(i + 1)"
             head.font = GGTheme.nameFont
             head.textColor = GGTheme.primary
             head.lineBreakMode = .byTruncatingTail
+            head.toolTip = "Analog In \(i + 1) — rename in Settings ▸ Names"
             head.onClick = { [weak self] in self?.selectInput(i) }
             inputHeaders.append(head)
 
@@ -4167,18 +4194,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 col.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
             ])
 
-            // HEADER — the output NAME as a title. It defaults to the
-            // physical pair ("Out 1–2"), renames on double-click, and a
-            // SINGLE click selects this strip (the accent marker beside
-            // the title shows the selection).
-            let nf = TitleField(frame: .zero)
+            // HEADER — the output NAME as a title. A SINGLE click selects
+            // this strip (the accent marker beside the title shows the
+            // selection). Renaming lives in Settings ▸ Names.
+            let nf = SelectLabel(frame: .zero)
             nf.font = GGTheme.nameFont
             nf.textColor = GGTheme.primary
-            nf.stringValue = InsertServer.pairNames[i]
             nf.lineBreakMode = .byTruncatingTail
-            nf.tag = 2050 + i
-            nf.delegate = self
-            nf.toolTip = "Destination name — double-click to rename"
+            nf.toolTip = "Destination name — rename in Settings ▸ Names"
             nf.onClick = { [weak self] in self?.selectOutput(i) }
             nameFields.append(nf)
 
@@ -4662,19 +4685,59 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     /// Preamp gain: writes the ACTIVE mode's gain only — mic and instrument
     /// keep their own values, so switching modes doesn't carry the gain over.
+    /// Ganged inputs mirror the write (see writeInputGain).
     @objc private func gainSlid(_ sender: NSControl) {
         let i = sender.tag - 200
         guard !suppressActions, !isLearning, !AutoGainEngine.shared.isRunning else { return }
         if let rl = inputs[i].refLevel, rl == 2 || rl == 3 { return }
         let v = min(max(sender.doubleValue, 0), 75)
+        writeInputGain(i, v)
+        refresh()
+    }
+
+    /// Ganging link toggle — writes BOTH pair members' `hwinN.group` bit
+    /// (verified live: toggling on the touchscreen sets both hwin0/hwin1
+    /// group bits; unsetting clears both). Any client may write these.
+    @objc private func linkClicked(_ sender: NSButton) {
+        let a = sender.tag - 1400
+        guard !suppressActions, !isLearning, a >= 0, a <= 1 else { return }
+        let b1 = a * 2, b2 = b1 + 1
+        let on = !(inputs[b1].group ?? false)        // toggle intent
+        let id1 = inputGroupIds[b1], id2 = inputGroupIds[b2]
+        guard !id1.isEmpty, !id2.isEmpty else { return }
+        QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off")")
+        onWriteBool?(id1, on)
+        onWriteBool?(id2, on)
+        inputs[b1].group = on
+        inputs[b2].group = on
+        refresh()
+    }
+
+    /// THE input-gain write: the active mode's `PreModelQuartet.gain` for
+    /// this channel, mirrored onto the ganged partner when both ganging
+    /// bits are set AND both inputs sit in the same analog level (a Mic
+    /// input and an Instrument input can be flagged ganged without their
+    /// gain transports sharing a rail — mirror only matching pairs).
+    /// Hardware does NOT mirror externally written gains even for ganged
+    /// inputs (verified live: hwin0 → 30.5 dB with hwin1 ganged at 0.5 dB),
+    /// so the mirror is the app's job. Auto Gain deliberately does NOT
+    /// route through this (its engine orchestrates individual channels).
+    private func writeInputGain(_ i: Int, _ v: Double) {
         let t = PathIds.active
-        if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
-            onWriteDouble?(id, v)
-            inputs[i].instGain = v
-        } else if let id = t.hwinMicGain[i] {
-            onWriteDouble?(id, v)
-            inputs[i].micGain = v
+        let rl = inputs[i].refLevel
+        let activeId = rl == 4 ? t.hwinInstGain[i] : t.hwinMicGain[i]
+        guard let id = activeId else { return }
+        onWriteDouble?(id, v)
+        if rl == 4 { inputs[i].instGain = v } else { inputs[i].micGain = v }
+        let p = (i % 2 == 0) ? i + 1 : i - 1
+        guard p >= 0, p < 4, inputs[i].group == true, inputs[p].group == true,
+              inputs[p].refLevel == rl else { return }
+        let partnerId = (rl == 4 ? t.hwinInstGain[p] : t.hwinMicGain[p])
+        if let pid = partnerId {
+            onWriteDouble?(pid, v)
+            if rl == 4 { inputs[p].instGain = v } else { inputs[p].micGain = v }
         }
+        QBLog.log("control: ganged write \(i % 2) pair input \(i + 1) & \(p + 1) \(v) dB")
     }
 
     // Auto Gain
@@ -5179,15 +5242,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             guard let db = parseDB(field.stringValue) else { return refresh() }
             let v = min(max(db, 0), 75)
             let t = PathIds.active
-            if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
-                onWriteDouble?(id, v)
-                inputs[i].instGain = v
-            } else if let id = t.hwinMicGain[i] {
-                onWriteDouble?(id, v)
-                inputs[i].micGain = v
-            } else {
+            if inputs[i].refLevel == nil || (inputs[i].refLevel ?? 1 == 0) {
+                // no live ref level yet — nothing sane to write
                 return refresh()
             }
+            writeInputGain(i, v)
             refresh()
         case 750..<752:
             // monitor level (dB) — the monitor knob's inline editor
@@ -5199,18 +5258,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let v = min(max(db, AppDelegate.minDB), AppDelegate.maxDB)
             onWriteDouble?(id, v)
             monitors[o].gain = v
-            refresh()
-        case 2050..<2054:
-            // destination name — empty or the default pair name keeps
-            // the default (nothing saved)
-            let i = field.tag - 2050
-            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-            if name.isEmpty || name == InsertServer.pairNames[i] {
-                UserDefaults.standard.removeObject(forKey: Self.nameKey(i))
-            } else {
-                UserDefaults.standard.set(name, forKey: Self.nameKey(i))
-            }
-            QBLog.log("control: output \(i) named '\(name)'")
             refresh()
         case 2650..<2654:
             // output trim (dB) — the trim knob's inline editor

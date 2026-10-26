@@ -136,6 +136,16 @@ final class GlueClient: NSObject, StreamDelegate {
                       data: GlueProtocol.setPropertyData(id: id, tag: .int32, value: v)))
     }
 
+    /// Send a setProperty (string) — var-tag 5, raw UTF-8 bytes + NUL
+    /// terminator (protocol-notes.md: "var-tags: … 5=string(NUL-term)"). Used
+    /// by renaming (dev/hwin/hwout `name`) and talkback source selection.
+    func setString(id: [UInt8], _ value: String) {
+        var v = Data(value.utf8)
+        v.append(0)
+        send(VTSRecord(type: VTSType.setProperty.rawValue, flag: false,
+                      data: GlueProtocol.setPropertyData(id: id, tag: .string, value: v)))
+    }
+
     func sendCommand(_ string: String) {
         var d = Data(string.utf8)
         d.append(0)
@@ -287,8 +297,17 @@ extension GlueClient {
     }
 
     static func intProp(_ node: [String: Any]?, _ name: String) -> Int? {
-        guard let v = (node?["props"] as? [String: Any])?[name] else { return nil }
+        guard let props = (node?["props"] as? [String: Any]) else { return nil }
+        return intIn(props, name)
+    }
+
+    /// Over a raw props dictionary (no node wrapper) — handles bool-typed,
+    /// int-typed and string-stored numeric tree props.
+    static func intIn(_ props: [String: Any], _ name: String) -> Int? {
+        guard let v = props[name] else { return nil }
+        if let b = v as? Bool { return b ? 1 : 0 }
         if let i = v as? Int { return i }
+        if let s = v as? String { return Int(s) }
         return (v as? NSNumber)?.intValue
     }
 }
