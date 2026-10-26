@@ -3123,9 +3123,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         bankAdatButton?.state = adatBankActive ? .on : .off
         bankAnalogButton?.isEnabled = connected && !learning
         bankAdatButton?.isEnabled = connected && !learning
-        linkToggles.forEach { $0.isHidden = adatBankActive }
-        adatGrid?.isHidden = !adatBankActive
-        inputGridRef?.isHidden = adatBankActive
+        applyInputBankVisibility(adatBankActive)
 
         // ADAT TILES — focus markers + availability. Assistance is a
         // Core-Audio measurement: it needs the stream, not the glue
@@ -4736,12 +4734,29 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let bank = sender.tag - 1500
         inputsBank = bank
         QBLog.log("control: inputs bank → \(bank == 1 ? "ADAT 1–8" : "Analog 1–4")")
-        refresh()
+        // The GRID SWAP must happen synchronously: refresh() defers its
+        // work by 50 ms, which would leave the resize-and-scroll below
+        // measuring the PREVIOUS bank's layout — the window height and
+        // the scroll position then lag one click behind (the layout
+        // glitch on switching banks). The scheduled refresh keeps the
+        // remaining UI consistent a tick later.
+        bankAnalogButton?.state = bank == 1 ? .off : .on
+        bankAdatButton?.state = bank == 1 ? .on : .off
+        applyInputBankVisibility(bank == 1)
         resizeWindowToFitContent()
         if let doc = scrollArea?.documentView {
             doc.layoutSubtreeIfNeeded()
             doc.scroll(NSPoint(x: 0, y: doc.bounds.maxY))
         }
+    }
+
+    /// The input-bank grids' visibility — extracted from refreshNow so
+    /// the bank switch can apply it synchronously (the scheduled
+    /// refresh keeps it consistent afterwards).
+    private func applyInputBankVisibility(_ adatBankActive: Bool) {
+        linkToggles.forEach { $0.isHidden = adatBankActive }
+        adatGrid?.isHidden = !adatBankActive
+        inputGridRef?.isHidden = adatBankActive
     }
 
     /// ADAT bank header — the assistant opens with the channel picker.
@@ -4751,6 +4766,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var inputsBank: Int {
         get { UserDefaults.standard.integer(forKey: "inputsBankPinned") == 1 ? 1 : 0 }
         set { UserDefaults.standard.set(newValue, forKey: "inputsBankPinned") }
+    }
+
+    /// QB_AUTO_ASSIST harness: press the REAL bank button, exactly like
+    /// a user click (bankClicked's full path: refresh → resize → scroll).
+    func debugClickBank(_ bank: Int) {
+        guard let button = bank == 1 ? bankAdatButton : bankAnalogButton else {
+            QBLog.log("debug: bank button \(bank) unavailable")
+            return
+        }
+        let sel = button.action
+        let tgt = button.target
+        tgt?.perform(sel ?? #selector(bankClicked(_:)), with: button)
+        QBLog.log("debug: bank \(bank) clicked")
     }
 
     /// A thin full-height vertical rule between channel panels. Added to

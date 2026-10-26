@@ -481,6 +481,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             // back to the analog content height (top edge pinned)
                             QuartetControlController.shared.resizeWindowToFitContent()
                             QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_analog.png")
+                            // The USER-path repro: real bank-button presses
+                            // (bankClicked) instead of the forced refresh+resize
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                QuartetControlController.shared.debugClickBank(1)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_realpath_adat.png")
+                                    QuartetControlController.shared.debugClickBank(0)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                        QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_realpath_analog.png")
+                                        // leave the analog bank persisted for the user
+                                        UserDefaults.standard.set(0, forKey: "inputsBankPinned")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
