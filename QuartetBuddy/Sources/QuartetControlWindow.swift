@@ -1118,7 +1118,7 @@ final class GainKnob: NSControl {
 
     // MARK: scroll wheel — hover + scroll adjusts
     //   natural direction everywhere (scroll up = more, down = less);
-    //   optional INVERTED direction via Settings ▸ General ▸ Knobs
+    //   optional INVERTED direction via Settings ▸ General ▸ Knob interaction
     //   ("wheel down = more"); trackpad precise deltas accumulate to a
     //   whole step (values are whole numbers), classic mouse wheels one
     //   notch ≈ one step
@@ -1126,7 +1126,7 @@ final class GainKnob: NSControl {
         guard isEnabled, !isEditing else { super.scrollWheel(with: event); return }
         let dy = event.scrollingDeltaY
         guard dy != 0 else { return }
-        // Settings ▸ General ▸ Knobs: optional inverted direction
+        // Settings ▸ General ▸ Knob interaction: optional inverted direction
         // (wheel down = more, the classic mouse convention).
         let flip = UserDefaults.standard.bool(forKey: SettingsWindowController.invertScrollKey)
         var threshold = 8.0
@@ -3384,7 +3384,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         UserDefaults.standard.string(forKey: nameKey(i)) ?? ""
     }
 
-    /// Settings ▸ Names: rename a stereo pair ("stay empty/physical to
+    /// Settings ▸ Quartet ▸ Channel Names: rename a stereo pair ("stay empty/physical to
     /// revert" is handled by the caller — see nameKey).
     static func setSavedName(_ i: Int, _ name: String) {
         if name.isEmpty || name == InsertServer.pairNames[i] {
@@ -3397,7 +3397,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     // tag namespaces (kept well apart so `tag - base` never collides):
     //   inputs:  100/200/250/300/400/500/1200/600 + i
     //   ganging: 1400 + a (Link 1+2 / Link 3+4 toggles at the section head)
-    //   renaming: (NONE inline) — Settings ▸ Names owns renames
+    //   renaming: (NONE inline) — Settings ▸ Quartet ▸ Channel Names owns renames
     //             (hardware hwin/hwout names + the app-side pair names)
     //   stage menus (pre-existing): 2300 + i (tap-point menus)
     //   routing: 2050/2100/2200/2600/2650 + i (the plug-in slot's menu
@@ -3764,7 +3764,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // INPUTS section header: title + the two ganging link toggles
         // (Link 1+2 / Link 3+4) — the touchscreen's linked-fader pairs.
         // The Auto Gain Target / Duration configuration moved to
-        // Settings ▸ Auto Gain (those settings apply to BOTH the
+        // Settings ▸ Processing ▸ Auto Gain (those settings apply to BOTH the
         // per-input buttons and Auto Gain All, at the START of the next
         // operation).
         let link12 = FunctionToggle(title: "Link 1+2", tag: 1400,
@@ -3953,7 +3953,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // chevron beside the name opens the strip's MENU — the home
             // of the Learn action. The compact type dropdown sits at
             // the right.
-            // SelectLabel: renaming lives in Settings ▸ Names (inline
+            // SelectLabel: renaming lives in Settings ▸ Quartet ▸ Channel Names (inline
             // double-click editing was flaky and needed room) — click
             // here is pure strip selection.
             let head = SelectLabel(frame: .zero)
@@ -3961,7 +3961,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             head.font = GGTheme.nameFont
             head.textColor = GGTheme.primary
             head.lineBreakMode = .byTruncatingTail
-            head.toolTip = "Analog In \(i + 1) — rename in Settings ▸ Names"
+            head.toolTip = "Analog In \(i + 1) — rename in Settings ▸ Quartet ▸ Channel Names"
             head.onClick = { [weak self] in self?.selectInput(i) }
             inputHeaders.append(head)
 
@@ -4196,12 +4196,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             // HEADER — the output NAME as a title. A SINGLE click selects
             // this strip (the accent marker beside the title shows the
-            // selection). Renaming lives in Settings ▸ Names.
+            // selection). Renaming lives in Settings ▸ Quartet ▸ Channel Names.
             let nf = SelectLabel(frame: .zero)
             nf.font = GGTheme.nameFont
             nf.textColor = GGTheme.primary
             nf.lineBreakMode = .byTruncatingTail
-            nf.toolTip = "Destination name — rename in Settings ▸ Names"
+            nf.toolTip = "Destination name — rename in Settings ▸ Quartet ▸ Channel Names"
             nf.onClick = { [weak self] in self?.selectOutput(i) }
             nameFields.append(nf)
 
@@ -5147,7 +5147,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// The Auto Gain All tile's tooltip: unmistakable action + the current
-    /// configuration (set in Settings ▸ Auto Gain):
+    /// configuration (set in Settings ▸ Processing ▸ Auto Gain):
     /// "Auto Gain All — calibrate every Mic/Instrument input · Target −18 dBFS peak · 5 s".
     private static func autoGainConfigTooltip() -> String {
         "Auto Gain All — calibrate every Mic/Instrument input · Target \(String(format: "−%.0f", abs(AutoGainEngine.targetDBFS))) dBFS peak · \(Int(AutoGainEngine.listenSeconds)) s"

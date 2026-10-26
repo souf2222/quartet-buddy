@@ -67,6 +67,7 @@ swiftc -O \
     "$SRC/QuartetWindow.swift" \
     "$SRC/QuartetControlWindow.swift" \
     "$SRC/QuickControlPanel.swift" \
+    "$SRC/SettingsUI.swift" \
     "$SRC/SettingsWindow.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \

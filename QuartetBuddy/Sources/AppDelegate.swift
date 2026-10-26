@@ -1196,10 +1196,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.refreshMenu()
         }
         settingsWindow.onMidiClear = { [weak self] in
+            self?.learningMidi = false
             self?.midiTrigger = nil
             UserDefaults.standard.removeObject(forKey: "midiTrigger")
         }
-        // Device-node flags (Settings ▸ General ▸ Touchscreen): the
+        // Learn state + cancel (the MIDI watcher is owned here).
+        settingsWindow.isMidiLearning = { [weak self] in self?.learningMidi ?? false }
+        settingsWindow.onMidiCancel = { [weak self] in
+            guard self?.learningMidi == true else { return }
+            self?.learningMidi = false
+            self?.refreshMenu()
+        }
+        // Device-node flags (Settings ▸ Quartet ▸ Controls): the
         // window reads raw dev-node props and asks us for each write.
         settingsWindow.readDeviceProps = { [weak self] in
             self.flatMap { $0.deviceNode().flatMap { $0["props"] as? [String: Any] } }
@@ -1212,7 +1220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.writeTalkbackSource = { [weak self] device, channel in
             self?.selectTalkbackSource(device: device, channel: channel)
         }
-        // Line-out hardware levels (Settings ▸ Audio ▸ Line Out Levels):
+        // Line-out hardware levels (Settings ▸ Quartet ▸ Output Levels):
         // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
         settingsWindow.readLineOutLevels = { [weak self] in
             guard let self, let dev = self.deviceNode() else { return [] }
@@ -1230,8 +1238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
             self.glue.setInt(id: id, Int32(v))
         }
-        // Settings ▸ Names — hardware inputs/outputs (glue string writes)
-        // and the app-side stereo-pair names (UserDefaults via the window).
+        // Settings ▸ Quartet ▸ Channel Names — hardware inputs/outputs
+        // (glue string writes) and the app-side stereo-pair names.
         settingsWindow.readNames = { [weak self] in
             guard let self, let dev = self.deviceNode() else { return nil }
             var out: [String] = []
@@ -1266,8 +1274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("settings: pair \(p) name = '\(name)'")
             }
         }
-        // Front-panel pad assignments (Settings ▸ General ▸ Front Panel
-        // Pads): the tree's actionButtons children — the remap path
+        // Front-panel pad assignments (Settings ▸ Quartet ▸ Controls):
+        // the tree's actionButtons children — the remap path
         // live-verified Oct 26 2026 (probe write → pad followed).
         settingsWindow.readPadAssignments = { [weak self] in
             guard let self, let dev = self.deviceNode(),

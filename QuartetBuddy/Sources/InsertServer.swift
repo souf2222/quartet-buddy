@@ -650,7 +650,7 @@ final class InsertServer: NSObject {
                                           UInt32(MemoryLayout<Double>.size), &r) == noErr
     }
 
-    // MARK: - Device buffer size (Settings ▸ Audio)
+    // MARK: - Device buffer size (Settings ▸ Processing ▸ Audio engine)
 
     /// The Quartet's device IO buffer (frames) read straight from Core
     /// Audio. NOTE: the glue tree's `dev/preferredBufferSize` is a daemon
