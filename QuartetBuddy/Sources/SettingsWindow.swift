@@ -63,7 +63,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// `readNames` → current values in ROW ORDER (nil = not connected),
     /// `writeName` is routed by the row's kind + index.
     struct NameRow {
-        enum Kind { case hwInput, hwOutput, pair }
+        enum Kind { case hwInput, hwOutput, pair, adat }
         let kind: Kind
         /// hardware/pair index for the write routing
         let index: Int
@@ -75,6 +75,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private let nameRows: [NameRow] = (0..<4).map { NameRow(kind: .hwInput, index: $0) }
         + (0..<8).map { NameRow(kind: .hwOutput, index: $0) }
         + (0..<4).map { NameRow(kind: .pair, index: $0) }
+        + (0..<8).map { NameRow(kind: .adat, index: $0) }
     /// Static row labels — fixed physical channel identifiers, so a
     /// renamed input doesn't shift the row the user is looking for. The
     /// editable field beside each shows the current (hardware) name.
@@ -84,6 +85,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                                       "Analog output 3", "Analog output 4", "Analog output 5",
                                       "Analog output 6"]
     private static let pairLabels = ["Pair 1", "Pair 2", "Pair 3", "Pair 4"]
+    private static let adatLabels = (0..<8).map { "ADAT \($0 + 1)" }
 
     private var nameFields: [NSTextField] = []
     private var nameSuppress = false
@@ -1100,6 +1102,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         nameBlock(into: stack, "Stereo Pair Names",
                   "Shown only in Quartet Buddy's window (defaults like \"Out 1–2\");\nleave empty to fall back to the physical pair name.",
                   Self.pairLabels, 5020)
+        nameBlock(into: stack, "ADAT Inputs",
+                  "App-side names for the eight optical inputs (shown in the ADAT\nbank and Gain Assistant); leave empty to show just \"ADAT n\".",
+                  Self.adatLabels, 5030)
         stack.addArrangedSubview(SettingsHelpText.label(
             "Press Return (or click away) to commit a rename; Esc cancels the edit."))
     }
@@ -1137,7 +1142,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // also a no-op.
         if let original, value == original { return }
         let row = nameRows[i]
-        if row.kind == .pair {
+        if row.kind == .pair || row.kind == .adat {
             writeName?(i, value)          // empty = revert (handled app-side)
         } else if !value.isEmpty {
             writeName?(i, value)
@@ -1171,6 +1176,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     var readLineOutLevels: (() -> [(name: String, refLevel: Int?)])?
     var writeLineOutLevel: ((Int, Int) -> Void)?
+
+    /// Line-output firmware trim (pairs 1…3 = Analog Out 1/2…5/6). Expects
+    /// `(name, trim?)` triples — name is the left strip's hardware name
+    /// joined with the right, trim nil = unknown/disconnected.
+    var readHwoutTrims: (() -> [(name: String, trim: Double?)])?
+    var writeHwoutTrim: ((Int, Double) -> Void)?
 
     private var lineOutPopups: [NSPopUpButton] = []
     private var lineOutLabels: [NSTextField] = []
@@ -1210,6 +1221,95 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
         stack.addArrangedSubview(SettingsHelpText.label(
             "Each ¼\" line output's reference level — the same setting the\ntouchscreen's output page drives. Channels stay independent; pairs\nare not linked."))
+
+        // --- Line-output trim (firmware) — settings-side hardware trim
+
+        buildHwoutTrims(stack)
+    }
+
+    /// Line-output TRIM (firmware): the hardware strips' `trim` property,
+    /// applied by the Quartet at the DAC — downstream of everything macOS
+    /// sends, so it listens to ALL apps, not just this one's insert chain.
+    /// Rows are PAIRS of the mono strips, labeled with the strips' own
+    /// hardware names. Range −64…+6 dB; values survive power cycles and
+    /// re-push from these saved keys on every reconnect.
+    private var hwoutTrimSliders: [NSSlider] = []
+    private var hwoutTrimNameLabels: [NSTextField] = []
+    private var hwoutTrimReadouts: [NSTextField] = []
+    private var hwoutTrimSuppress = false
+
+    private func buildHwoutTrims(_ stack: NSStackView) {
+        SettingsSection.add(to: stack, "Line-output trim (hardware)")
+        for pair in 1...3 {
+            let label = NSTextField(labelWithString: "Analog Out \(2 * pair - 1) / \(2 * pair)")
+            label.font = .systemFont(ofSize: 13)
+            label.setContentCompressionResistancePriority(
+                NSLayoutConstraint.Priority(751), for: .horizontal)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            let slider = NSSlider(value: 0, minValue: -64, maxValue: 6,
+                                  target: self, action: #selector(hwoutTrimChanged(_:)))
+            slider.tag = 3700 + pair
+            slider.translatesAutoresizingMaskIntoConstraints = false
+            let readout = NSTextField(labelWithString: "0.0 dB")
+            readout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            readout.translatesAutoresizingMaskIntoConstraints = false
+            readout.alignment = .right
+            let wrap = NSStackView()
+            wrap.orientation = .horizontal
+            wrap.spacing = 8
+            wrap.addArrangedSubview(label)
+            wrap.addArrangedSubview(slider)
+            wrap.addArrangedSubview(readout)
+            hwoutTrimNameLabels.append(label)
+            hwoutTrimSliders.append(slider)
+            hwoutTrimReadouts.append(readout)
+            stack.addArrangedSubview(wrap)
+            NSLayoutConstraint.activate([
+                label.widthAnchor.constraint(equalToConstant: SettingsLayout.labelColumn),
+                slider.widthAnchor.constraint(equalToConstant: 180),
+                readout.widthAnchor.constraint(equalToConstant: 64),
+            ])
+        }
+        stack.addArrangedSubview(SettingsHelpText.label(
+            "The Quartet's own output trim, applied by the firmware at the\nDAC — downstream of everything macOS sends, so it affects every\napp. Rows carry the strips' hardware names; the routing window's\ncards are one pair number up (Out 3‑4 card ⟶ Analog Out 1/2 …\nOut 7‑8 card ⟶ Analog Out 5/6). Range −64…+6 dB; saved values\nre-push to the unit after every reconnect or power cycle."))
+    }
+
+    @objc private func hwoutTrimChanged(_ sender: NSSlider) {
+        QBLog.log("DBG hwoutTrim action fired tag=\(sender.tag) value=\(sender.doubleValue) enabled=\(sender.isEnabled)")
+        let pair = sender.tag - 3700
+        guard !hwoutTrimSuppress, (1...3).contains(pair) else { return }
+        let db = (sender.doubleValue * 2).rounded() / 2   // 0.5 dB steps
+        sender.doubleValue = db
+        hwoutTrimReadouts[pair - 1].stringValue = String(format: "%.1f dB", db)
+        writeHwoutTrim?(pair, db)
+        QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
+    }
+
+    private func refreshHwoutTrims() {
+        guard !hwoutTrimSliders.isEmpty else { return }
+        hwoutTrimSuppress = true
+        defer { hwoutTrimSuppress = false }
+        let read = readHwoutTrims?() ?? []
+        QBLog.log("DBG hwoutTrim refresh: rows=\(read.count) " +
+                  read.enumerated().map { String(format: "p%d name=%@ trim=%@", $0.offset + 1, $0.element.name, $0.element.trim.map { String($0) } ?? "nil") }.joined() +
+                  " enabled=[" + hwoutTrimSliders.map { String($0.isEnabled) }.joined(separator: ",") + "]")
+        for pair in 1...3 {
+            let row = pair - 1
+            guard pair <= read.count else {
+                hwoutTrimSliders[row].isEnabled = false
+                continue
+            }
+            let entry = read[row]
+            hwoutTrimNameLabels[row].stringValue = entry.name
+            if let db = entry.trim {
+                hwoutTrimSliders[row].isEnabled = true
+                hwoutTrimSliders[row].doubleValue = db
+                hwoutTrimReadouts[row].stringValue = String(format: "%.1f dB", db)
+            } else {
+                hwoutTrimSliders[row].isEnabled = false
+                hwoutTrimReadouts[row].stringValue = "—"
+            }
+        }
     }
 
     private func refreshLineOuts() {
@@ -1254,6 +1354,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         refreshPads()
         rebuildNames()
         refreshLineOuts()
+        refreshHwoutTrims()
     }
 
     // MARK: - Processing (audio engine + Auto Gain + plug-ins)
@@ -1265,6 +1366,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var rateField: NSTextField!
     private var gainTargetPopup: NSPopUpButton!
     private var gainDurationPopup: NSPopUpButton!
+    private var assistTargetPopup: NSPopUpButton!
+    private var assistDurationPopup: NSPopUpButton!
+    private var assistTolerancePopup: NSPopUpButton!
     private var insertCheck: NSButton!
     private var bypassCheck: NSButton!
     private var audioSuppress = false
@@ -1350,6 +1454,43 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         body.addArrangedSubview(SettingsHelpText.label(
             "Used for individual inputs and Auto Gain All. Changes apply to\nthe next measurement — a run in flight keeps its own settings."))
 
+        // GAIN ASSISTANCE (ADAT 1–8) — measurement-and-guidance for the
+        // external preamps. The assistant compares a captured peak with
+        // these numbers; these are proposed defaults, not standards.
+        assistTargetPopup = NSPopUpButton()
+        assistTargetPopup.translatesAutoresizingMaskIntoConstraints = false
+        for v in AdatGainEngine.targetOptions {
+            assistTargetPopup.addItem(withTitle: String(format: "%.0f dBFS", v))
+            assistTargetPopup.lastItem?.representedObject = NSNumber(value: v)
+        }
+        assistTargetPopup.action = #selector(assistTargetChanged(_:))
+        assistTargetPopup.target = self
+        body.addArrangedSubview(LabeledSettingRow("Target peak", control: assistTargetPopup))
+
+        assistDurationPopup = NSPopUpButton()
+        assistDurationPopup.translatesAutoresizingMaskIntoConstraints = false
+        for v in AdatGainEngine.durationOptions {
+            assistDurationPopup.addItem(withTitle: String(format: "%.0f s", v))
+            assistDurationPopup.lastItem?.representedObject = NSNumber(value: v)
+        }
+        assistDurationPopup.action = #selector(assistDurationChanged(_:))
+        assistDurationPopup.target = self
+        body.addArrangedSubview(LabeledSettingRow("Measurement duration",
+                                                  control: assistDurationPopup))
+
+        assistTolerancePopup = NSPopUpButton()
+        assistTolerancePopup.translatesAutoresizingMaskIntoConstraints = false
+        for v in AdatGainEngine.toleranceOptions {
+            assistTolerancePopup.addItem(withTitle: String(format: "±%.0f dB", v))
+            assistTolerancePopup.lastItem?.representedObject = NSNumber(value: v)
+        }
+        assistTolerancePopup.action = #selector(assistToleranceChanged(_:))
+        assistTolerancePopup.target = self
+        body.addArrangedSubview(LabeledSettingRow("Acceptable range",
+                                                  control: assistTolerancePopup))
+        body.addArrangedSubview(SettingsHelpText.label(
+            "Used by the ADAT Gain Assistant (Inputs ▸ ADAT 1–8). Changes\napply to the next measurement — a running measurement keeps\nits own settings."))
+
         // PLUG-INS
         SettingsSection.add(to: body, "Plug-ins")
         insertCheck = NSButton(checkboxWithTitle: "Enable plug-in processing",
@@ -1415,6 +1556,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             gainDurationPopup.select(item); break
         }
 
+        // Gain Assistance (ADAT) — the persisted departure
+        for item in assistTargetPopup.itemArray
+        where (item.representedObject as? NSNumber)?.doubleValue == AdatGainEngine.targetDBFS {
+            assistTargetPopup.select(item); break
+        }
+        for item in assistDurationPopup.itemArray
+        where (item.representedObject as? NSNumber)?.doubleValue == AdatGainEngine.durationSeconds {
+            assistDurationPopup.select(item); break
+        }
+        for item in assistTolerancePopup.itemArray
+        where (item.representedObject as? NSNumber)?.doubleValue == AdatGainEngine.toleranceDB {
+            assistTolerancePopup.select(item); break
+        }
+
         insertCheck.state = InsertServer.shared.running ? .on : .off
         bypassCheck.isEnabled = InsertServer.shared.running
         bypassCheck.state = InsertServer.shared.bypassAll ? .on : .off
@@ -1465,6 +1620,26 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !gainSuppress,
               let v = sender.selectedItem?.representedObject as? NSNumber else { return }
         AutoGainEngine.listenSeconds = v.doubleValue
+        QuartetControlController.shared.refresh()
+    }
+
+    // Gain Assistance (ADAT) — persist and apply to the NEXT measurement.
+    @objc private func assistTargetChanged(_ sender: NSPopUpButton) {
+        guard !gainSuppress,
+              let v = sender.selectedItem?.representedObject as? NSNumber else { return }
+        AdatGainEngine.targetDBFS = v.doubleValue
+        QuartetControlController.shared.refresh()
+    }
+    @objc private func assistDurationChanged(_ sender: NSPopUpButton) {
+        guard !gainSuppress,
+              let v = sender.selectedItem?.representedObject as? NSNumber else { return }
+        AdatGainEngine.durationSeconds = v.doubleValue
+        QuartetControlController.shared.refresh()
+    }
+    @objc private func assistToleranceChanged(_ sender: NSPopUpButton) {
+        guard !gainSuppress,
+              let v = sender.selectedItem?.representedObject as? NSNumber else { return }
+        AdatGainEngine.toleranceDB = v.doubleValue
         QuartetControlController.shared.refresh()
     }
 

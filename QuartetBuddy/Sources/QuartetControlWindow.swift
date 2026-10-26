@@ -740,24 +740,142 @@ final class TinyGlyphView: NSView {
 /// A compact horizontal signal meter: 20 square segments, green → amber →
 /// red, in a flat recessed bed. Level is 0…1; segments light from the
 /// left. Quiet at rest.
+/// The analog channel's INPUT LEVEL bargraph — the continuous
+/// horizontal peak meter under the channel heading, spanning the
+/// channel width. READ-ONLY, and deliberately SEPARATE from the gain
+/// knob: the knob shows the hardware preamp GAIN, the bar shows the
+/// incoming SIGNAL.
+///
+/// A flat 6-pt track with a recessed graphite bed; the level rises as a
+/// CONTINUOUS fill through fixed color zones — green below −18 dBFS,
+/// amber to −6, red above — so the bar's POSITION reads the level
+/// instead of the whole strip changing color on every peak. A thin
+/// off-white peak-hold marker rides inside the track (the tap's
+/// instantiate-catch/2 s-hold/fall behavior drives it); at the far
+/// right edge a small CLIP lamp — ignited when the channel's samples
+/// touch full scale, staying red until CLICKED: entering the red zone
+/// is a warning, the lamp is the record of an actual clip (its own
+/// latch). No permanent numbers: the held peak reads in the tooltip
+/// ("Peak −14 dBFS"), and the Auto Gain target shows as a transient
+/// blue marker only while the channel is being calibrated.
 final class GGLevelMeter: NSView {
-    var level: Double = 0 { didSet { needsDisplay = true } }
-    override func draw(_ dirtyRect: NSRect) {
-        let h = bounds.height
-        GGTheme.inset.setFill()
-        NSBezierPath(rect: bounds.insetBy(dx: 0, dy: h * 0.35)).fill()
-        let lit = Int((min(max(level, 0), 1) * 20).rounded())
-        let segs = 20
-        let gap = bounds.width * 0.012
-        let w = (bounds.width - gap * CGFloat(segs - 1)) / CGFloat(segs)
-        for s in 0..<lit {
-            let x = CGFloat(s) * (w + gap)
-            let c: NSColor = s < 13 ? GGTheme.green
-                : s < 17 ? GGTheme.amber
-                : GGTheme.red
-            c.setFill()
-            NSBezierPath(rect: NSRect(x: x, y: h * 0.32, width: w, height: h * 0.36)).fill()
+
+    /// Fixed zone boundaries on the shared −60…0 dBFS display scale
+    /// (fraction 1 = 0 dBFS): −18 dBFS = 0.7, −6 dBFS = 0.9 — the SAME
+    /// thresholds the ADAT dial's arc uses.
+    private static let amberZone: CGFloat = 0.7
+    private static let redZone: CGFloat = 0.9
+
+    /// The live level fraction (tap feed: fast rise, smooth decay).
+    private(set) var level: Double = 0
+    /// The held peak's fraction (tap's 2 s hold then fall; nil = below
+    /// the display floor — nothing to show).
+    private(set) var peakFraction: Double?
+    /// The Auto Gain target's fraction — present ONLY while the channel
+    /// is being calibrated (nil = the quiet interface).
+    private(set) var targetFraction: Double?
+    /// The lamp's latch — set by a full-scale sample, cleared by a click.
+    private var clipLatched = false { didSet { needsDisplay = true } }
+
+    /// ONE 10 Hz feed (adatUpdateTick): the live level, the held peak,
+    /// the transient Auto Gain target and the engine's full-scale-sample
+    /// flag — the LATCH itself lives here, so the lamp stays red until
+    /// the user resets it even when the tick's flag auto-decays.
+    func update(level: Double, peakFraction: Double?,
+                targetFraction: Double?, clip: Bool) {
+        self.level = level
+        self.peakFraction = peakFraction
+        self.targetFraction = targetFraction
+        if clip { clipLatched = true }
+        needsDisplay = true
+        // the peak value reads in the hover tooltip — "Peak −14 dBFS"
+        var tip = "Peak " + Self.dbfsText(peakFraction)
+        if clipLatched { tip += " · clipped — click to reset" }
+        if toolTip != tip { toolTip = tip }
+    }
+
+    /// A display fraction → "−14 dBFS" text (U+2212); no known peak →
+    /// "−∞", so the tooltip stays honest about silence.
+    private static func dbfsText(_ fraction: Double?) -> String {
+        guard let f = fraction, f.isFinite, f > 0 else { return "−∞" }
+        let db = Int((f * 60 - 60).rounded())
+        return "\(db) dBFS".replacingOccurrences(of: "-", with: "−")
+    }
+
+    /// A 6-pt row is a needle to click — the lamp's reset target spans a
+    /// taller band around the track (the row spacings, not the neighbor
+    /// controls).
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard local.x >= bounds.minX, local.x <= bounds.maxX else { return nil }
+        return abs(local.y - bounds.midY) <= 10 ? self : nil
+    }
+
+    /// Click to reset the latched clip lamp (read-only otherwise).
+    override func mouseDown(with event: NSEvent) {
+        if clipLatched {
+            clipLatched = false
+            needsDisplay = true
         }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = bounds
+        let trackPath = NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2)
+        GGTheme.inset.setFill()
+        trackPath.fill()
+        NSGraphicsContext.saveGraphicsState()
+        trackPath.addClip()
+
+        // the CLIP lamp cell at the right edge — the fill's run stops
+        // short of it (the lamp is drawn OVER the fill), so the lamp
+        // reads as a separate indicator, never as more red zone
+        let lamp = NSRect(x: track.maxX - 4.5, y: track.minY,
+                          width: 4.5, height: track.height)
+        (clipLatched ? GGTheme.red : NSColor(white: 1, alpha: 0.10)).setFill()
+        lamp.fill()
+
+        // continuous fill through the fixed zones — each zone is drawn
+        // on top of the previous, so the color changes exactly at the
+        // boundary fraction while the LEFT portion keeps its color
+        let fill = min(max(level, 0), 1) * track.width
+        if fill > 0 {
+            GGTheme.green.setFill()
+            NSRect(x: track.minX, y: track.minY, width: fill,
+                   height: track.height).fill()
+            let amberMin = track.minX + track.width * Self.amberZone
+            if fill > amberMin {
+                GGTheme.amber.setFill()
+                NSRect(x: amberMin, y: track.minY, width: fill - amberMin,
+                       height: track.height).fill()
+            }
+            let redMin = track.minX + track.width * Self.redZone
+            if fill > redMin {
+                GGTheme.red.setFill()
+                NSRect(x: redMin, y: track.minY, width: fill - redMin,
+                       height: track.height).fill()
+            }
+        }
+
+        // the Auto Gain target — a thin blue marker, calibration only
+        if let tf = targetFraction, tf > 0 {
+            let x = track.minX + track.width * min(max(tf, 0), 1)
+            GGTheme.scanTrail.withAlphaComponent(0.9).setFill()
+            NSRect(x: x - 0.75, y: track.minY, width: 1.5,
+                   height: track.height).fill()
+        }
+
+        // the held peak — a narrow off-white marker, clamped short of
+        // the clip lamp
+        if let pf = peakFraction, pf > 0 {
+            let x = track.minX + track.width * min(max(pf, 0), 1)
+            let markX = min(max(x - 1, track.minX + 1), lamp.minX - 2)
+            GGTheme.offWhite.setFill()
+            NSRect(x: markX, y: track.minY + 1, width: 2,
+                   height: track.height - 2).fill()
+        }
+
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -1063,6 +1181,7 @@ final class GainKnob: NSControl {
     /// it.
     private(set) var isDragging = false
     var onDragChange: ((GainKnob, Bool) -> Void)?
+    private var lastDragSend: TimeInterval = 0
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
@@ -1077,6 +1196,7 @@ final class GainKnob: NSControl {
             return
         }
         var lastY = event.locationInWindow.y
+        lastDragSend = event.timestamp
         isDragging = true
         onDragChange?(self, true)
         defer {
@@ -1093,7 +1213,16 @@ final class GainKnob: NSControl {
                 let fine = ev.modifierFlags.contains(.shift)
                 let rate = (maxValue - minValue) / (fine ? 320 : 110)
                 doubleValue += Double(dy) * rate   // setter rounds to whole
-                if sendsContinuously { send() }
+                // The draw follows the drag immediately (the value setter
+                // flags the knob itself), but the SEND is coalesced: a send
+                // is a hardware write whose echo triggers a full-window
+                // refresh — one per drag event pixels would stutter. At
+                // most ~25 sends/s while dragging; the final value always
+                // lands on release below.
+                if sendsContinuously, ev.timestamp - lastDragSend >= 0.04 {
+                    lastDragSend = ev.timestamp
+                    send()
+                }
             default:
                 keep = false
             }
@@ -1675,6 +1804,160 @@ final class FunctionToggle: FunctionButton {
         let s = attr.size()
         attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
                               y: (bounds.height - s.height) / 2 - 0.5))
+    }
+}
+
+/// The two channel-pair ganging toggles (inputs 1+2 / 3+4 — the
+/// touchscreen's linked-fader pairs, the hwinN.group bits): compact
+/// chain-link toggles that live ON each pair's divider between the two
+/// channels instead of the Inputs header, so the relationship is
+/// visible where it matters. The glyph is the bundled chain artwork
+/// (assets/app.png), tinted per state — never a pasted black bitmap.
+///
+/// One state carrier, one color — the channel styling never changes:
+///
+///   unlinked → muted gray BROKEN chain on a transparent back (a
+///              subtle neutral fill on hover only);
+///   linked   → connected chain in vivid purple on a subtle
+///              purple-tinted bed with a thin purple border — steady,
+///              visible without hover (same treatment as the pin's
+///              selected state).
+///
+/// The glyph's footprint and the button's 32-pt box are IDENTICAL in
+/// both states (no jump when toggling), and keyboard focus stays a
+/// separate system-level exterior ring (see FunctionButton), so the
+/// focus ring never reads as the purple linked look.
+final class LinkPairButton: FunctionButton {
+
+    /// The ganging state color — vivid purple, deliberately NOT the Ø
+    /// polarity or Auto Gain purples: ganging is its own function.
+    static let ink = GGTheme.hex("A970FF")
+
+    /// "inputs 1 and 2" / "inputs 3 and 4" — the tooltip's + label part.
+    private let pairText: String
+
+    init(pair: Int, target: AnyObject?, action: Selector) {
+        pairText = "inputs \(pair * 2 + 1) and \(pair * 2 + 2)"
+        super.init(tag: 1400 + pair, accent: Self.ink, target: target, action: action)
+        setAccessibilityLabel("Link \(pairText)")
+        refreshTooltip()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    var isLinked: Bool { isEnabled && state == .on }
+
+    override var state: NSControl.StateValue {
+        didSet { refreshTooltip() }   // the redraw itself: FunctionButton's didSet
+    }
+
+    /// Off: "Link inputs 1 and 2." · On: "Inputs 1 and 2 linked — click to unlink."
+    /// (setToggle appends its "— device unavailable" suffix on top when
+    /// the pair can't be switched — keep the base short and plain.)
+    private func refreshTooltip() {
+        toolTip = isLinked
+            ? pairText.prefix(1).uppercased() + pairText.dropFirst()
+                + " linked — click to unlink."
+            : "Link \(pairText)."
+    }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 32, height: 32) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let engaged = isEngaged
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        if !isEnabled {
+            // device away: receded but READABLE — the state stays visible
+            GGTheme.subduedFill.setFill()
+            path.fill()
+        } else if engaged {
+            // LINKED: subtle purple bed + thin purple border — persistent
+            Self.ink.withAlphaComponent(0.16).setFill()
+            path.fill()
+            Self.ink.withAlphaComponent(0.5).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        } else if hovering {
+            // UNLINKED at rest is fully transparent; hover only lifts
+            GGTheme.hoverFill.setFill()
+            path.fill()
+        }
+        let color: NSColor = !isEnabled ? .disabledControlTextColor
+            : engaged ? Self.ink : GGTheme.softGray
+        drawChain(color: color, linked: engaged)
+    }
+
+    /// The chain glyph: the bundled chain artwork (assets/app.png),
+    /// tinted to the state ink — the SAME ART in both states with an
+    /// identical fitted footprint (the pin toggle's rule: color carries
+    /// the state). A linked pair shows the chain whole; an unlinked
+    /// pair shows the same chain TORN at the interlock — the art is
+    /// drawn twice, each pass clipped to one side of a thin void band
+    /// across the center, so the two halves read as a broken link
+    /// without any repositioning or rescaling. Fallback (asset
+    /// missing): the equivalent two-stadium vector chain.
+    private func drawChain(color: NSColor, linked: Bool) {
+        if let icon = GGIconAsset.tinted("app", color) {
+            let s = icon.size
+            guard s.width > 0, s.height > 0 else { return }
+            // ~22 × 10 of visible INK, centered: the artwork's canvas is
+            // square with slim side margins and fat transparent top /
+            // bottom padding (measured: ink 117×53 inside a 128×128
+            // canvas), so the CANVAS is aspect-fit into a 22×24 box and
+            // its own padding settles the glyph inside it
+            let box = bounds.insetBy(dx: 5, dy: 4)
+            let scale = min(box.width / s.width, box.height / s.height)
+            let fitted = NSRect(x: box.midX - s.width * scale / 2,
+                                y: box.midY - s.height * scale / 2,
+                                width: s.width * scale, height: s.height * scale)
+            if linked {
+                icon.draw(in: fitted)
+            } else {
+                let gap: CGFloat = 1.5
+                for (lo, hi) in [(-1000.0, Double(fitted.midX - gap)),
+                                 (Double(fitted.midX + gap), 1000.0)] {
+                    NSGraphicsContext.saveGraphicsState()
+                    NSBezierPath(rect: NSRect(x: lo, y: 0, width: hi - lo,
+                                              height: bounds.height)).addClip()
+                    icon.draw(in: fitted)
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+            }
+            return
+        }
+        // OFFLINE FALLBACK: two stadium links, ~22×12 pt, light 1.5 pt
+        // stroke — identical geometry in both states (the doubled
+        // footprint matches the artwork's fitted box above)
+        let x = bounds.midX - 11, y = bounds.midY - 6
+        let left = NSBezierPath(roundedRect: NSRect(x: x, y: y, width: 14, height: 12),
+                                xRadius: 6, yRadius: 6)
+        let right = NSBezierPath(roundedRect: NSRect(x: x + 8, y: y, width: 14, height: 12),
+                                 xRadius: 6, yRadius: 6)
+        color.setStroke()
+        if linked {
+            // INTERLOCKED: right link first, then left — left's stroke
+            // crosses OVER right's, chaining the two together
+            right.lineWidth = 1.5
+            right.stroke()
+            left.lineWidth = 1.5
+            left.stroke()
+        } else {
+            // BROKEN: identical links, stroke clipped short of the
+            // interlock's center line — two flat-torn tube ends
+            let gap: CGFloat = 2.5
+            strokeTorn(left, xMin: 0, xMax: x + 11 - gap)
+            strokeTorn(right, xMin: x + 11 + gap, xMax: bounds.width)
+        }
+    }
+
+    /// Stroke a link clipped to a horizontal band (the torn edge).
+    private func strokeTorn(_ path: NSBezierPath, xMin: CGFloat, xMax: CGFloat) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: NSRect(x: xMin, y: 0, width: xMax - xMin,
+                                  height: bounds.height)).addClip()
+        path.lineWidth = 1.5
+        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -2645,6 +2928,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     func show() {
         if window == nil { build() }
+        // the metering hub knows the window is watching (live meters)
+        AdatGainEngine.shared.windowVisible = true
+        AdatGainEngine.shared.refreshChannelCount()
         refreshSampleRatePopup()
         if let tree = onSeedTree?() {
             interfaceName = Self.interfaceName(from: tree)
@@ -2705,6 +2991,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // nothing of ours holds the key → the click (or app switch)
             // went outside: quietly hide
             self.window?.orderOut(nil)
+            self.AdatVisibility(false)
         }
     }
 
@@ -2725,8 +3012,24 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         GlueClient.quartetSerial(in: tree)
     }
 
+    /// Coalesced entry point: a drag (write → echo) and any burst of
+    /// device events can call this MANY times per frame, and the body
+    /// touches every control in the window — running it per event is what
+    /// makes knob drags stutter. The actual reconcile runs at most every
+    /// ~50 ms; the last pending call always lands.
+    private var refreshScheduled = false
     func refresh() {
         guard window != nil, feedbackLabel != nil else { return }
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refreshNow()
+        }
+    }
+
+    private func refreshNow() {
         suppressActions = true
         defer { suppressActions = false }
         // keep the title-bar dropdown on the ACTUAL live hardware rate
@@ -2811,6 +3114,27 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             setToggle(l, (inputs[b1].group ?? false) && (inputs[b2].group ?? false),
                       enabled: connected && !learning
                           && !inputGroupIds[b1].isEmpty && !inputGroupIds[b2].isEmpty)
+        }
+
+        // INPUT BANK — Analog 1–4 / ADAT 1–8: the selector is a pair of
+        // mutually-exclusive toggles; the grid + header controls swap.
+        let adatBankActive = inputsBank == 1
+        bankAnalogButton?.state = adatBankActive ? .off : .on
+        bankAdatButton?.state = adatBankActive ? .on : .off
+        bankAnalogButton?.isEnabled = connected && !learning
+        bankAdatButton?.isEnabled = connected && !learning
+        linkToggles.forEach { $0.isHidden = adatBankActive }
+        adatGrid?.isHidden = !adatBankActive
+        inputGridRef?.isHidden = adatBankActive
+
+        // ADAT TILES — focus markers + availability. Assistance is a
+        // Core-Audio measurement: it needs the stream, not the glue
+        // tree, so tiles stay active whenever the channel exists.
+        let adatEngine = AdatGainEngine.shared
+        for i in 0..<adatTiles.count {
+            adatTiles[i].update(status: adatEngine.statuses[i],
+                                focus: adatEngine.focusedChannel == i,
+                                available: adatEngine.channelAvailable(i))
         }
 
         for i in 0..<4 {
@@ -3342,9 +3666,30 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var feedbackTime: NSTextField?
     /// The unit's serial ID — quiet, at the footer's BOTTOM RIGHT.
     private var serialField: NSTextField?
-    /// The two ganging link toggles in the Inputs section header
-    /// (Link 1+2 / Link 3+4 — the hwinN.group bits).
+    /// The two ganging chain-link toggles — one ON each pair's divider
+    /// between its two channels (Link 1+2 / Link 3+4 — the hwinN.group
+    /// bits), aligned with the gain knobs' centerline.
     private var linkToggles: [NSButton] = []
+    /// The Inputs section's BANK selector — [ Analog 1–4 | ADAT 1–8 ].
+    /// The analog layout is untouched; the ADAT bank swaps the grid.
+    private var bankAnalogButton: FunctionToggle?
+    private var bankAdatButton: FunctionToggle?
+    /// The ADAT bank: eight channel strips (4 × 2) carrying their own
+    /// Gain Assist actions — no section-level assistant button.
+    /// (internal so the QB_AUTO_ASSIST harness can probe milestones.)
+    var adatTiles: [AdatTile] = []
+    private var adatGrid: NSView?
+    /// the analog four-strip grid — hidden while the ADAT bank is
+    /// pinned; refresh() applies BOTH banks' visibility so switching
+    /// there and back actually swaps the grids
+    private var inputGridRef: NSView?
+    /// The central workspace scroll area — the fallback when the
+    /// fitted window exceeds the screen's usable space.
+    private var scrollArea: NSScrollView?
+    private var monitorStrip: NSView?
+    /// The top monitor bar (volume/mute row) — its measured height is
+    /// part of the window's content-height arithmetic.
+    private var monitorBarRef: NSView?
     /// What the footer's action button does right now.
     private var feedbackActionKind: FeedbackAction = .none
 
@@ -3396,7 +3741,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // tag namespaces (kept well apart so `tag - base` never collides):
     //   inputs:  100/200/250/300/400/500/1200/600 + i
-    //   ganging: 1400 + a (Link 1+2 / Link 3+4 toggles at the section head)
+    //   ganging: 1400 + a (chain-link toggles ON the pair dividers —
+    //             inputs 1–2 and 3–4; ADAT bank hides them)
     //   renaming: (NONE inline) — Settings ▸ Quartet ▸ Channel Names owns renames
     //             (hardware hwin/hwout names + the app-side pair names)
     //   stage menus (pre-existing): 2300 + i (tap-point menus)
@@ -3438,6 +3784,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let monitorBar = makeMonitorBar()
         let scroll = makeScrollArea()
         let monitor = makeMonitorStrip()
+        scrollArea = scroll
+        monitorStrip = monitor
+        monitorBarRef = monitorBar
         content.addSubview(monitorBar)
         content.addSubview(scroll)
         content.addSubview(monitor)
@@ -3486,15 +3835,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         window = w
         // The window HUGS its content: every control stays content-sized
         // vertically, so when the layout changes the window gets shorter
-        // (or taller) instead of the rows growing to fill it. NSWindow
-        // sizes to the contentView's fitting size otherwise, and the
-        // intrinsic size is tiny — so the height is measured from the
-        // laid-out document.
+        // (or taller) instead of the rows growing to fill it. The height
+        // is MEASURED from the real layout: monitor bar + sections + status
+        // strip — no hard-coded sums.
         content.layoutSubtreeIfNeeded()
-        let docHeight = scrollDoc?.frame.height ?? 0
-        let footerHeight = monitor.frame.height
-        let needed = 72 + docHeight + footerHeight
-        w.setContentSize(NSSize(width: 1060, height: max(420, needed.rounded(.up))))
+        let needed = contentNeededHeight()
+        w.setContentSize(NSSize(width: 1060,
+                                height: max(w.minSize.height, needed.rounded(.up))))
         w.center()
         // open at the TOP of the sections: the doc is NOT flipped, so its
         // origin is the bottom — scrolling to 0 shows the bottom (status
@@ -3503,6 +3850,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         if let d = scrollDoc {
             d.scroll(NSPoint(x: 0, y: d.bounds.maxY))
         }
+        // ADAT metering hub — the 10 Hz engine tick feeds every meter
+        // fast-path (the control window decides what redraws).
+        AdatGainEngine.shared.onUpdate = { [weak self] in self?.adatUpdateTick() }
+        AdatGainEngine.shared.refreshChannelCount()
     }
 
     /// "48000" → "48 kHz" (one decimal when needed, e.g. 44.1 / 88.2).
@@ -3761,27 +4112,52 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: GGSpace.section, right: 0)
         doc.addSubview(stack)
 
-        // INPUTS section header: title + the two ganging link toggles
-        // (Link 1+2 / Link 3+4) — the touchscreen's linked-fader pairs.
-        // The Auto Gain Target / Duration configuration moved to
-        // Settings ▸ Processing ▸ Auto Gain (those settings apply to BOTH the
-        // per-input buttons and Auto Gain All, at the START of the next
-        // operation).
-        let link12 = FunctionToggle(title: "Link 1+2", tag: 1400,
-                                    accent: GGTheme.accent,
-                                    target: self, action: #selector(linkClicked(_:)))
-        let link34 = FunctionToggle(title: "Link 3+4", tag: 1401,
-                                    accent: GGTheme.accent,
-                                    target: self, action: #selector(linkClicked(_:)))
-        link12.toolTip = "Gang inputs 1+2 — moves both preamps together\n(the touchscreen's linked-fader pairs, hwin0/hwin1 group bits)"
-        link34.toolTip = "Gang inputs 3+4 — moves both preamps together\n(the touchscreen's linked-fader pairs, hwin2/hwin3 group bits)"
-        linkToggles = [link12, link34]
+        // INPUTS section header: title + the BANK selector
+        // [ Analog 1–4 | ADAT 1–8 ] ONLY — the ganging toggles are GONE
+        // from the header: each pair's chain-link button lives ON the
+        // divider between its two channels (addLinkDivider, built with
+        // the grid below), so the pairing is visible where it happens.
+        // The ADAT bank's Gain Assist actions live on the tile
+        // themselves. The Auto Gain Target / Duration configuration
+        // moved to Settings ▸ Processing (the Gain Assistance settings
+        // live beside it — see SettingsWindow.buildProcessing).
+        let bankAnalog = FunctionToggle(title: "Analog 1–4", tag: 1500,
+                                        accent: GGTheme.accent,
+                                        target: self, action: #selector(bankClicked(_:)))
+        bankAnalog.toolTip = "The four analog preamp inputs"
+        bankAnalog.setAccessibilityLabel("Analog inputs 1 to 4")
+        let bankAdat = FunctionToggle(title: "ADAT 1–8", tag: 1501,
+                                      accent: GGTheme.accent,
+                                      target: self, action: #selector(bankClicked(_:)))
+        bankAdat.toolTip = "The eight optical ADAT inputs (the count follows the sample rate)"
+        bankAdat.setAccessibilityLabel("ADAT inputs 1 to 8")
+        bankAnalogButton = bankAnalog
+        bankAdatButton = bankAdat
+
+        // NO section-level "Gain Assistant…" button — each ADAT tile
+        // carries its own Gain Assist action, which makes the
+        // destination explicit for one-input-at-a-time operation.
+
+        // linkToggles populate DURING the grid build — one per pair
+        // divider (inputs 1–2 then 3–4)
         let inputsHeader = sectionHeader(title: "Inputs",
-                                         trailingViews: [link12, link34])
+                                         trailingViews: [bankAnalog, bankAdat])
         stack.addArrangedSubview(inputsHeader)
 
         let inputGrid = makeInputGrid()
+        inputGridRef = inputGrid
         stack.addArrangedSubview(inputGrid)
+
+        // ADAT bank — same four-column geometry, eight compact tiles
+        // (one meter row per channel, no preamp knobs). Hidden while
+        // the analog bank is selected.
+        let adatBank = makeAdatGrid()
+        adatGrid = adatBank
+        stack.addArrangedSubview(adatBank)
+        // the persisted bank applies BEFORE the first layout so the
+        // window never opens at the wrong height
+        inputGrid.isHidden = inputsBank == 1
+        adatBank.isHidden = inputsBank != 1
 
         // thin system separator between the two sections
         let sectionRule = Hairline()
@@ -3840,6 +4216,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // and 16–20 pt heading → strips.
         stack.setCustomSpacing(GGSpace.sectionHead, after: inputsHeader)
         stack.setCustomSpacing(22, after: inputGrid)
+        stack.setCustomSpacing(22, after: adatBank)
         stack.setCustomSpacing(18, after: sectionRule)
         stack.setCustomSpacing(18, after: outHeader)
 
@@ -3924,8 +4301,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         strip.spacing = GGSpace.related
         strip.translatesAutoresizingMaskIntoConstraints = false
 
+        // per pair divider: the interrupted rule + its two rule segments
+        // (the BACK half of the toggle mount — wiring happens after the
+        // cards)
+        var linkMounts: [(rule: NSView, upper: NSView, lower: NSView)] = []
+
         for i in 0..<4 {
-            if i > 0 { addRule(to: strip) }
+            // PAIR DIVIDERS carry their own toggle: each ganging pair's
+            // chain-link button is centered ON the divider between its
+            // two channels, aligned with the gain knobs' centerline —
+            // the relationship is visible in place. The central divider
+            // (between Inputs 2 and 3) stays an uninterrupted rule.
+            var parts: (rule: NSView, upper: NSView, lower: NSView)?
+            if i == 1 || i == 3 {
+                parts = addLinkRule(to: strip)
+            } else if i > 0 {
+                addRule(to: strip)
+            }
 
             let card = CardView()
             card.translatesAutoresizingMaskIntoConstraints = false
@@ -4018,9 +4410,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             col.addArrangedSubview(headerRow)
             headerRow.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 
-            // thin signal meter between the header and the controls
+            // SIGNAL LEVEL bargraph between the header and the controls
+            // — a 6-pt continuous peak meter (zones + peak-hold + clip
+            // lamp; read-only, the knob above/below shows GAIN, this
+            // shows LEVEL) spanning the whole channel width.
             let meter = GGLevelMeter()
-            meter.heightAnchor.constraint(equalToConstant: 7).isActive = true
+            meter.heightAnchor.constraint(equalToConstant: 6).isActive = true
             col.addArrangedSubview(meter)
             meter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             meters.append(meter)
@@ -4124,8 +4519,238 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             levelPopups[i].widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
 
             strip.addArrangedSubview(card)
+            if let parts { linkMounts.append(parts) }
+        }
+        // Mount the toggles AFTER the cards: as the strip's LAST subviews
+        // they sit on top in BOTH draw and hit-test order. NSStackView hit-
+        // tests its later subviews first — mounted any earlier, a channel
+        // card would swallow the half of the toggle's 32-pt box that
+        // overhangs it, leaving only the narrow central gutter clickable.
+        for (a, m) in linkMounts.enumerated() {
+            mountLinkToggle(on: strip, rule: m.rule, upper: m.upper, lower: m.lower, pair: a)
         }
         return strip
+    }
+
+    // MARK: ADAT bank
+
+    /// The ADAT bank: eight compact channel tiles in the app's
+    /// four-column geometry (two rows). Each tile: channel number +
+    /// optional name, live meter with peak/target markers, assistance
+    /// status, and an Assist action — no gain knob, no 48V: the
+    /// external converter owns the preamp, and the interface must not
+    /// suggest control the app does not have.
+    private func makeAdatGrid() -> NSView {
+        let wrap = NSStackView()
+        wrap.orientation = .vertical
+        wrap.spacing = GGSpace.related
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        for row in 0..<2 {
+            let strip = NSStackView()
+            strip.orientation = .horizontal
+            strip.spacing = GGSpace.related
+            strip.translatesAutoresizingMaskIntoConstraints = false
+            for col in 0..<4 {
+                let i = row * 4 + col
+                // the analog section's divided-column structure: thin
+                // rules BETWEEN the four channels, open strips otherwise
+                if col > 0 { addRule(to: strip) }
+                let tile = AdatTile(index: i)
+                tile.translatesAutoresizingMaskIntoConstraints = false
+                tile.widthAnchor.constraint(equalToConstant: cardWidth).isActive = true
+                tile.assistAction = { [weak self] in self?.assistChannel(i) }
+                tile.doneAction = { [weak self] in self?.dismissAssistant(i) }
+                adatTiles.append(tile)
+                strip.addArrangedSubview(tile)
+            }
+            wrap.addArrangedSubview(strip)
+        }
+        return wrap
+    }
+
+    /// Debug helper for the AUTO triggers: snapshot the whole window
+    /// content so a headless session can see what actually renders.
+    func dumpWindowSnapshot(_ path: String) {        guard let content = window?.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return }
+        content.cacheDisplay(in: content.bounds, to: rep)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+            QBLog.log("control: window snapshot written to \(path)")
+        }
+    }
+
+    /// The window's natural content height, measured from the REAL
+    /// layout — the monitor bar, the sections document (which hugs its
+    /// content) and the status footer. Nothing hard-coded.
+    private func contentNeededHeight() -> CGFloat {
+        (monitorBarRef?.frame.height ?? 0)
+            + (scrollDoc?.frame.height ?? 0)
+            + (monitorStrip?.frame.height ?? 0)
+    }
+
+    /// The window FOLLOWS its content: whenever the layout meaningfully
+    /// changes (bank switch, build, routing rows) the height is
+    /// re-measured and applied —
+    ///   - the TOP EDGE stays put: the window grows downward, so the
+    ///     monitor toolbar never jumps
+    ///   - the height is capped by the screen's usable space; beyond
+    ///     that the central scroll view stays the fallback (the monitor
+    ///     bar and the status footer remain pinned outside it)
+    ///   - meter values, texts and other live updates never call this —
+    ///     only real layout changes do
+    func resizeWindowToFitContent() {
+        guard let window, let scrollArea, let doc = scrollArea.documentView
+        else { return }
+        doc.layoutSubtreeIfNeeded()
+        let needed = contentNeededHeight()
+        let usable = window.screen?.visibleFrame.height
+            ?? NSScreen.main?.visibleFrame.height
+        var target = max(window.minSize.height, needed.rounded(.up))
+        if let usable, usable >= window.minSize.height {
+            target = min(target, usable.rounded(.up))
+        }
+        let current = window.frame
+        guard abs(target - current.height) >= 1 else { return }
+        // keep the top edge: move the ORIGIN down by the height change
+        window.setFrame(NSRect(x: current.origin.x,
+                               y: current.maxY - target,
+                               width: current.width,
+                               height: target),
+                        display: true)
+    }
+
+    // MARK: - the per-channel inline Gain Assistant
+
+    /// The tile's Gain Assist action — ONE assistant session at a
+    /// time, inline on the tile itself (no overlay). The button is the
+    /// SAME control in every state, so the action follows it:
+    ///   Stop      this channel is listening → abort (a stopped
+    ///             recheck falls back to the previous recommendation)
+    ///   Recheck   this channel's frozen guidance is open → fresh
+    ///             measurement, previous peak cleared
+    ///   Gain Assist… otherwise → stop anything else running, dismiss
+    ///             the other channel's guidance, start THIS one
+    func assistChannel(_ index: Int) {
+        let engine = AdatGainEngine.shared
+        let wasOpen = engine.focusedChannel == index
+            && engine.statuses[index] != .idle
+
+        if engine.isMeasuringChannel(index) {
+            engine.stopMeasuring()
+            QBLog.log("adatgain: assist stopped on ADAT \(index + 1)")
+            refresh()
+            return
+        }
+        if engine.isMeasuring {
+            engine.stopMeasuring()
+        }
+        if let prior = engine.focusedChannel, prior != index {
+            engine.clearResult(prior)
+        }
+        engine.focusedChannel = index
+        if wasOpen {
+            // [Recheck] — a fresh measurement, previous peak cleared
+            engine.recheck([index])
+            QBLog.log("adatgain: assist recheck on ADAT \(index + 1)")
+        } else {
+            if engine.statuses[index] != .idle {
+                engine.clearResult(index)   // stale, unopened guidance
+            }
+            if let error = engine.startMeasurement([index]) {
+                QBLog.log("adatgain: assist failed on ADAT \(index + 1): \(error)")
+                engine.focusedChannel = nil
+            } else {
+                QBLog.log("adatgain: assist opened on ADAT \(index + 1) — Target \(Int(AdatGainEngine.targetDBFS.rounded())) dBFS peak · Measurement \(Int(AdatGainEngine.durationSeconds.rounded())) s")
+            }
+        }
+        refresh()
+    }
+
+    /// Done: close this channel's guidance and clear its
+    /// recommendation — the button returns to "Gain Assist…".
+    func dismissAssistant(_ index: Int) {
+        let engine = AdatGainEngine.shared
+        engine.clearResult(index)
+        if engine.focusedChannel == index {
+            engine.focusedChannel = nil
+        }
+        refresh()
+    }
+
+    /// The 10 Hz engine tick: meters fast-path here (never a full
+    /// refresh); tile statuses/countdowns refresh only while something
+    /// is measuring; an engine transition triggers exactly one refresh.
+    private var adatWasMeasuring = false
+    func adatUpdateTick() {
+        let engine = AdatGainEngine.shared
+        guard window?.isVisible == true || engine.isMeasuring else { return }
+        // BOTH banks' meters live: the analog strips were built with
+        // meters that previously never received a feed — now the same
+        // shared tap powers them. One consolidated feed per strip:
+        // level + held peak + (while this channel is being calibrated)
+        // the Auto Gain target marker + the full-scale flag, whose lamp
+        // latch the METER owns (click to reset).
+        let autoGain = AutoGainEngine.shared
+        for i in 0..<meters.count {
+            meters[i].update(
+                level: engine.levelFraction(i),
+                peakFraction: engine.heldPeakDBFS(i)
+                    .map { AdatGainEngine.levelFraction(dbfs: $0) },
+                targetFraction: autoGain.runningInputs.contains(i)
+                    ? AdatGainEngine.levelFraction(dbfs: AutoGainEngine.targetDBFS)
+                    : nil,
+                clip: engine.liveClipActive(i))
+        }
+        for i in 0..<adatTiles.count {
+            let ch = AdatGainEngine.analogChannels + i
+            let available = engine.channelAvailable(i)
+            adatTiles[i].setLevels(
+                live: engine.levelFraction(ch),
+                holdText: engine.heldPeakText(ch, unavailable: !available),
+                clipped: engine.liveClipActive(ch),
+                unavailable: !available)
+        }
+        if engine.isMeasuring {
+            adatWasMeasuring = true
+        } else if adatWasMeasuring {
+            // measurement finished → frozen results: one full refresh
+            adatWasMeasuring = false
+            refresh()
+        }
+    }
+
+    // MARK: bank actions
+
+    /// Inputs bank selector — Analog 1–4 (tag 1500) / ADAT 1–8
+    /// (tag 1501). Persisted; the selection only swaps the input
+    /// section's grid. The swap is THE meaningful layout change, so the
+    /// window is RE-MEASURED here: it grows for the ADAT bank's two
+    /// rows and shrinks back for the analog bank — top edge pinned
+    /// (the window grows downward), capped by the usable screen. With
+    /// the sections anchored from the top, the viewport returns to the
+    /// top (a no-op once the window fits its content — scrolling is
+    /// only the fallback on small screens).
+    @objc private func bankClicked(_ sender: NSButton) {
+        guard !suppressActions, !isLearning else { return refresh() }
+        let bank = sender.tag - 1500
+        inputsBank = bank
+        QBLog.log("control: inputs bank → \(bank == 1 ? "ADAT 1–8" : "Analog 1–4")")
+        refresh()
+        resizeWindowToFitContent()
+        if let doc = scrollArea?.documentView {
+            doc.layoutSubtreeIfNeeded()
+            doc.scroll(NSPoint(x: 0, y: doc.bounds.maxY))
+        }
+    }
+
+    /// ADAT bank header — the assistant opens with the channel picker.
+    /// (Removed: each tile carries its own Gain Assist action.)
+
+    /// The persisted bank selection (0 = analog, 1 = ADAT).
+    private var inputsBank: Int {
+        get { UserDefaults.standard.integer(forKey: "inputsBankPinned") == 1 ? 1 : 0 }
+        set { UserDefaults.standard.set(newValue, forKey: "inputsBankPinned") }
     }
 
     /// A thin full-height vertical rule between channel panels. Added to
@@ -4140,6 +4765,84 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         rule.widthAnchor.constraint(equalToConstant: 1).isActive = true
         rule.topAnchor.constraint(equalTo: strip.topAnchor).isActive = true
         rule.bottomAnchor.constraint(equalTo: strip.bottomAnchor).isActive = true
+    }
+
+    /// A pair divider that carries its OWN ganging toggle (inputs 1–2 /
+    /// 3–4): the thin vertical rule is interrupted with clearance around
+    /// a 32-pt chain-link button, centered on the divider line AND on
+    /// the gain knobs' centerline — the toggle reads as integrated into
+    /// the boundary between the two channels it gangs.
+    ///
+    /// The button is an OVERLAY, not an arranged column: it rides over
+    /// the spacing around the rule (and ≤7.5 pt of each card's invisible
+    /// padding — every card's controls start ≥12 pt inside), so every
+    /// strip width and channel alignment the window is built around
+    /// stays identical to a plain full-height rule. Added to the strip
+    /// BEFORE its edge constraints activate (common-ancestor rule — the
+    /// toggle is constrained against the knobs later).
+    private func addLinkRule(to strip: NSStackView) -> (rule: NSView, upper: NSView, lower: NSView) {
+        let rule = NSView()
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        strip.addArrangedSubview(rule)
+        NSLayoutConstraint.activate([
+            rule.widthAnchor.constraint(equalToConstant: 1),
+            rule.topAnchor.constraint(equalTo: strip.topAnchor),
+            rule.bottomAnchor.constraint(equalTo: strip.bottomAnchor),
+        ])
+        // the INTERRUPTED divider: upper + lower rule segments, stopped
+        // 3 pt short of the future button's box — the button will sit in
+        // the gap it opened (mountLinkToggle activates the breaks).
+        let upper = ruleSegment(in: rule)
+        let lower = ruleSegment(in: rule)
+        NSLayoutConstraint.activate([
+            upper.topAnchor.constraint(equalTo: rule.topAnchor),
+            lower.bottomAnchor.constraint(equalTo: rule.bottomAnchor),
+        ])
+        return (rule, upper, lower)
+    }
+
+    /// Wire up ONE pair's chain-link toggle (addLinkRule's back half).
+    /// Runs AFTER all four cards exist: the button is mounted as the
+    /// strip's LAST subview, so it is topmost in hit-test order and its
+    /// whole 32-pt box is clickable — mounted earlier, the neighboring
+    /// cards' own hit-test would swallow its overhanging halves.
+    private func mountLinkToggle(on strip: NSStackView, rule: NSView,
+                                 upper: NSView, lower: NSView, pair: Int) {
+        let button = LinkPairButton(pair: pair, target: self,
+                                    action: #selector(linkClicked(_:)))
+        button.translatesAutoresizingMaskIntoConstraints = false
+        strip.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 32),
+            button.heightAnchor.constraint(equalToConstant: 32),
+            button.centerXAnchor.constraint(equalTo: rule.centerXAnchor),
+            // aligned with the pair's first knob — all four knobs share
+            // the centerline (the cards are homogeneous)
+            button.centerYAnchor.constraint(equalTo: gainKnobs[pair * 2].centerYAnchor),
+        ])
+        let upperBreak = upper.bottomAnchor
+            .constraint(equalTo: button.topAnchor, constant: -3)
+        let lowerBreak = lower.topAnchor
+            .constraint(equalTo: button.bottomAnchor, constant: 3)
+        // both break constraints ride below the required priority so the
+        // window's first, zero-size layout pass cannot fight them
+        upperBreak.priority = NSLayoutConstraint.Priority(999)
+        lowerBreak.priority = NSLayoutConstraint.Priority(999)
+        upperBreak.isActive = true
+        lowerBreak.isActive = true
+        linkToggles.append(button)
+    }
+
+    /// One hairline piece of an interrupted pair rule.
+    private func ruleSegment(in rule: NSView) -> NSView {
+        let seg = NSView()
+        seg.translatesAutoresizingMaskIntoConstraints = false
+        seg.wantsLayer = true
+        seg.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        rule.addSubview(seg)
+        seg.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        seg.centerXAnchor.constraint(equalTo: rule.centerXAnchor).isActive = true
+        return seg
     }
 
     // MARK: routing cards
@@ -4763,6 +5466,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private func startAutoGain(for indices: [Int]) {
         guard (isGlueConnected?() ?? false) else { return }
+        // the ADAT metering tap yields the device's one IOProc first
+        AdatGainEngine.shared.pauseForAutoGain()
         var params: [AutoGainEngine.StartParams] = []
         for i in indices {
             guard let rl = inputs[i].refLevel, rl == 1 || rl == 4 else { continue }
@@ -5358,6 +6063,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         if AutoGainEngine.shared.isRunning {
             AutoGainEngine.shared.cancelAll(reason: "control window closed")
         }
+        AdatVisibility(false)
     }
 }
 
@@ -5410,6 +6116,13 @@ extension QuartetControlController {
     func toggleShown() {
         guard let window, window.isVisible else { show(); return }
         window.orderOut(nil)
+        AdatVisibility(false)
+    }
+
+    /// The metering hub's visibility flag (the live meters idle when
+    /// the window is gone; a running measurement keeps it alive).
+    private func AdatVisibility(_ visible: Bool) {
+        AdatGainEngine.shared.windowVisible = visible
     }
 
     // MARK: selection

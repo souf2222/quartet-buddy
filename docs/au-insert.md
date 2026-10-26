@@ -48,6 +48,41 @@ Each pair picks a **Source** (control window):
 The stages refer to the selected source's chain — never the
 destination's own FX and trim, which stay downstream of the tap.
 
+### Trim (hardware on the line-out pairs)
+
+The routing cards' **trim knobs write the QUARTET's firmware trim** —
+`/dev/<serial>/hwout/hwoutN/trim`, live-verified Oct 26 2026
+(protocol-notes.md, "Line-out trim"). `hwout2…7` are mono strips, so:
+
+    Out 3‑4 → hwout2 + hwout3 · Out 5‑6 → hwout4 + hwout5 ·
+    Out 7‑8 → hwout6 + hwout7
+
+The firmware applies it at the DAC — **downstream of everything macOS
+sends**, including the insert's own re-injection and the mirror taps.
+Live-mapped card ↔ strip ↔ jack labels (Oct 26 2026):
+
+| macOS card | Quartet strips | jacks |
+|---|---|---|
+| Out 1‑2 | `hwout0` "Main Out" (no trim — software) | main monitor pair |
+| Out 3‑4 | "Analog Out 1/2" = `hwout2`+`hwout3` | line pair 1 |
+| Out 5‑6 | "Analog Out 3/4" = `hwout4`+`hwout5` | line pair 2 |
+| Out 7‑8 | "Analog Out 5/6" = `hwout6`+`hwout7` | line pair 3 |
+
+(LABEL TRAP: the strips are named "Analog Out 1…6", offset from the macOS
+card numbers by one pair. User-verified: monitoring there starts on
+Out 7‑8 and never hears "Out 5‑6".)
+
+Consequences:
+
+- the tap stages never see (or need to work around) the destination's
+  trim: on those pairs `trimFactors` stays 1, so Post-FX and Post-Trim
+  are numerically identical and the written value rides the hardware;
+- saved knob values are re-pushed to the unit on every glue reconnect
+  (a power cycle may come back at 0);
+- **Out 1‑2 is Main Out** — `hwout0` has no trim property (the main bus
+  rides `gain`, owned by the OS fader binding), so pair 0's knob is
+  still the old software trim applied in the capture chain.
+
 Routing cycles resolve to silence, detected and logged main-side —
 never in the audio thread. `resolveRoutes` computes each pair's route
 (source pair + tap stage) and the render order (post-stage mirrors

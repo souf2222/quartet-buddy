@@ -41,8 +41,7 @@
 ## Phase 8 — Serial number
 - [x] 8.1 "Apogee Quartet · <serial>" moved to the footer's bottom-right (muted label, hidden when no serial)
 
-## Phase 9 — Small RE batch (implemented + LIVE-VERIFIED Oct 25 2026)
-- [x] 9.1 `GlueClient.setString` (var-tag 5, NUL-terminated) — transport for all string writes
+## Phase 9 — Small RE batch (implemented + LIVE-VERIFIED Oct 25 2026)- [x] 9.1 `GlueClient.setString` (var-tag 5, NUL-terminated) — transport for all string writes
 - [x] 9.2 Identify — **dead end (verified live)**: `dev/identify` consumes writes of every encoding but the front panel never blinks; type-7 Command strings inert. Front-panel-only mirror. UI **removed**; findings in docs/protocol-notes.md ("Verified writes")
 - [x] 9.3 Touchscreen prefs — Settings ▸ General: peakHold / overHold / lockHomeScreen — **all three live-verified** (lock + holds user-confirmed on the unit). Note: `intProp` hardened for bool/string-typed tree props; probe gotcha: setProperty tag-3 value byte is 1/0, NOT JUCE var markers 2/3
 - [x] 9.4 Line-out levels — Analog Out 1–6 (`hwout2..7.analogRefLevel`): write +4/−10 live-verified (int32), restored — **UI moved to Settings ▸ Audio ▸ Line Out Levels** (Oct 25 2026, user request; the control window's row is gone)
@@ -54,3 +53,12 @@
 - [x] 9.10 Input ganging (`hwin.group`) — probe verdict: toggling on the touchscreen sets BOTH pair members' group bits, but hardware does NOT mirror externally written gains (hwin0→30.5, ganged partner stayed 0.5) → app mirrors writes itself; Link 1+2 / Link 3+4 toggles in the Inputs header + ganged active-gain mirroring
 - [x] 9.11 Front-panel touchpad actions — **SHIPPED Oct 26 2026**: full action enum captured by cycling AC2's dropdown under `tools/watch_features.py`; external round-trip write verified (Dim All, then Mute Headphone on the encoder push). UI: Settings ▸ General ▸ **Front Panel Pads** — grouped popups (Mute ▸ / Dim ▸ / Sum to Mono ▸ / Toggle ▸ / Clear Meters / Engage Speaker Set ▸); the **encoder gets its own 4-option menu** (out-of-menu values left its action at 0x0 — inert). Footgun documented for future drives: NSPopUpButton can't display a selection inside a submenu — grouped look must use section headers + indented top-level items, and the popup needs BOTH action + target wired or nothing fires.
 
+
+## Phase 10 — ADAT input bank + Gain Assistant (Oct 26 2026)
+- [x] 10.1 `AdatGain.swift` — `AdatGainEngine`: shared CoreAudio metering tap (the InputTap from AutoGain, yielded aside while an Auto Gain calibration owns the device IOProc), live smoothed levels for analog + ADAT, and the ADAT measurement loop (target −12 dBFS peak · 5 s · ±2 dB — all Settings-configurable; frozen results until Recheck)
+- [x] 10.2 Inputs bank selector [ Analog 1–4 | ADAT 1–8 ] in the section header; ADAT tiles 4×2: number + name, `AdatLevelMeter` (dB-scale fill, target tick, peak marker), status text, Assist… — no gain knob/48V (the external converter owns the preamp)
+- [x] 10.3 `AdatGainOverlay` — in-window focused assistant over a dimmed workspace (monitor bar stays usable): select chips → listening (single big meter / multi rows) → frozen guidance (big instruction / results table with per-row recheck ticks + "Recheck selected") — Close always visible, Escape stops measuring, dimmed area never dismisses
+- [x] 10.4 Live stream mapping: ADAT channel count from the device's input stream config (SMUX-aware at 88.2/96 kHz); stale results invalidated on sample-rate/device change or stream stall; no optical-lock claim
+- [x] 10.5 Reliability states: "Not enough signal" (silence never suggests a big up), "Clipped — reduce gain" (no exact correction off a clipped wave), result freeze semantics, Auto Gain handshake
+- [x] 10.6 Settings ▸ Processing ▸ Gain Assistance (target/duration/±range), Settings ▸ Channel Names ▸ ADAT Inputs (app-side names), analog strip meters now fed by the same tap
+- [ ] 10.7 LIVE-VERIFY on hardware: SMUX channel count at 44.1/48 vs 88.2/96, a real measure→adjust→recheck loop, permission grant on first tap, meter sanity — user confirmation pending

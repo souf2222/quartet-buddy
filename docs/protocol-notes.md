@@ -324,3 +324,27 @@ Accepted but NOT hardware-visible:
 * 402653190 while switching the touchscreen's HP source produced no tree
   change and no traffic — semantics unverified; no UI shipped.
 
+### Line-out trim (hwout2..7/trim) — LIVE-VERIFIED Oct 26 2026
+
+* `hwout2..7` each carry a `trim` double (tree baseline `-0.0`; Main Out
+  and HP have NO trim property — they ride on `gain` alone).
+* **hwout2..7 are MONO channel strips** ("Analog Out 1"…"Analog Out 6",
+  mixerChannel 13…18), so a stereo line pair is two separate nodes:
+  trimming a pair means writing BOTH nodes (hwout2+hwout3 = Analog 1+2).
+* path-id: java31 of `/dev/<serial>/hwout/hwoutN/trim` (this unit:
+  hwout2 `00f7bb20`), write type 3 flag 0, var-tag 4 (double).
+* **The firmware applies it to the DAC output** — user-confirmed audible
+  pulsing at exactly the −12 dB / 5 s write pattern, on the written
+  channel only (output 1 pulsed for hwout2; hwout2+hwout3 pulsed
+  output 1 AND 2). Not a tree-only cosmetic copy.
+* Glue accepts wide values (±24 dB tested, no clamp observed — range
+  limit unknown; the win was likely larger ranges, so validation should
+  stay conservative until an upper bound is proven).
+* Glue does NOT echo trim writes back to other clients (unlike gain /
+  analogRefLevel writes) — it's a silent, low-level copy parameter.
+* AC2 exposes no trim UI; the touchscreen's output trim never influenced
+  audio (user-reported) — the property is only reachable by protocol.
+* Probe: `tools/trim_probe.py` (write/read/restore), A/B pulses during
+  the session with `trim_ab.py`-style inline writes. Baseline restored
+  to 0.0 after every test.
+

@@ -319,6 +319,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshMenu()
     }
 
+    /// Hardware trims last pushed to the unit (pair → dB) — dedup for
+    /// `syncSavedHardwareTrims`: each tree arrival tries once per
+    /// connection (the record is cleared on disconnect). The Quartet may
+    /// come back from a power cycle at 0, so the app's saved hardware-trim
+    /// settings must re-apply, but tree arrivals triggered by other
+    /// clients' hellos must not spam identical writes.
+    private var pushedHardwareTrims: [Int: Double] = [:]
+
+    /// The line-out strips' firmware trim, pairs 1…3 — mono strips, so a
+    /// pair is TWO hwout nodes (hwout names are strip names "Analog Out
+    /// 1..6" = hwout2…7):
+    ///
+    ///     pair 1 → hwout2 + hwout3 · pair 2 → hwout4 + hwout5 ·
+    ///     pair 3 → hwout6 + hwout7
+    ///
+    /// (LABEL TRAP, live-mapped Oct 26 2026: the touchscreen calls these
+    /// strips "Analog Out 5/6" where macOS cards say "Out 7‑8" — one pair
+    /// up, because the main bus consumes macOS channels 1‑2.)
+    private static let hwoutTrimNodes: [Int: [String]] = [
+        1: ["hwout2", "hwout3"],
+        2: ["hwout4", "hwout5"],
+        3: ["hwout6", "hwout7"],
+    ]
+
+    /// The saved settings-side hardware trims (`hwout.trim.<pair>`, set in
+    /// Settings ▸ Quartet ▸ Output Levels) → the unit. Called on every
+    /// tree arrival; each value writes exactly once per value. A pair with
+    /// NO saved key is skipped — the first run after an upgrade must not
+    /// stomp trims the unit already carries.
+    private func syncSavedHardwareTrims() {
+        guard case .connected = glue.state, PathIds.activeSerial != nil else { return }
+        var pushedAny = false
+        for pair in Self.hwoutTrimNodes.keys {
+            guard UserDefaults.standard.object(forKey: "hwout.trim.\(pair)") != nil else { continue }
+            let db = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            guard pushedHardwareTrims[pair] != db else { continue }
+            for h in Self.hwoutTrimNodes[pair] ?? [] {
+                guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
+                glue.setDouble(id: id, db)
+            }
+            pushedHardwareTrims[pair] = db
+            pushedAny = true
+        }
+        if pushedAny {
+            QBLog.log("trim: saved hardware trims synced to the unit" +
+                      pushedHardwareTrims.keys.sorted().map { String(format: " pair%d %.1f", $0, pushedHardwareTrims[$0] ?? 0) }.joined())
+        }
+    }
+
     /// The macOS mute changed (F10, Control Center): apply it to the
     /// Quartet's hardware mute. Normally one-way (see OSVolumeMirror's
     /// header); the one exception is a target switch, where the OS mute is
@@ -377,6 +426,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QuartetControlController.shared.show()
             }
         }
+        if ProcessInfo.processInfo.environment["QB_AUTO_ASSIST"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                QBLog.log("control: AUTO-ASSIST debug trigger (ADAT bank + overlay)")
+                NSApp.activate(ignoringOtherApps: true)
+                // keep the panel up through the headless dumps: the
+                // unpinned auto-hide treats any key shift as "the user
+                // moved on" and closes the panel (and the assistant)
+                QuartetControlController.shared.pinned = true
+                UserDefaults.standard.set(1, forKey: "inputsBankPinned")
+                QuartetControlController.shared.show()
+                // the real path is click → refresh → resize; show() alone
+                // doesn't re-fit an already-built window
+                QuartetControlController.shared.resizeWindowToFitContent()
+                QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_adat.png")
+                // exercise the per-channel path exactly like a tile's Assist…
+                QuartetControlController.shared.assistChannel(0)
+                QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_listen.png")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                    // the 5 s measurement has finished → result state
+                    QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_result.png")
+                    // DEBUG: force the frozen guidance compositions —
+                    // the adjustment amount as the focal number, and
+                    // the clipped state without any exact amount
+                    AdatGainEngine.shared.debugForceStatus(0, .increase(8.4))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_guidance.png")
+                        AdatGainEngine.shared.debugForceStatus(0, .clipped(-2.0))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_clipped.png")
+                            QuartetControlController.shared.adatTiles[0].debugLogGeometry("clipped")
+                            AdatGainEngine.shared.debugForceStatus(0, .idle)
+                            // now the reverse direction: back to the
+                            // ANALOG bank — the grid must reappear
+                            // (it was hidden at build time)
+                            QuartetControlController.shared.dismissAssistant(0)
+                            QuartetControlController.shared.pinned = false   // restore the auto-hide default
+                            UserDefaults.standard.set(0, forKey: "inputsBankPinned")
+                            QuartetControlController.shared.refresh()
+                            // bank switch layout change → the window must shrink
+                            // back to the analog content height (top edge pinned)
+                            QuartetControlController.shared.resizeWindowToFitContent()
+                            QuartetControlController.shared.dumpWindowSnapshot("/tmp/qb_window_analog.png")
+                        }
+                    }
+                }
+            }
+        }
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
@@ -419,6 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         glue.onState = { [weak self] state in
             self?.refreshMenu()
             if state == .disconnected {
+                // per-connection push records reset — the next tree re-applies
+                self?.pushedHardwareTrims.removeAll()
                 self?.scheduleReconnect()
             }
         }
@@ -428,6 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The device node's type is its serial — path-ids are hashed
             // per-serial, so pick this unit's id table before anything else.
             PathIds.select(serial: GlueClient.quartetSerial(in: tree))
+            self.syncSavedHardwareTrims()
             if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
                let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
                 self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
@@ -1150,6 +1249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupConsoleWindow() {
         let control = QuartetControlController.shared
         control.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        // (The routing cards' trim knobs are SOFTWARE trim, applied inside
+        // InsertServer's chain. The firmware's line-out trim lives in
+        // Settings ▸ Quartet ▸ Output Levels, wired in setupSettingsWindow.)
         control.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
         control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
@@ -1238,6 +1340,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
             self.glue.setInt(id: id, Int32(v))
         }
+        // Line-out firmware TRIM (Settings ▸ Quartet ▸ Output Levels).
+        // The strips' `trim` is a dB double applied by the firmware at the
+        // DAC — downstream of everything macOS sends — so it listens to
+        // ALL apps, not just this one's chain. Rows are PAIRS of the mono
+        // strips (Analog Out 1/2 = hwout2+hwout3 … 5/6 = hwout6+hwout7);
+        // a write goes to BOTH strips so the pair tracks together. Reads
+        // take the left strip's value: a pair whose strips were trimmed
+        // apart on the touchscreen shows the left one until touched.
+        settingsWindow.readHwoutTrims = { [weak self] in
+            guard let self, let dev = self.deviceNode() else { return [] }
+            return (1...3).map { pair -> (name: String, trim: Double?) in
+                let left = GlueClient.findNode(in: dev, type: "hwout\(2 * pair)")
+                let right = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 1)")
+                let propsL = left.flatMap { $0["props"] as? [String: Any] }
+                let propsR = right.flatMap { $0["props"] as? [String: Any] }
+                let nameL = (propsL?["name"] as? String) ?? "Analog Out \(2 * pair - 1)"
+                let nameR = (propsR?["name"] as? String) ?? "Analog Out \(2 * pair)"
+                return ("\(nameL) / \(nameR)", propsL.flatMap { GlueClient.doubleProp($0, "trim") })
+            }
+        }
+        settingsWindow.writeHwoutTrim = { [weak self] pair, db in
+            guard let self, case .connected = self.glue.state else { return }
+            for h in Self.hwoutTrimNodes[pair] ?? [] {
+                guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
+                self.glue.setDouble(id: id, db)
+            }
+            self.pushedHardwareTrims[pair] = db
+            UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+            QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
+        }
         // Settings ▸ Quartet ▸ Channel Names — hardware inputs/outputs
         // (glue string writes) and the app-side stereo-pair names.
         settingsWindow.readNames = { [weak self] in
@@ -1252,6 +1384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .flatMap { ($0["props"] as? [String: Any])?["name"] as? String } ?? "")
             }
             out.append(contentsOf: (0..<4).map { QuartetControlController.savedName($0) })
+            out.append(contentsOf: (0..<8).map { AdatGainEngine.adatName($0) })
             return out
         }
         settingsWindow.writeName = { [weak self] i, name in
@@ -1268,10 +1401,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.glue.setString(id: id, name)
                     QBLog.log("settings: hwout\(o).name = '\(name)'")
                 }
-            default:
+            case 12..<16:
                 let p = i - 12
                 QuartetControlController.setSavedName(p, name)
                 QBLog.log("settings: pair \(p) name = '\(name)'")
+            default:
+                let a = i - 16
+                guard a >= 0, a < 8 else { return }
+                AdatGainEngine.setAdatName(a, name)
+                QBLog.log("settings: ADAT \(a + 1) name = '\(name)'")
+                QuartetControlController.shared.refresh()
             }
         }
         // Front-panel pad assignments (Settings ▸ Quartet ▸ Controls):
