@@ -273,7 +273,7 @@ final class AdatGainEngine {
         refreshChannelCount()
         let requested = channels.filter { $0 >= 0 && $0 < Self.maxAdatChannels && $0 < adatChannelCount }
         guard !requested.isEmpty else {
-            return tapError ?? "No ADAT channels are present on the current stream — check the optical connection or the sample rate."
+            return tapError ?? "No digital inputs are present on the current stream — check the ADAT optical connection or the sample rate."
         }
         for ch in requested { beginMeasurement(ch) }
         QBLog.log("adatgain: measuring ADAT \(requested.map { $0 + 1 }) — \(Self.configSummary)")
@@ -291,7 +291,7 @@ final class AdatGainEngine {
         refreshChannelCount()
         let requested = channels.filter { $0 >= 0 && $0 < Self.maxAdatChannels && $0 < adatChannelCount }
         guard !requested.isEmpty else {
-            return tapError ?? "No ADAT channels are present on the current stream."
+            return tapError ?? "No digital inputs are present on the current stream."
         }
         for ch in requested {
             pendingRestore[ch] = statuses[ch]   // a cancelled recheck falls back
@@ -637,7 +637,7 @@ final class AdatGainEngine {
 /// of each strip's height, pushing the second ADAT row and the Outputs
 /// section far down. Now:
 ///
-///     ADAT 1                     [ Assist… ]
+///     Digital 1                  [ Assist… ]
 ///     [━━━━━━━━━━ 4-pt meter ━━━━━━━━━━━ ▪ −24.1]
 ///
 ///     ↑ Increase external gain by 12 dB      ← only while the
@@ -675,7 +675,7 @@ final class AdatTile: NSView {
     var doneAction: (() -> Void)?
 
     private let marker = NSView()             // the assistant's focus marker
-    private let numberLabel = NSTextField(labelWithString: "ADAT 1")
+    private let numberLabel = NSTextField(labelWithString: "Digital 1")
     private let nameLabel = NSTextField(labelWithString: "")
     /// The shared horizontal input meter with its inline held-peak
     /// readout — the analog bank's own meter occupies the strip's body.
@@ -703,7 +703,7 @@ final class AdatTile: NSView {
         // mode dropdown has no ADAT counterpart, and nothing in a
         // compact strip should take an empty row. Same name typography
         // as the analog strips (13-pt medium): one name treatment.
-        numberLabel.stringValue = "ADAT \(index + 1)"
+        numberLabel.stringValue = "Digital \(index + 1)"
         numberLabel.font = GGTheme.nameFont
         numberLabel.textColor = GGTheme.primary
         numberLabel.lineBreakMode = .byTruncatingTail
@@ -739,7 +739,7 @@ final class AdatTile: NSView {
         assistButton.bezelStyle = .recessed
         assistButton.controlSize = .small
         assistButton.font = NSFont.systemFont(ofSize: 11)
-        assistButton.toolTip = "Gain Assist — measure this ADAT input's loudest level and get an external-gain recommendation"
+        assistButton.toolTip = "Gain Assist — measure this digital input's loudest level and get an external-gain recommendation"
         assistButton.target = self
         assistButton.action = #selector(assistClicked)
         assistButton.translatesAutoresizingMaskIntoConstraints = false
@@ -765,7 +765,7 @@ final class AdatTile: NSView {
         // line in every state, so no reflow. Zones + held-peak marker +
         // transient target + clip lamp (click to reset) all inside.
         levelMeter.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        levelMeter.toolTip = "ADAT input level · Adjust gain on the external preamp"
+        levelMeter.toolTip = "Digital input level via ADAT · Adjust gain on the external preamp"
         col.addArrangedSubview(levelMeter)
         levelMeter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 

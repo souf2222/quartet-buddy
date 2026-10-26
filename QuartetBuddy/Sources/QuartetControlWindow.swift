@@ -195,6 +195,18 @@ enum GGTheme {
     /// Recessed areas — plug-in well, meter bed.
     static let inset = NSColor(white: 0, alpha: 0.18)
 
+    // Inputs bank segmented control — ONE shared recessed container with
+    // two equal-width segments. Graphite selection, deliberately NOT the
+    // accent: switching banks only changes the DISPLAYED input view, and
+    // must not compete with the accent-colored audio functions.
+    /// The SELECTED segment — a clear step lighter graphite than the well.
+    static let bankSelectedFill = NSColor(white: 1, alpha: 0.13)
+    /// The selected segment's subtle border — it also reads as the
+    /// boundary line between the two segments.
+    static let bankSelectedBorder = NSColor(white: 1, alpha: 0.16)
+    /// The UNSELECTED segment's restrained hover lift (transparent at rest).
+    static let bankHoverFill = NSColor(white: 1, alpha: 0.06)
+
     /// `#RRGGBB` → NSColor (sRGB).
     static func hex(_ h: String) -> NSColor {
         var v = h.trimmingCharacters(in: .whitespaces)
@@ -1263,7 +1275,15 @@ final class GainKnob: NSControl {
         valueField.isHidden = false
         needsDisplay = true
         window.makeFirstResponder(valueField)
-        valueField.selectText(nil)
+        // NB: do NOT call valueField.selectText(nil) here — selectText
+        // ENDS the editing session makeFirstResponder just created
+        // (it runs -[NSWindow endEditingFor:] first, which fires
+        // controlTextDidEndEditing and re-hides the field — the editor
+        // closed the instant it opened). makeFirstResponder already
+        // selects all: typing replaces the pre-filled value.
+        if let editor = valueField.currentEditor() {
+            editor.selectAll(nil)
+        }
     }
 
     /// Cancel the inline editor WITHOUT committing (Esc).
@@ -1914,6 +1934,187 @@ final class FunctionToggle: FunctionButton {
         let s = attr.size()
         attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
                               y: (bounds.height - s.height) / 2 - 0.5))
+    }
+}
+
+/// One SEGMENT of the Inputs bank selector. The two segments remain
+/// independent NSButtons (tags 1500 / 1501, target/action into
+/// bankClicked) — the selection plumbing, the persisted bank and the
+/// debug harness keep addressing them exactly as before — but they
+/// DRAW as two views of one control:
+///
+///   selected    a step-lighter graphite fill + off-white label + a
+///               subtle border (visible without hover) — deliberately
+///               NOT the saturated accent: switching banks only changes
+///               the DISPLAYED input view, and must not compete with
+///               the accent-colored audio functions;
+///   unselected  transparent, muted gray label, a restrained lift on
+///               hover only;
+///   disabled    unchanged drawing, an even quieter label — the device
+///               being away must not hide which bank is showing.
+///
+/// Geometry: ~28 pt tall, the controls' small corner radius (never a
+/// pill). The OUTER corners round to match the shared container; the
+/// INNER edge stays square — the segments tile the container edge to
+/// edge with no gap, so the selected segment's own border reads as the
+/// boundary between the two halves.
+final class BankSegment: FunctionButton {
+    /// The segment's fixed label (the bank's name — never changes).
+    private let label: String
+    /// (titleFont, not `font` — that name is NSControl's own property.)
+    private let titleFont = NSFont.systemFont(ofSize: 11)
+    /// Corner geometry: the leading segment rounds the container's LEFT
+    /// corners, the trailing one the RIGHT corners.
+    var roundsLeading = false
+    var roundsTrailing = false
+
+    init(title: String, tag: Int, target: AnyObject?, action: Selector) {
+        label = title
+        super.init(tag: tag, accent: GGTheme.accent, target: target, action: action)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var intrinsicContentSize: NSSize {
+        let s = NSAttributedString(string: label, attributes: [.font: titleFont]).size()
+        // the container makes the two widths EQUAL (the wider label
+        // sizes the control); generous padding keeps both labels fully
+        // visible at either width
+        return NSSize(width: ceil(s.width) + 28, height: 28)
+    }
+
+    /// The segment's fill/border path — the container's outer corners
+    /// rounded, the shared inner edge square (no gap between segments).
+    private var segmentPath: NSBezierPath {
+        let r: CGFloat = 6
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let minX = rect.minX, maxX = rect.maxX, minY = rect.minY, maxY = rect.maxY
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: minX + (roundsLeading ? r : 0), y: minY))
+        path.line(to: NSPoint(x: maxX - (roundsTrailing ? r : 0), y: minY))
+        if roundsTrailing {
+            path.appendArc(withCenter: NSPoint(x: maxX - r, y: minY + r), radius: r,
+                           startAngle: 270, endAngle: 360)
+            path.line(to: NSPoint(x: maxX, y: maxY - r))
+            path.appendArc(withCenter: NSPoint(x: maxX - r, y: maxY - r), radius: r,
+                           startAngle: 0, endAngle: 90)
+        } else {
+            path.line(to: NSPoint(x: maxX, y: maxY))
+        }
+        path.line(to: NSPoint(x: minX + (roundsLeading ? r : 0), y: maxY))
+        if roundsLeading {
+            path.appendArc(withCenter: NSPoint(x: minX + r, y: maxY - r), radius: r,
+                           startAngle: 90, endAngle: 180)
+            path.line(to: NSPoint(x: minX, y: minY + r))
+            path.appendArc(withCenter: NSPoint(x: minX + r, y: minY + r), radius: r,
+                           startAngle: 180, endAngle: 270)
+        } else {
+            path.line(to: NSPoint(x: minX, y: minY))
+        }
+        path.close()
+        return path
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let selected = state == .on
+        let path = segmentPath
+
+        // fill — the selected segment lifts to graphite; the unselected
+        // one stays transparent and only answers hover. The SELECTED
+        // fill survives a disabled control: it carries the bank state
+        // (which view is showing), not availability — only the hover
+        // answer recedes.
+        if selected {
+            GGTheme.bankSelectedFill.setFill()
+            path.fill()
+        } else if isEnabled, hovering {
+            GGTheme.bankHoverFill.setFill()
+            path.fill()
+        }
+        // the selected segment's subtle border — the steady indicator
+        // (state is visible without hover), doubling as the boundary
+        if selected {
+            GGTheme.bankSelectedBorder.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+
+        // label — off-white on the selected segment, muted gray on the
+        // unselected one; a DISABLED segment keeps a READABLE label
+        // (only its hover answer recedes)
+        let text: NSColor = !isEnabled ? GGTheme.muted
+            : selected ? GGTheme.offWhite : GGTheme.idleLabel
+        let attr = NSAttributedString(string: label, attributes: [.font: titleFont, .foregroundColor: text])
+        let s = attr.size()
+        attr.draw(at: NSPoint(x: (bounds.width - s.width) / 2,
+                              y: (bounds.height - s.height) / 2 - 0.5))
+    }
+}
+
+/// The INPUT BANK selector — ONE compact segmented control in the
+/// Inputs header: two equal-width segments ("Analog 1–4" | "Digital
+/// 1–8") inside a single shared dark container. The previous pair of
+/// separate buttons read as two independent actions rather than two
+/// views of the same Inputs section.
+///
+/// Geometry: one shared recessed well + border, the two segments
+/// tiling it edge to edge (NO gap between them), ~28 pt tall, small
+/// corner radii consistent with the other controls — never a pill.
+/// The control's size is FIXED in both banks: equal widths sized by
+/// the wider label, so switching never resizes it.
+final class BankSegmentedControl: NSView {
+    /// The whole control's height (~28–30 pt) and the shared corner
+    /// radius (the controls' 6 pt).
+    static let controlHeight: CGFloat = 28
+    static let radius: CGFloat = 6
+
+    /// The two segments — real NSButtons (see BankSegment).
+    let analog: BankSegment
+    let digital: BankSegment
+
+    init(target: AnyObject?, action: Selector) {
+        analog = BankSegment(title: "Analog 1–4", tag: 1500, target: target, action: action)
+        digital = BankSegment(title: "Digital 1–8", tag: 1501, target: target, action: action)
+        analog.roundsLeading = true
+        digital.roundsTrailing = true
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        for v in [analog, digital] as [NSView] {
+            addSubview(v)
+            v.translatesAutoresizingMaskIntoConstraints = false
+        }
+        // edge to edge, equal widths, full height — the shared
+        // container's geometry is entirely these eight constraints
+        NSLayoutConstraint.activate([
+            analog.leadingAnchor.constraint(equalTo: leadingAnchor),
+            analog.trailingAnchor.constraint(equalTo: digital.leadingAnchor),
+            digital.trailingAnchor.constraint(equalTo: trailingAnchor),
+            analog.widthAnchor.constraint(equalTo: digital.widthAnchor),
+            analog.topAnchor.constraint(equalTo: topAnchor),
+            analog.bottomAnchor.constraint(equalTo: bottomAnchor),
+            digital.topAnchor.constraint(equalTo: topAnchor),
+            digital.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// The control hugs its segments: TWICE the wider segment's width
+    /// (equal widths), the fixed height.
+    override var intrinsicContentSize: NSSize {
+        let w = max(analog.intrinsicContentSize.width, digital.intrinsicContentSize.width)
+        return NSSize(width: ceil(w) * 2, height: Self.controlHeight)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // the shared container — one dark well + a subtle border around
+        // the whole control (the segments draw ON it)
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect,
+                                xRadius: Self.radius - 0.5, yRadius: Self.radius - 0.5)
+        GGTheme.inset.setFill()
+        path.fill()
+        GGTheme.idleBorder.setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 }
 
@@ -3225,8 +3426,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                           && !inputGroupIds[b1].isEmpty && !inputGroupIds[b2].isEmpty)
         }
 
-        // INPUT BANK — Analog 1–4 / ADAT 1–8: the selector is a pair of
-        // mutually-exclusive toggles; the grid + header controls swap.
+        // INPUT BANK — Analog 1–4 / Digital 1–8: the segmented
+        // selector's segments mirror the persisted bank; the grid +
+        // header controls swap.
         let adatBankActive = inputsBank == 1
         bankAnalogButton?.state = adatBankActive ? .off : .on
         bankAdatButton?.state = adatBankActive ? .on : .off
@@ -3772,10 +3974,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// between its two channels (Link 1+2 / Link 3+4 — the hwinN.group
     /// bits), aligned with the gain knobs' centerline.
     private var linkToggles: [NSButton] = []
-    /// The Inputs section's BANK selector — [ Analog 1–4 | ADAT 1–8 ].
-    /// The analog layout is untouched; the ADAT bank swaps the grid.
-    private var bankAnalogButton: FunctionToggle?
-    private var bankAdatButton: FunctionToggle?
+    /// The Inputs section's BANK selector — the two segments of the
+    /// [ Analog 1–4 | Digital 1–8 ] segmented control. The analog
+    /// layout is untouched; the Digital bank (the ADAT optical inputs)
+    /// swaps the grid.
+    private var bankAnalogButton: FunctionButton?
+    private var bankAdatButton: FunctionButton?
     /// The ADAT bank: eight channel strips (4 × 2) carrying their own
     /// Gain Assist actions — no section-level assistant button.
     /// (internal so the QB_AUTO_ASSIST harness can probe milestones.)
@@ -4214,45 +4418,44 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: GGSpace.section, right: 0)
         doc.addSubview(stack)
 
-        // INPUTS section header: title + the BANK selector
-        // [ Analog 1–4 | ADAT 1–8 ] ONLY — the ganging toggles are GONE
-        // from the header: each pair's chain-link button lives ON the
-        // divider between its two channels (addLinkDivider, built with
-        // the grid below), so the pairing is visible where it happens.
-        // The ADAT bank's Gain Assist actions live on the tile
+        // INPUTS section header: title + the BANK selector — ONE
+        // compact segmented control, [ Analog 1–4 | Digital 1–8 ]: two
+        // equal-width segments in a shared container (the previous pair
+        // of separate buttons read as two independent actions rather
+        // than two views of the same Inputs section). The ganging
+        // toggles are GONE from the header: each pair's chain-link
+        // button lives ON the divider between its two channels
+        // (addLinkDivider, built with the grid below), so the pairing
+        // is visible where it happens. The Digital bank's (the ADAT
+        // optical inputs') Gain Assist actions live on the tiles
         // themselves. The Auto Gain Target / Duration configuration
         // moved to Settings ▸ Processing (the Gain Assistance settings
         // live beside it — see SettingsWindow.buildProcessing).
-        let bankAnalog = FunctionToggle(title: "Analog 1–4", tag: 1500,
-                                        accent: GGTheme.accent,
-                                        target: self, action: #selector(bankClicked(_:)))
-        bankAnalog.toolTip = "The four analog preamp inputs"
-        bankAnalog.setAccessibilityLabel("Analog inputs 1 to 4")
-        let bankAdat = FunctionToggle(title: "ADAT 1–8", tag: 1501,
-                                      accent: GGTheme.accent,
-                                      target: self, action: #selector(bankClicked(_:)))
-        bankAdat.toolTip = "The eight optical ADAT inputs (the count follows the sample rate)"
-        bankAdat.setAccessibilityLabel("ADAT inputs 1 to 8")
-        bankAnalogButton = bankAnalog
-        bankAdatButton = bankAdat
+        let bankControl = BankSegmentedControl(target: self, action: #selector(bankClicked(_:)))
+        bankControl.analog.toolTip = "The four analog preamp inputs"
+        bankControl.analog.setAccessibilityLabel("Analog inputs 1 to 4")
+        bankControl.digital.toolTip = "Digital inputs 1–8 via ADAT. The count follows the sample rate."
+        bankControl.digital.setAccessibilityLabel("Digital inputs 1 to 8")
+        bankAnalogButton = bankControl.analog
+        bankAdatButton = bankControl.digital
 
-        // NO section-level "Gain Assistant…" button — each ADAT tile
+        // NO section-level "Gain Assistant…" button — each Digital tile
         // carries its own Gain Assist action, which makes the
         // destination explicit for one-input-at-a-time operation.
 
         // linkToggles populate DURING the grid build — one per pair
         // divider (inputs 1–2 then 3–4)
         let inputsHeader = sectionHeader(title: "Inputs",
-                                         trailingViews: [bankAnalog, bankAdat])
+                                         trailingViews: [bankControl])
         stack.addArrangedSubview(inputsHeader)
 
         let inputGrid = makeInputGrid()
         inputGridRef = inputGrid
         stack.addArrangedSubview(inputGrid)
 
-        // ADAT bank — same four-column geometry, eight compact tiles
-        // (one meter row per channel, no preamp knobs). Hidden while
-        // the analog bank is selected.
+        // Digital bank (the ADAT optical inputs) — same four-column
+        // geometry, eight compact tiles (one meter row per channel, no
+        // preamp knobs). Hidden while the analog bank is selected.
         let adatBank = makeAdatGrid()
         adatGrid = adatBank
         stack.addArrangedSubview(adatBank)
@@ -4651,7 +4854,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: ADAT bank
 
-    /// The ADAT bank: eight COMPACT, CONTENT-SIZED channel strips in
+    /// The Digital bank (the ADAT optical inputs): eight COMPACT,
+    /// CONTENT-SIZED channel strips in
     /// the app's four-column geometry (two rows). Each strip: the
     /// channel heading with its Assist button, the shared horizontal
     /// meter (with the inline held-peak readout) — and nothing else at
@@ -4905,10 +5109,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: bank actions
 
-    /// Inputs bank selector — Analog 1–4 (tag 1500) / ADAT 1–8
+    /// Inputs bank selector — Analog 1–4 (tag 1500) / Digital 1–8
     /// (tag 1501). Persisted; the selection only swaps the input
     /// section's grid. The swap is THE meaningful layout change, so the
-    /// window is RE-MEASURED here: it grows for the ADAT bank's two
+    /// window is RE-MEASURED here: it grows for the Digital bank's two
     /// rows and shrinks back for the analog bank — top edge pinned
     /// (the window grows downward), capped by the usable screen. With
     /// the sections anchored from the top, the viewport returns to the
