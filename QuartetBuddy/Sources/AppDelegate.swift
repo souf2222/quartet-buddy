@@ -780,6 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .cancelAutoGain: control.shortcutCancelAutoGain()
         case .toggleSoftLimit: control.shortcutToggleSoftLimit()
         case .togglePolarity: control.shortcutTogglePolarity()
+        case .toggleInputsBank: control.shortcutToggleInputsBank()
 
         // Safety
         case .muteAllOutputs:

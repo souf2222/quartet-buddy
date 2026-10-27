@@ -5141,6 +5141,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// ADAT bank header — the assistant opens with the channel picker.
     /// (Removed: each tile carries its own Gain Assist action.)
 
+    /// Hotkey: flip to the OTHER bank by pressing the real segment —
+    /// bankClicked's full path (sync grid swap, window re-fit, scroll).
+    func shortcutToggleInputsBank() {
+        debugClickBank(inputsBank == 1 ? 0 : 1)
+    }
+
     /// The persisted bank selection (0 = analog, 1 = ADAT).
     private var inputsBank: Int {
         get { UserDefaults.standard.integer(forKey: "inputsBankPinned") == 1 ? 1 : 0 }

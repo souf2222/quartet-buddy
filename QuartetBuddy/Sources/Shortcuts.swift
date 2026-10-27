@@ -15,7 +15,8 @@ import Carbon.HIToolbox
 /// action. The GLOBAL column in the settings table binds to it.
 ///
 /// Key codes here use Carbon virtual-key codes; defaults follow the
-/// practical layout (⌘1–⌘4 outputs, ⌥1–⌥4 inputs, ⌘, settings, ⇧⌘T talkback).
+/// practical layout (⌥1–⌥4 outputs, ⌘1–⌘4 inputs, ⌘/⇧⌘A auto gain,
+/// ⇧⌘B bank toggle, ⌘, settings, ⇧⌘T talkback).
 enum ShortcutAction: String, CaseIterable {
 
     // Window & Navigation
@@ -83,6 +84,7 @@ enum ShortcutAction: String, CaseIterable {
     case autoGainSelectedInput
     case autoGainAllInputs
     case cancelAutoGain
+    case toggleInputsBank
     case toggleSoftLimit
     case togglePolarity
 
@@ -116,7 +118,8 @@ enum ShortcutAction: String, CaseIterable {
             return "Outputs & Routing"
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4,
              .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
-             .autoGainAllInputs, .cancelAutoGain, .toggleSoftLimit, .togglePolarity:
+             .autoGainAllInputs, .cancelAutoGain, .toggleInputsBank,
+             .toggleSoftLimit, .togglePolarity:
             return "Inputs"
         case .muteAllOutputs:
             return "Safety"
@@ -176,6 +179,7 @@ enum ShortcutAction: String, CaseIterable {
         case .autoGainSelectedInput: return "Auto Gain selected input"
         case .autoGainAllInputs: return "Auto Gain all inputs"
         case .cancelAutoGain: return "Cancel Auto Gain"
+        case .toggleInputsBank: return "Toggle Analog 1–4 / Digital 1–8"
         case .toggleSoftLimit: return "Toggle Soft Limit"
         case .togglePolarity: return "Toggle polarity inversion"
         case .muteAllOutputs: return "Mute all monitoring outputs"
@@ -211,7 +215,8 @@ enum ShortcutAction: String, CaseIterable {
              .openSourceSelector, .cycleStage: return false
         case .selectInput1, .selectInput2, .selectInput3, .selectInput4: return false
         case .inputGainUp, .inputGainDown, .editInputGain, .autoGainSelectedInput,
-             .autoGainAllInputs, .cancelAutoGain, .toggleSoftLimit, .togglePolarity: return false
+             .autoGainAllInputs, .cancelAutoGain, .toggleInputsBank,
+             .toggleSoftLimit, .togglePolarity: return false
         case .muteAllOutputs: return true
         }
     }
@@ -226,14 +231,20 @@ enum ShortcutAction: String, CaseIterable {
         case .pinPanel: return combo(UInt32(kVK_ANSI_P), UInt32(cmdKey))
         case .openSettings: return combo(UInt32(kVK_ANSI_Comma), UInt32(cmdKey))
         case .talkbackToggle: return combo(UInt32(kVK_ANSI_T), UInt32(cmdKey | shiftKey))
-        case .selectOutput1: return combo(UInt32(kVK_ANSI_1), UInt32(cmdKey))
-        case .selectOutput2: return combo(UInt32(kVK_ANSI_2), UInt32(cmdKey))
-        case .selectOutput3: return combo(UInt32(kVK_ANSI_3), UInt32(cmdKey))
-        case .selectOutput4: return combo(UInt32(kVK_ANSI_4), UInt32(cmdKey))
-        case .selectInput1: return combo(UInt32(kVK_ANSI_1), UInt32(optionKey))
-        case .selectInput2: return combo(UInt32(kVK_ANSI_2), UInt32(optionKey))
-        case .selectInput3: return combo(UInt32(kVK_ANSI_3), UInt32(optionKey))
-        case .selectInput4: return combo(UInt32(kVK_ANSI_4), UInt32(optionKey))
+        case .selectInput1: return combo(UInt32(kVK_ANSI_1), UInt32(cmdKey))
+        case .selectInput2: return combo(UInt32(kVK_ANSI_2), UInt32(cmdKey))
+        case .selectInput3: return combo(UInt32(kVK_ANSI_3), UInt32(cmdKey))
+        case .selectInput4: return combo(UInt32(kVK_ANSI_4), UInt32(cmdKey))
+        // Auto Gain: the "A" family — ⌘A the selected input, ⇧⌘A all inputs
+        case .autoGainSelectedInput: return combo(UInt32(kVK_ANSI_A), UInt32(cmdKey))
+        case .autoGainAllInputs: return combo(UInt32(kVK_ANSI_A), UInt32(cmdKey | shiftKey))
+        // ⇧⌘B — flips the Inputs section's Analog 1–4 ↔ Digital 1–8 bank
+        // (⇧⌘A belongs to Auto Gain — all inputs)
+        case .toggleInputsBank: return combo(UInt32(kVK_ANSI_B), UInt32(cmdKey | shiftKey))
+        case .selectOutput1: return combo(UInt32(kVK_ANSI_1), UInt32(optionKey))
+        case .selectOutput2: return combo(UInt32(kVK_ANSI_2), UInt32(optionKey))
+        case .selectOutput3: return combo(UInt32(kVK_ANSI_3), UInt32(optionKey))
+        case .selectOutput4: return combo(UInt32(kVK_ANSI_4), UInt32(optionKey))
         default: return nil
         }
     }
@@ -251,6 +262,48 @@ enum ShortcutAction: String, CaseIterable {
 /// per-feature keys ("hotkeyCombo" talkback, "hotkeySwitchCombo" output
 /// switch) migrate in on first launch.
 final class ShortcutManager {
+
+    /// Current layout of the DESIGNED defaults. Bump when the default
+    /// table is reshuffled: load() then re-points every persisted binding
+    /// that still holds its PREVIOUS-version default to the new default
+    /// (bindings the user changed themselves are left alone).
+    private static let defaultsVersion = 2
+    private static let defaultsVersionKey = "shortcutDefaultsVersion"
+
+    /// The DESIGNED defaults of version 1 — the layout before the Oct 26
+    /// 2026 reshuffle (outputs ⌘1–4, inputs ⌥1–4, bank toggle ⇧⌘A, no
+    /// Auto Gain bindings).
+    private static func v1DefaultCombo(_ action: ShortcutAction) -> HotKeyManager.Combo? {
+        switch action {
+        case .selectOutput1: return .init(keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(cmdKey))
+        case .selectOutput2: return .init(keyCode: UInt32(kVK_ANSI_2), modifiers: UInt32(cmdKey))
+        case .selectOutput3: return .init(keyCode: UInt32(kVK_ANSI_3), modifiers: UInt32(cmdKey))
+        case .selectOutput4: return .init(keyCode: UInt32(kVK_ANSI_4), modifiers: UInt32(cmdKey))
+        case .selectInput1: return .init(keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(optionKey))
+        case .selectInput2: return .init(keyCode: UInt32(kVK_ANSI_2), modifiers: UInt32(optionKey))
+        case .selectInput3: return .init(keyCode: UInt32(kVK_ANSI_3), modifiers: UInt32(optionKey))
+        case .selectInput4: return .init(keyCode: UInt32(kVK_ANSI_4), modifiers: UInt32(optionKey))
+        case .toggleInputsBank: return .init(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(cmdKey | shiftKey))
+        default: return nil
+        }
+    }
+
+    /// Re-point bindings still holding a version-1 default at the new
+    /// default (unbinding where the new default is nil). A binding the
+    /// user edited — anything but the untouched default — survives.
+    static func migrateDefaultsIfNeeded(_ bindings: inout [ShortcutAction: Binding]) {
+        if UserDefaults.standard.integer(forKey: defaultsVersionKey) >= defaultsVersion { return }
+        for action in ShortcutAction.allCases {
+            guard let old = v1DefaultCombo(action) else { continue }
+            guard let binding = bindings[action], binding.combo == old else { continue }
+            if let new = action.defaultCombo {
+                bindings[action] = Binding(combo: new, isGlobal: binding.isGlobal && action.allowGlobal)
+            } else {
+                bindings[action] = nil
+            }
+        }
+        UserDefaults.standard.set(defaultsVersion, forKey: defaultsVersionKey)
+    }
 
     /// One persisted binding: the combination + whether it is global.
     struct Binding: Codable, Equatable {
@@ -391,6 +444,9 @@ final class ShortcutManager {
             for (key, binding) in saved {
                 if let action = ShortcutAction(rawValue: key) { bindings[action] = binding }
             }
+            // Re-point any binding that still holds the previous defaults
+            // at the current designed defaults (v2 reshuffle).
+            Self.migrateDefaultsIfNeeded(&bindings)
             // Actions added after the user's bindings were persisted carry
             // no entry — seed those with their designed defaults (e.g. the
             // quick panel's ⌥C), so a new action is bound out of the box.
