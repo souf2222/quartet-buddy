@@ -42,7 +42,7 @@ cat > "$BUNDLE/Contents/Info.plist" << 'PLIST'
     <key>NSAudioCaptureUsageDescription</key>
     <string>Quartet Buddy captures the system audio bound for the Quartet to run your chosen AU plugin (e.g. room correction) on its outputs. Nothing is recorded or stored; audio is processed locally in real time.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Auto Gain and the Digital Gain Assistant listen briefly to the selected inputs while they measure levels (and, for Auto Gain, calibrate the preamp). The audio is analyzed in real time and never recorded or stored.</string>
+    <string>Auto Gain and the Optical Gain Assistant listen briefly to the selected inputs while they measure levels (and, for Auto Gain, calibrate the preamp). The audio is analyzed in real time and never recorded or stored.</string>
 </dict>
 </plist>
 PLIST

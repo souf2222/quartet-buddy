@@ -85,7 +85,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                                       "Analog output 3", "Analog output 4", "Analog output 5",
                                       "Analog output 6"]
     private static let pairLabels = ["Pair 1", "Pair 2", "Pair 3", "Pair 4"]
-    private static let adatLabels = (0..<8).map { "Digital \($0 + 1)" }
+    private static let adatLabels = (0..<8).map { "Optical IN \($0 + 1)" }
 
     private var nameFields: [NSTextField] = []
     private var nameSuppress = false
@@ -1102,8 +1102,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         nameBlock(into: stack, "Stereo Pair Names",
                   "Shown only in Quartet Buddy's window (defaults like \"Out 1–2\");\nleave empty to fall back to the physical pair name.",
                   Self.pairLabels, 5020)
-        nameBlock(into: stack, "Digital Inputs",
-                  "App-side names for the eight digital inputs via ADAT (shown\nin the Digital bank and Gain Assistant); leave empty to show\njust \"Digital n\".",
+        nameBlock(into: stack, "Optical Inputs",
+                  "App-side names for the eight optical inputs via ADAT (shown\nin the Optical bank and Gain Assistant); leave empty to show\njust \"Optical IN n\".",
                   Self.adatLabels, 5030)
         stack.addArrangedSubview(SettingsHelpText.label(
             "Press Return (or click away) to commit a rename; Esc cancels the edit."))
@@ -1469,7 +1469,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         body.addArrangedSubview(SettingsHelpText.label(
             "Used for individual inputs and Auto Gain All. Changes apply to\nthe next measurement — a run in flight keeps its own settings."))
 
-        // GAIN ASSISTANCE (DIGITAL 1–8) — measurement-and-guidance for the
+        // GAIN ASSISTANCE (OPTICAL 1–8) — measurement-and-guidance for the
         // external preamps. The assistant compares a captured peak with
         // these numbers; these are proposed defaults, not standards.
         assistTargetPopup = NSPopUpButton()
@@ -1504,7 +1504,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         body.addArrangedSubview(LabeledSettingRow("Acceptable range",
                                                   control: assistTolerancePopup))
         body.addArrangedSubview(SettingsHelpText.label(
-            "Used by the Gain Assistant (Inputs ▸ Digital 1–8). Changes\napply to the next measurement — a running measurement keeps\nits own settings."))
+            "Used by the Gain Assistant (Inputs ▸ Optical 1–8). Changes\napply to the next measurement — a running measurement keeps\nits own settings."))
 
         // PLUG-INS
         SettingsSection.add(to: body, "Plug-ins")

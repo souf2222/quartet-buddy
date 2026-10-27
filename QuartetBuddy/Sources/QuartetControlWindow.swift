@@ -2051,7 +2051,7 @@ final class BankSegment: FunctionButton {
 }
 
 /// The INPUT BANK selector — ONE compact segmented control in the
-/// Inputs header: two equal-width segments ("Analog 1–4" | "Digital
+/// Inputs header: two equal-width segments ("Analog 1–4" | "Optical
 /// 1–8") inside a single shared dark container. The previous pair of
 /// separate buttons read as two independent actions rather than two
 /// views of the same Inputs section.
@@ -2073,7 +2073,7 @@ final class BankSegmentedControl: NSView {
 
     init(target: AnyObject?, action: Selector) {
         analog = BankSegment(title: "Analog 1–4", tag: 1500, target: target, action: action)
-        digital = BankSegment(title: "Digital 1–8", tag: 1501, target: target, action: action)
+        digital = BankSegment(title: "Optical 1–8", tag: 1501, target: target, action: action)
         analog.roundsLeading = true
         digital.roundsTrailing = true
         super.init(frame: .zero)
@@ -3416,7 +3416,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                           && !inputGroupIds[b1].isEmpty && !inputGroupIds[b2].isEmpty)
         }
 
-        // INPUT BANK — Analog 1–4 / Digital 1–8: the segmented
+        // INPUT BANK — Analog 1–4 / Optical 1–8: the segmented
         // selector's segments mirror the persisted bank; the grid +
         // header controls swap.
         let adatBankActive = inputsBank == 1
@@ -3965,8 +3965,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// bits), aligned with the gain knobs' centerline.
     private var linkToggles: [NSButton] = []
     /// The Inputs section's BANK selector — the two segments of the
-    /// [ Analog 1–4 | Digital 1–8 ] segmented control. The analog
-    /// layout is untouched; the Digital bank (the ADAT optical inputs)
+    /// [ Analog 1–4 | Optical 1–8 ] segmented control. The analog
+    /// layout is untouched; the Optical bank (the ADAT optical inputs)
     /// swaps the grid.
     private var bankAnalogButton: FunctionButton?
     private var bankAdatButton: FunctionButton?
@@ -4409,14 +4409,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         doc.addSubview(stack)
 
         // INPUTS section header: title + the BANK selector — ONE
-        // compact segmented control, [ Analog 1–4 | Digital 1–8 ]: two
+        // compact segmented control, [ Analog 1–4 | Optical 1–8 ]: two
         // equal-width segments in a shared container (the previous pair
         // of separate buttons read as two independent actions rather
         // than two views of the same Inputs section). The ganging
         // toggles are GONE from the header: each pair's chain-link
         // button lives ON the divider between its two channels
         // (addLinkDivider, built with the grid below), so the pairing
-        // is visible where it happens. The Digital bank's (the ADAT
+        // is visible where it happens. The Optical bank's (the ADAT
         // optical inputs') Gain Assist actions live on the tiles
         // themselves. The Auto Gain Target / Duration configuration
         // moved to Settings ▸ Processing (the Gain Assistance settings
@@ -4424,12 +4424,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let bankControl = BankSegmentedControl(target: self, action: #selector(bankClicked(_:)))
         bankControl.analog.toolTip = "The four analog preamp inputs"
         bankControl.analog.setAccessibilityLabel("Analog inputs 1 to 4")
-        bankControl.digital.toolTip = "Digital inputs 1–8 via ADAT. The count follows the sample rate."
-        bankControl.digital.setAccessibilityLabel("Digital inputs 1 to 8")
+        bankControl.digital.toolTip = "Optical inputs 1–8 via ADAT. The count follows the sample rate."
+        bankControl.digital.setAccessibilityLabel("Optical inputs 1 to 8")
         bankAnalogButton = bankControl.analog
         bankAdatButton = bankControl.digital
 
-        // NO section-level "Gain Assistant…" button — each Digital tile
+        // NO section-level "Gain Assistant…" button — each Optical tile
         // carries its own Gain Assist action, which makes the
         // destination explicit for one-input-at-a-time operation.
 
@@ -4443,7 +4443,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         inputGridRef = inputGrid
         stack.addArrangedSubview(inputGrid)
 
-        // Digital bank (the ADAT optical inputs) — same four-column
+        // Optical bank (the ADAT optical inputs) — same four-column
         // geometry, eight compact tiles (one meter row per channel, no
         // preamp knobs). Hidden while the analog bank is selected.
         let adatBank = makeAdatGrid()
@@ -4844,7 +4844,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: ADAT bank
 
-    /// The Digital bank (the ADAT optical inputs): eight COMPACT,
+    /// The Optical bank (the ADAT optical inputs): eight COMPACT,
     /// CONTENT-SIZED channel strips in
     /// the app's four-column geometry (two rows). Each strip: the
     /// channel heading with its Assist button, the shared horizontal
@@ -5099,10 +5099,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: bank actions
 
-    /// Inputs bank selector — Analog 1–4 (tag 1500) / Digital 1–8
+    /// Inputs bank selector — Analog 1–4 (tag 1500) / Optical 1–8
     /// (tag 1501). Persisted; the selection only swaps the input
     /// section's grid. The swap is THE meaningful layout change, so the
-    /// window is RE-MEASURED here: it grows for the Digital bank's two
+    /// window is RE-MEASURED here: it grows for the Optical bank's two
     /// rows and shrinks back for the analog bank — top edge pinned
     /// (the window grows downward), capped by the usable screen. With
     /// the sections anchored from the top, the viewport returns to the

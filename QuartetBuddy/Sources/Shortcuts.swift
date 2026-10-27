@@ -179,7 +179,7 @@ enum ShortcutAction: String, CaseIterable {
         case .autoGainSelectedInput: return "Auto Gain selected input"
         case .autoGainAllInputs: return "Auto Gain all inputs"
         case .cancelAutoGain: return "Cancel Auto Gain"
-        case .toggleInputsBank: return "Toggle Analog 1–4 / Digital 1–8"
+        case .toggleInputsBank: return "Toggle Analog 1–4 / Optical 1–8"
         case .toggleSoftLimit: return "Toggle Soft Limit"
         case .togglePolarity: return "Toggle polarity inversion"
         case .muteAllOutputs: return "Mute all monitoring outputs"
@@ -238,7 +238,7 @@ enum ShortcutAction: String, CaseIterable {
         // Auto Gain: the "A" family — ⌘A the selected input, ⇧⌘A all inputs
         case .autoGainSelectedInput: return combo(UInt32(kVK_ANSI_A), UInt32(cmdKey))
         case .autoGainAllInputs: return combo(UInt32(kVK_ANSI_A), UInt32(cmdKey | shiftKey))
-        // ⇧⌘B — flips the Inputs section's Analog 1–4 ↔ Digital 1–8 bank
+        // ⇧⌘B — flips the Inputs section's Analog 1–4 ↔ Optical 1–8 bank
         // (⇧⌘A belongs to Auto Gain — all inputs)
         case .toggleInputsBank: return combo(UInt32(kVK_ANSI_B), UInt32(cmdKey | shiftKey))
         case .selectOutput1: return combo(UInt32(kVK_ANSI_1), UInt32(optionKey))
