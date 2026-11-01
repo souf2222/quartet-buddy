@@ -63,6 +63,11 @@ enum PathIds {
     /// the formula below; kept as a compile-time constant for the log/tests).
     static let talkbackOn: [UInt8] = [0x8f, 0x0a, 0x6a, 0x00]
 
+    /// Talkback helper's source selection — app-scoped, serial-independent
+    /// (Settings ▸ Talkback pickers read/write these).
+    static let talkbackSourceDevice = app("Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice")
+    static let talkbackSourceChannel = app("Apogee Talkback helper/Talkback/selectedTalkbackSourceChannel")
+
     /// The original captured unit's output ids — only used before the first
     /// tree arrives (serial unknown). Once the tree lands, every id is
     /// computed (see `computedTable`).
@@ -259,6 +264,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var talkbackOn = false
     var talkbackMomentary = false
+    /// Live talkback source selection — blended from the tree, our own
+    /// writes and the glue echo stream. The cached tree's int props decode
+    /// as Int32 (see GlueClient.doubleProp's note) and the echo of our own
+    /// write re-runs `settingsWindow.refresh()` BEFORE any new tree lands,
+    /// so picking straight from `lastTree` snaps the Settings ▸ Talkback
+    /// channel popup back to its old value. Tracked here instead.
+    var talkbackSourceDevice = ""
+    var talkbackSourceChannel = 0
     /// Hardware dim on the speakers (Out 1‑2), synced from the glue tree.
     var speakerDim = false
     /// Hardware sum/mono on the speakers + dim/sum on the headphones —
@@ -568,9 +581,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.syncMacSlider(force: true)
             }
             if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
-               let props = tb["props"] as? [String: Any],
-               let on = props["talkbackOn"] as? Bool {
-                self.talkbackOn = on
+               let props = tb["props"] as? [String: Any] {
+                self.talkbackOn = props["talkbackOn"] as? Bool ?? self.talkbackOn
+                // intProps (Int32 from the tree reader) go through intIn —
+                // a plain `as? Int` is ALWAYS nil and reads channel 0.
+                self.talkbackSourceDevice = props["selectedTalkbackSourceDevice"] as? String ?? ""
+                self.talkbackSourceChannel =
+                    GlueClient.intIn(props, "selectedTalkbackSourceChannel") ?? 0
             }
             // full-state sync for the Quartet Control window (inputs + monitors)
             QuartetControlController.shared.updateTree(tree)
@@ -603,6 +620,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.headphoneSum = event.value.first == 1
             case PathIds.talkbackOn where event.tag == 3:
                 self.talkbackOn = event.value.first == 1
+            case PathIds.talkbackSourceDevice where event.tag == 5:
+                // string echo — NUL-terminated UTF-8 (our own writes echo
+                // back too; keep the Settings picker current until the next
+                // full tree lands)
+                let raw = event.value.prefix(while: { $0 != 0 })
+                self.talkbackSourceDevice = String(decoding: raw, as: UTF8.self)
+            case PathIds.talkbackSourceChannel where event.tag == 1:
+                guard event.value.count >= 4 else { break }
+                self.talkbackSourceChannel = Int(event.value
+                    .withUnsafeBytes { $0.load(as: UInt32.self).littleEndian })
             default:
                 break
             }
@@ -1239,11 +1266,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sources.append((name, channels))
             }
         }
+        // Selection: prefer the live tracked state (tree + echoes + our own
+        // writes stay in sync — see the doc on `talkbackSourceChannel`).
+        // The tree fallback must go through `GlueClient.intIn`: tree ints
+        // decode as Int32, and `as? Int` on Int32 is ALWAYS nil — the
+        // pre-fix bug that snapped the channel popup back to 0 (Ch 1).
         let selected = props["selectedTalkbackSourceDevice"] as? String ?? ""
-        let channel = props["selectedTalkbackSourceChannel"] as? Int ?? 0
-        return TalkbackSourceDescription(sources: sources.map { ($0.0, $0.1) },
-                                         selectedDevice: selected,
-                                         selectedChannel: channel)
+        let channel = GlueClient.intIn(props, "selectedTalkbackSourceChannel") ?? 0
+        return TalkbackSourceDescription(
+            sources: sources.map { ($0.0, $0.1) },
+            selectedDevice: talkbackSourceDevice.isEmpty ? selected
+                                                             : talkbackSourceDevice,
+            selectedChannel: talkbackSourceDevice.isEmpty ? channel
+                                                            : talkbackSourceChannel)
     }
 
     /// Pick a talkback source device (+ channel): writes the helper app's
@@ -1252,12 +1287,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Control 2's Talkback pane edits. Verified against the capture's
     /// live values ("Quartet" + channel 0); the sources' own `active`
     /// flags are presence bits — never written.
+    ///
+    /// The tracked state updates IMMEDIATELY: the glue echo of these very
+    /// writes re-runs `settingsWindow.refresh()` through `onSetProperty`
+    /// → `refreshMenu`, and with only the (still-stale) cached tree behind
+    /// `talkbackDescription()` the popup would snap back mid-update.
     func selectTalkbackSource(device: String, channel: Int) {
-        let devId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice")
-        let chId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceChannel")
+        glue.setString(id: PathIds.talkbackSourceDevice, device)
+        glue.setInt(id: PathIds.talkbackSourceChannel, Int32(channel))
+        talkbackSourceDevice = device
+        talkbackSourceChannel = channel
         QBLog.log("talkback: source '\(device)' channel \(channel)")
-        glue.setString(id: devId, device)
-        glue.setInt(id: chId, Int32(channel))
     }
 
     // MARK: - Windows
