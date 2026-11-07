@@ -3175,8 +3175,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// CONCURRENTLY (~0.3 s total instead of ~2 s sequential) so hardware
     /// changes track nearly live.
     /// The last 0x29 status bytes — the change-gate: identical ⇒ the sweep
-    /// is skipped entirely (3 tiny reads/s idle instead of 84).
+    /// is skipped entirely.
     private var lastStatusBytes: [UInt8] = []
+    /// The adaptive poll's clock: the burst window + the last sweep time.
+    private var fastPollUntil = Date.distantPast
+    private var lastPollAt = Date.distantPast
 
     private func readInputsFromDevice(force: Bool = false) {
         guard readInputDirect != nil else { return }
@@ -3184,11 +3187,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         if !force {
             // the 0x29 poll = ONE 7-byte read: if the device reports no
             // change, the 28-register sweep is skipped
+            self?.lastPollAt = Date()
             if let st = self?.readStatusDirect?(), st.count == 7 {
                 if st == self?.lastStatusBytes {
                     return   // nothing changed — idle
                 }
                 self?.lastStatusBytes = st
+                self?.fastPollUntil = Date().addingTimeInterval(1.5)   // the burst!
             }
         }
         var reads = [(Int, UInt8)]()
@@ -3457,9 +3462,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // HARDWARE — front-panel gain/type changes flow back on this cadence
         let directMode = connected && (isDirectMode?() ?? false)
         if directMode, readInputDirect != nil, devicePollTimer == nil {
-            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            // 11.7 ADAPTIVE: the idle = 0.5 s (the gate = 1 tiny read);
+            // after a detected change = 0.1 s bursts for 1.5 s (tracking
+            // the fingers!), then the decay back. One timer, the logic
+            // in the tick — the CPU stays near zero either way.
+            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self, self.window?.isVisible == true else { return }
-                self.readInputsFromDevice()
+                let now = Date()
+                if now < self.fastPollUntil { self.readInputsFromDevice(); return }
+                if now.timeIntervalSince(self.lastPollAt) >= 0.5 { self.readInputsFromDevice() }
             }
         } else if !directMode, let t = devicePollTimer {
             t.invalidate(); devicePollTimer = nil
