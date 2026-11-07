@@ -1295,6 +1295,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The connected Quartet's own node from the latest glue tree (the
     /// node's type IS the serial — see PathIds.dev).
+    /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
+    /// own writes): the tree code (actionType<<16)|param → the device byte
+    /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
+    static let padCodeToByte: [Int: UInt8] = [
+        0x20002: 0x02, 0x20003: 0x03, 0x20004: 0x04,          // Mute Spk/HP/All
+        0x30002: 0x05, 0x30003: 0x06, 0x30004: 0x07,          // Dim Spk/HP/All
+        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0e,          // Sum Spk/HP/All
+        0x5000C: 0x0a, 0x60001: 0x0b,                          // ToggleSet, ClearMeters
+        0x70005: 0x0c, 0x70006: 0x0d,                          // Engage Set 1/2
+        0x5000B: 0x0f,                                          // Toggle Mute Spk/HP
+    ]
+    static let padByteToCode: [UInt8: Int] =
+        Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
+    /// The pad's register: 0x49 wIndex = the pad (0-2); the encoder = 0x4b wI=0.
+    static func padRegister(slot: Int) -> (reg: UInt8, index: UInt16) {
+        slot < 3 ? (0x49, UInt16(slot)) : (0x4b, 0)
+    }
+
     /// The device-node flag registers (11/7 sweep): peakHold=0x1f,
     /// overHold=0x20, lockHomeScreen=0x4a, keyboardVolumeControls=0x51.
     static func flagRegister(_ name: String) -> UInt8? {
@@ -1764,7 +1782,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the tree's actionButtons children — the remap path
         // live-verified Oct 26 2026 (probe write → pad followed).
         settingsWindow.readPadAssignments = { [weak self] in
-            guard let self, let dev = self.deviceNode(),
+            guard let self else { return [Int?](repeating: nil, count: 4) }
+            if self.glue.state != .connected {
+                // 11.7 offline: the pad registers read straight from the device
+                return (0..<4).map { slot in
+                    let (reg, idx) = Self.padRegister(slot: slot)
+                    return self.directUSB.readInput(input: idx, bRequest: reg)
+                        .flatMap { Self.padByteToCode[$0] }
+                }
+            }
+            guard let dev = self.deviceNode(),
                   let ab = GlueClient.findNode(in: dev, type: "actionButtons") else {
                 return [Int?](repeating: nil, count: 4)
             }
@@ -1778,10 +1805,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.writePadAssignment = { [weak self] slot, value in
             guard let self else { return }
             let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
-            guard slot >= 0, slot < names.count,
-                  let id = PathIds.dev("appState/actionButtons/\(names[slot])/actionButton") else { return }
-            QBLog.log("settings: pad slot \(slot) actionButton ← \(String(value, radix: 16))")
-            self.glue.setInt(id: id, Int32(value))
+            guard slot >= 0, slot < names.count else { return }
+            if self.glue.state == .connected,
+               let id = PathIds.dev("appState/actionButtons/\(names[slot])/actionButton") {
+                QBLog.log("settings: pad slot \(slot) actionButton ← \(String(value, radix: 16))")
+                self.glue.setInt(id: id, Int32(value))
+                return
+            }
+            // 11.7 offline: the enum byte straight to 0x49/0x4b
+            guard let byte = Self.padCodeToByte[value] else {
+                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte")
+                return
+            }
+            let (reg, idx) = Self.padRegister(slot: slot)
+            let ok = self.directUSB.setRawByte(reg, index: idx, byte: byte)
+            QBLog.log("settings: pad slot \(slot) → 0x\(String(reg, radix: 16))=\(String(byte, radix: 16)) \(ok ? "ok" : "FAILED")")
         }
         NotificationCenter.default.addObserver(forName: .init("qb.momentaryChanged"),
                                                object: nil, queue: .main) { [weak self] _ in

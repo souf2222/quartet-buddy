@@ -184,6 +184,29 @@ final class DirectUSBClient {
         switch b { case 0: return 2; case 1: return 3; case 2: return 1; case 3: return 4; default: return 1 }
     }
 
+    /// A raw 1-byte register write — the general form of every decoded
+    /// register (bRequest, wIndex, one byte). Used by the pad enum, the
+    /// routing register and any future single-byte setting.
+    @discardableResult
+    func setRawByte(_ reg: UInt8, index: UInt16, byte: UInt8) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = reg
+        req.wValue = 0
+        req.wIndex = index
+        req.wLength = 1
+        let d = NSMutableData(bytes: [byte], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "raw \(reg): \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// The per-input BOOL flags — sweep-VERIFIED 11/7: softLimit = 0x11
     /// (default ON), polarityInvert Ø = 0x13, phantom = 0x15. wIndex = input.
     @discardableResult
