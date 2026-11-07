@@ -1535,7 +1535,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.selectedOutput == .headphones ? 1 : 0
         }
         control.readInputDirect = { [weak self] i, bReq in
-            self?.directUSB.readInput(input: UInt16(i), bRequest: bReq)
+            // i ≥ 100 = the monitor slot (i-100); below = the input index
+            let idx = i >= 100 ? UInt16(i - 100) : UInt16(i)
+            return self?.directUSB.readInput(input: idx, bRequest: bReq)
         }
         control.isDirectMode = { [weak self] in
             guard let self else { return false }

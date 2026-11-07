@@ -3163,16 +3163,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     // MARK: state
 
-    /// 11.6: one async read sweep of the input registers (0x34 gain,
-    /// 0x36 type ×4 inputs) → applyInputReadBacks → refresh.
+    /// 11.7: one async read sweep — the INPUT registers (0x34 gain, 0x16
+    /// type, 0x15 48V, 0x11 SL, 0x13 Ø ×4 inputs) AND the OUTPUT registers
+    /// (0x33 gain, 0x35 mute, 0x40 dim, 0x46 sum ×2 monitors). The reads run
+    /// CONCURRENTLY (~0.3 s total instead of ~2 s sequential) so hardware
+    /// changes track nearly live.
     private func readInputsFromDevice() {
         guard !deviceRefreshInFlight, readInputDirect != nil else { return }
         deviceRefreshInFlight = true
-        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x16), (i, 0x15), (i, 0x11), (i, 0x13)] }
+        var reads = [(Int, UInt8)]()
+        for i in 0..<4 {
+            reads.append((i, 0x34)); reads.append((i, 0x16)); reads.append((i, 0x15))
+            reads.append((i, 0x11)); reads.append((i, 0x13))
+        }
+        for o in 0..<2 {
+            reads.append((o + 100, 0x33)); reads.append((o + 100, 0x35))
+            reads.append((o + 100, 0x40)); reads.append((o + 100, 0x46))
+        }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var values: [(Int, UInt8, UInt8)] = []
-            for (i, bReq) in reads {
-                if let v = self?.readInputDirect?(i, bReq) { values.append((i, bReq, v)) }
+            var values = [(Int, UInt8, UInt8)]()
+            let lock = NSLock()
+            DispatchQueue.concurrentPerform(iterations: reads.count) { k in
+                let (idx, bReq) = reads[k]
+                if let v = self?.readInputDirect?(idx, bReq) {
+                    lock.lock(); values.append((idx, bReq, v)); lock.unlock()
+                }
             }
             DispatchQueue.main.async { [weak self] in
                 self?.deviceRefreshInFlight = false
@@ -3189,6 +3204,20 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func applyInputReadBacks(_ values: [(Int, UInt8, UInt8)]) {
         for (i, bReq, v) in values {
             inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
+            if i >= 100 {
+                // 11.7: the OUTPUT registers (i-100 = the monitor slot 0/1)
+                let o = i - 100
+                if o < monitors.count {
+                    switch bReq {
+                    case 0x33: monitors[o].gain = -Double(v)     // |dB|, the faders ≤ 0
+                    case 0x35: monitors[o].mute = (v != 0)
+                    case 0x40: monitors[o].dim = (v != 0)        // sweep-verified
+                    case 0x46: monitors[o].sum = (v != 0)        // sweep-verified
+                    default: break
+                    }
+                }
+                continue
+            }
             switch bReq {
             case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
             case 0x16: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
@@ -3405,7 +3434,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // HARDWARE — front-panel gain/type changes flow back on this cadence
         let directMode = connected && (isDirectMode?() ?? false)
         if directMode, readInputDirect != nil, devicePollTimer == nil {
-            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
                 guard let self, self.window?.isVisible == true, !self.deviceRefreshInFlight else { return }
                 self.readInputsFromDevice()
             }
