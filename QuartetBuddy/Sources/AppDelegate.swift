@@ -1616,20 +1616,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Line-out hardware levels (Settings ▸ Quartet ▸ Output Levels):
         // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
         settingsWindow.readLineOutLevels = { [weak self] in
-            guard let self, let dev = self.deviceNode() else { return [] }
-            return (0..<6).map { i -> (name: String, refLevel: Int?) in
-                guard let node = GlueClient.findNode(in: dev, type: "hwout\(i + 2)") else {
-                    return ("Analog Out \(i + 1)", nil)
+            guard let self else { return [] }
+            if let dev = self.deviceNode() {
+                return (0..<6).map { i -> (name: String, refLevel: Int?) in
+                    guard let node = GlueClient.findNode(in: dev, type: "hwout\(i + 2)") else {
+                        return ("Analog Out \(i + 1)", nil)
+                    }
+                    let name = (node["props"] as? [String: Any])?["name"] as? String
+                        ?? "Analog Out \(i + 1)"
+                    return (name, GlueClient.intProp(node, "analogRefLevel"))
                 }
-                let name = (node["props"] as? [String: Any])?["name"] as? String
-                    ?? "Analog Out \(i + 1)"
-                return (name, GlueClient.intProp(node, "analogRefLevel"))
+            }
+            // 11.7 offline: the ref-level bit per output (0xb6, wIndex = out−2;
+            // sweep-verified on Analog Out 1, +4=0/−10=1)
+            return (0..<6).map { i -> (name: String, refLevel: Int?) in
+                let v = self.directUSB.readInput(input: UInt16(i), bRequest: 0xb6)
+                return ("Analog Out \(i + 1)", v.map { $0 == 0 ? 2 : 3 })
             }
         }
         settingsWindow.writeLineOutLevel = { [weak self] i, v in
-            guard let self, let id = PathIds.dev("hwout/hwout\(i + 2)/analogRefLevel") else { return }
-            QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
-            self.glue.setInt(id: id, Int32(v))
+            guard let self else { return }
+            if self.glue.state == .connected, let id = PathIds.dev("hwout/hwout\(i + 2)/analogRefLevel") {
+                QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v)")
+                self.glue.setInt(id: id, Int32(v))
+                return
+            }
+            // 11.7 offline: 0xb6 wIndex = out−2, +4dBu=0 / −10dBV=1
+            let ok = self.directUSB.setOutputFlag(0xb6, output: UInt16(i), on: v == 3)
+            QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v) via directUSB (\(ok ? "ok" : "FAILED"))")
         }
         // Line-out firmware TRIM (Settings ▸ Quartet ▸ Output Levels).
         // The strips' `trim` is a dB double applied by the firmware at the
@@ -1640,7 +1654,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // take the left strip's value: a pair whose strips were trimmed
         // apart on the touchscreen shows the left one until touched.
         settingsWindow.readHwoutTrims = { [weak self] in
-            guard let self, let dev = self.deviceNode() else { return [] }
+            guard let self else { return [] }
+            guard let dev = self.deviceNode() else {
+                // 11.7 offline: the trim registers (0x18, |dB|×10); the pair's
+                // value = the LEFT strip's byte
+                return (1...3).map { pair -> (name: String, trim: Double?) in
+                    let idx = 2 * pair - 2   // hwout2, hwout4, hwout6 → 0, 2, 4
+                    let v = self.directUSB.readInput(input: UInt16(idx), bRequest: 0x18)
+                    return ("Analog Out \(2 * pair - 1) / \(2 * pair)",
+                            v.map { -Double(Int($0)) / 10.0 })
+                }
+            }
             return (1...3).map { pair -> (name: String, trim: Double?) in
                 let left = GlueClient.findNode(in: dev, type: "hwout\(2 * pair)")
                 let right = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 1)")
@@ -1652,11 +1676,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         settingsWindow.writeHwoutTrim = { [weak self] pair, db in
-            guard let self, case .connected = self.glue.state else { return }
+            guard let self else { return }
             let db = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
-            for h in Self.hwoutTrimNodes[pair] ?? [] {
-                guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
-                self.glue.setDouble(id: id, db)
+            if self.glue.state == .connected {
+                for h in Self.hwoutTrimNodes[pair] ?? [] {
+                    guard let id = PathIds.dev("hwout/\(h)/trim") else { continue }
+                    self.glue.setDouble(id: id, db)
+                }
+            } else {
+                // 11.7 offline: 0x18 wIndex = out−2, value = |dB|×10 (attenuation)
+                for h in Self.hwoutTrimNodes[pair] ?? [] {
+                    let idx = Int(h.dropFirst("hwout".count)) ?? 0
+                    let ok = self.directUSB.setOutputTrim(output: UInt16(max(0, idx - 2)), db: db)
+                    QBLog.log("settings: \(h).trim = \(db) via directUSB (\(ok ? "ok" : "FAILED"))")
+                }
             }
             self.pushedHardwareTrims[pair] = db
             UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
