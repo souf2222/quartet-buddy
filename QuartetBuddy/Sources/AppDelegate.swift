@@ -309,10 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ensureDirectUSB() -> Bool {
         if directUSB.opened { return true }
         let ok = directUSB.open()
-        if ok {
-            QBLog.log("transport: direct-USB session opened")
-            pushSavedRouting()
-        }
+        if ok { QBLog.log("transport: direct-USB session opened") }
         return ok
     }
 
@@ -436,33 +433,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Re-push the saved hardware routing (the HP = PB 7-8 by default) to
-    /// the unit — the same pattern as the saved trims. Runs at the direct
-    /// session open (boot + device arrival).
-    /// 11.7 AUDIO-KILLER FIX: the immediate push at boot = a DAC-source
-    /// reconfig WHILE CoreAudio is bringing the stream up — macOS clients
-    /// lose the device (the "dead audio until the output re-pick" bug).
-    /// Now: the writes happen 3 s later (the stream settles), and the
-    /// values equal to each pair's own playback default are SKIPPED (the
-    /// device already boots that way — only the HP's PB 7-8 is a real
-    /// deviation and only it gets written).
-    private func pushSavedRouting() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            guard let self else { return }
-            guard self.directUSB.opened else { return }
-            for slot in 0..<4 {
-                let def: Int = slot == 3 ? 3 : slot   // the HP = PB 7-8; the pairs = their own PB
-                let source = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int ?? def
-                guard source != def else { continue }   // the device boots there anyway
-                let indexes: [UInt16] = slot == 0 ? [3]
-                    : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)]
-                for wI in indexes {
-                    _ = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
-                }
-                QBLog.log("routing: slot \(slot) → \(source) pushed (non-default)")
-            }
-        }
-    }
 
     /// The macOS mute changed (F10, Control Center): apply it to the
     /// Quartet's hardware mute. Normally one-way (see OSVolumeMirror's
@@ -1353,35 +1323,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         slot < 3 ? (0x49, UInt16(slot)) : (0x4b, 0)
     }
 
-    /// Push ALL pad assignments (the app's model) to the device. The
-    /// firmware drifts its 0x49 view back to its stored state, so this
-    /// runs on a cadence (the pad-push interval) + on every change —
-    /// the daemon's own model-and-re-assert architecture, replicated.
-    private func pushPadAssignments() {
-        guard directUSB.opened else { return }
-        let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
-        let defaults = [0x20004, 0x40003, 0x40003, 0x5000B]
-        for slot in 0..<4 {
-            let code = UserDefaults.standard.object(forKey: "pad.\(names[slot])") as? Int ?? defaults[slot]
-            guard let byte = Self.padCodeToByte[code] else { continue }
-            let (reg, idx) = Self.padRegister(slot: slot)
-            _ = directUSB.setRawByte(reg, index: idx, byte: byte)
-        }
-    }
-
-    /// The pads' re-assert cadence: the firmware's drift wins within ~5 s,
-    /// so the model re-pushes faster than that. Timer = the poll timer's
-    /// sibling, started at the boot.
-    private var padPushTimer: Timer?
-
-    private func startPadPushTimer() {
-        guard padPushTimer == nil else { return }
-        padPushTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.pushPadAssignments()
-        }
-        QBLog.log("pads: the model re-assert timer running (2 s)")
-    }
-
     /// The device-node flag registers (11/7 sweep): peakHold=0x1f,
     /// overHold=0x20, lockHomeScreen=0x4a, keyboardVolumeControls=0x51.
     static func flagRegister(_ name: String) -> UInt8? {
@@ -1674,7 +1615,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.learningMidi = false
             self?.refreshMenu()
         }
-        startPadPushTimer()
         // Device-node flags (Settings ▸ Quartet ▸ Controls): the
         // window reads raw dev-node props and asks us for each write.
         settingsWindow.readDeviceProps = { [weak self] in
@@ -1852,17 +1792,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the tree's actionButtons children — the remap path
         // live-verified Oct 26 2026 (probe write → pad followed).
         settingsWindow.readPadAssignments = { [weak self] in
-            // 11.7: THE APP OWNS THE MODEL (the daemon's architecture: the
-            // model + the periodic re-push). The device's 0x49 = a passive
-            // view the firmware drifts back — never the display source.
+            // 11.7 POWER-CYCLE VERIFIED: the device's flash = the store —
+            // the 0x49/0x4b registers hold the assignments across reboots
+            // and even moving the unit to another computer. The registers
+            // ARE the truth; the read = the live display.
             guard let self else { return [Int?](repeating: nil, count: 4) }
-            let defaults = ["Touchpad_A": 0x20004, "Touchpad_B": 0x40003,
-                            "Touchpad_C": 0x40003, "Encoder_Push": 0x5000B]
             return (0..<4).map { slot in
-                let name = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"][slot]
-                let v = UserDefaults.standard.object(forKey: "pad.\(name)") as? Int
-                return v ?? defaults[name]
+                let (reg, idx) = Self.padRegister(slot: slot)
+                return self.directUSB.readInput(input: idx, bRequest: reg)
+                    .flatMap { Self.padByteToCode[$0] }
             }
+        }
+        settingsWindow.writePadAssignment = { [weak self] slot, value in
+            guard let self else { return }
+            let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
+            guard slot >= 0, slot < names.count else { return }
+            // 11.7: ONE write — the device's flash commits it (the
+            // power-cycle test verified the persistence)
+            guard let byte = Self.padCodeToByte[value] else {
+                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte")
+                return
+            }
+            let (reg, idx) = Self.padRegister(slot: slot)
+            let ok = self.directUSB.setRawByte(reg, index: idx, byte: byte)
+            QBLog.log("settings: pad \(names[slot]) ← \(String(value, radix: 16)) (0x\(String(reg, radix: 16))=\(String(byte, radix: 16))) \(ok ? "ok — the device remembers" : "FAILED")")
         }
         // 11.7: HARDWARE OUTPUT ROUTING — the 0x53 register, the 0-based
         // source index (0=PB1-2 … 3=PB7-8, 4=Mixer1, 5=Mixer2). The HP's
@@ -1893,11 +1846,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
             guard slot >= 0, slot < names.count else { return }
-            // 11.7: the model + the immediate push (the daemon's pattern)
-            let name = names[slot]
-            UserDefaults.standard.set(value, forKey: "pad.\(name)")
-            self.pushPadAssignments()
-            QBLog.log("settings: pad \(name) ← \(String(value, radix: 16)) (the model saved + pushed)")
+            // 11.7: ONE write — the device's flash commits it (the
+            // power-cycle test verified the persistence)
+            guard let byte = Self.padCodeToByte[value] else {
+                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte")
+                return
+            }
+            let (reg, idx) = Self.padRegister(slot: slot)
+            let ok = self.directUSB.setRawByte(reg, index: idx, byte: byte)
+            QBLog.log("settings: pad \(names[slot]) ← \(String(value, radix: 16)) (0x\(String(reg, radix: 16))=\(String(byte, radix: 16))) \(ok ? "ok — the device remembers" : "FAILED")")
         }
         NotificationCenter.default.addObserver(forName: .init("qb.momentaryChanged"),
                                                object: nil, queue: .main) { [weak self] _ in
