@@ -283,42 +283,93 @@ write. Messenger is embedded at GlueServerDevice+0x230 (pointer copy at
 * One run hit "Failed to open device" — caused by two daemons racing for the
   exclusive USB open; serialized runs avoid it.
 
-### Next attack (11.5b): interposer status + the decisive insight
-**In-process shim works mechanically** (`/tmp/usbsniff.c` → `usbsniff.dylib`):
-* same-name `IOCreatePlugInInterfaceForService` definition + DYLD_FORCE_FLAT_NAMESPACE
-  (the `__interpose` table also engages, but flat+definition is cleaner;
-  note dyld4 interposes the interposer's own imports — recursion — so the
-  shim calls IOKit via its own two-level import, which is NOT interposed),
-* learns the static IOUSBLib vtables by QI-ing its own objects, then a
-  malloc/VM scanner swaps the daemon's object vptrs to logging copies,
-* **confirmed hooked objects are the Quartet's**: the `"Woohoo you have a
-  cool audio interface"` string lives *inside* the USBDeviceMacOS ctor
-  (0x100038884) — the Quartet uses the LEGACY/simple path ("fancy" =
-  the modern one, 0x100261f73).
+### BREAKTHROUGH: the wire protocol is text-tagged ("ApogeeRemote" family)
+Near `SIO2PT`/`HDA`/`ApogeeRemote`/`127.0.0.` constants (0x100263e60–0x100263f10)
+live the per-model transport tags:
 
-**Yet zero calls through the hooked vptrs during probe writes.** Working
-theories, in order:
-1. the debug daemon's device open fails (earlier runs printed "Failed to
-   open device" once, silently retrying in others — objects created and
-   destroyed in a loop, which matches the re-hook spam of the same slots),
-2. and/or the actual byte traffic flows through `IOConnectCall*` on the
-   modern `AppleUSBHostDeviceUserClient` (the daemon imports these directly),
-   with the IOUSBLib objects used only for setup.
+    Duet3TX          @0x100263ea8
+    QuartetTONEv2TX  @0x100263eb0
+    DuetIITX         @0x100263ec0
+    DuetiOSTSDTX     @0x100263ef0
 
-**Next steps, in order:**
-1. Add open-path hooks (`USBDeviceOpen` 0x40 / `USBInterfaceOpen` 0x40, log
-   the IOReturn) to the shim to settle (1).
-2. Have the shim walk `USBDeviceMacOS → +0x90 (interface obj) → backpointer →
-   GlueServerDevice → +0x428 (messenger) → vptr` and dump the Messenger's
-   slot-3 framer address; disassemble it statically. This recovers the wire
-   format without any further capture.
-3. Alternative once open-path is settled: interpose `IOConnectCallStructMethod`
-   (+Async variants) — real-address resolution is the known wall (dlsym is
-   poisoned by the interpose map; binary pages immutable so GOT patch fails);
-   the vtable-learn trick does not apply (plain functions).
-4. Fallback: empirical probing from our own client (bootout the daemon, open
-   the device as root, send candidate frames built from the known setter
-   encoding + cmdIds, watch monitor-mute state).
+**The daemon builds packets containing the literal string `QuartetTONEv2TX`**
+(the Quartet's transport tag; the tag family covers the other models).
+Packet construction observed inline in the GlueServerDevice ctor flow
+(0x10017140c–0x100171464):
+
+    buf = new(0x23)                       // 35-byte packet
+    *(u32*)buf        = 0                 // stlr wzr
+    *(u64*)(buf+8)    = 0xC               // command/length field (12)
+    *(u64*)(buf+0x10) = "QuartetT"        // first 8 bytes of the tag
+    *(u16*)(buf+0x18) = 0x58              // ('X'?) — more tag bytes stored elsewhere
+    … then passed (with the tag const at 0x100263eb0 = "QuartetTONEv2TX") into
+    a packet-object constructor at 0x100174ab0 with call args
+    (this, x20, shared_ptr(buf), w4=0xC, w5=1, w6=2, x7, stack byte=1)
+
+The tag string `QuartetTONEv2TX` (= "QuartetTONE" + "v2" + "TX"?) is stored
+piecewise into the packet. This looks like the **"ApogeeRemote" framing**:
+text-tagged per-model, per-direction packets ("TX" = host→device), the same
+family as the `ApogeeRemoteUSBPacket` RX struct seen in RTTI.
+
+Remaining decode (mechanical now that the anchor is found):
+1. the rest of the 35-byte header (fields at 0x0/0x8/0x18/0x19+),
+2. where the payload bytes + the lo16/hi16 address (w4/w5 from the setters)
+   land in the packet,
+3. the checksum/CRC (the JUCE-style fold from prop_probe? the same family?),
+4. the RX-side tag (`…RX`) and `processMessageFromDevice` field offsets.
+
+### Interposer status: infrastructure proven; the blocker was a race
+**The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
+* learns the static IOUSBLib vtables by QI-ing its own objects (two-level
+  import = the real IOKit, no interpose-map poisoning),
+* a VM scanner swaps the daemon's object vptrs to logging copies (confirmed
+  hooking the daemon's device+interface objects — 111 hooks in the last run),
+* hooks the open path (USBDeviceOpen/USBInterfaceOpen) + all six pipe methods
+  + DeviceRequest/DeviceRequestTO,
+* plus same-name `IOConnectCall*` definitions (these engage only under
+  DYLD_FORCE_FLAT_NAMESPACE, which chained-fixup binaries ignore — never
+  fired; kept for reference).
+
+**Why zero frames appeared:** the kernel log shows a dozen different
+ApogeeGlue PIDs fighting over the exclusive USB open across our worker runs
+(2040 failed-open attempts against one pid alone — launchd KeepAlive
+respawns + leftover debug daemons + a per-second retry loop). **Every debug
+daemon LOST the race**, printed "Failed to open device", and sat in a retry
+loop — no I/O through the hooked objects. The lldb routes died separately on
+the background-session restriction (attach AND launch both refused; debugserver
+exits silently; binary pages immutable so GOT patches fail with EACCES).
+
+**The other decisive clue:** the debug daemon's own stdout prints
+`sendUSBInVendorRequest: kIOReturnNotResponding` — the Quartet's control
+path is **vendor requests**, and the daemon's I/O goes through
+`IOConnectCall*` on the modern `AppleUSBHostDeviceUserClient` (matching the
+ioreg user-client evidence), NOT through the IOUSBLib COM objects' pipe
+methods. That is why the vtable hooks never see traffic even when the open
+succeeds.
+
+**Remaining blocker for full capture:** calling the real `IOConnectCall*`
+from an interposer. dyld4 applies `__interpose` to the interposing dylib's
+own imports AND poisons `dlsym` (RTLD_NEXT and handle lookups) for
+interposed symbols; binary pages are immutable (mprotect → EACCES) so GOT
+patching fails; DYLD_FORCE_FLAT_NAMESPACE is ignored by chained fixups.
+Remaining options: parse the IOKit export trie from the mapped shared cache
+in-process (symbol vmaddr + image slide), or parse the DSC file offline.
+
+**The airtight run recipe (next session):**
+1. `launchctl bootout` **both** jobs (apogeeglue AND apogeemessenger),
+2. `pkill -9 -f ApogeeGlue` + poll until `pgrep -f ApogeeGlue` is empty,
+3. poll `ioreg` until the Quartet has **no** `UsbExclusiveOwner`,
+4. launch the debug daemon (shim inserted) → verify via
+   `UsbExclusiveOwner = <debug pid>`,
+5. fire `identify` / `reflevel` via `prop_probe.py` → frames appear in
+   `/tmp/usbsniff.log`,
+6. `launchctl bootstrap` both jobs back.
+
+Scripts: `tools/usbworker.sh` (root worker; needs the debug app copy at
+`/Library/Application Support/Apogee/ApogeeGlueDebug.app` — re-sign with
+`codesign --force --sign - --entitlements <get-task-allow plist>`, see
+`/tmp/dbg.ent`), `tools/lldb_usbhooks.py` (lldb steering hooks — worked,
+blocked on session permissions).
 
 **System state hygiene**: every worker run restores the launchd daemon
 (`launchctl bootstrap`) — verify with `launchctl print
