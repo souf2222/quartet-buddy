@@ -3208,6 +3208,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             for i in 0..<4 {
                 reads.append((i, 0x16)); reads.append((i, 0x15))
                 reads.append((i, 0x11)); reads.append((i, 0x13))
+                reads.append((i, 0x44))
             }
             reads.append((100, 0x35)); reads.append((101, 0x35))
             reads.append((100, 0x40)); reads.append((101, 0x40))
@@ -3260,6 +3261,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             case 0x15: inputs[i].phantom = (v != 0)              // +48V (touchscreen-verified)
             case 0x11: inputs[i].softLimit = (v != 0)            // softLimit (sweep-verified)
             case 0x13: inputs[i].polarity = (v != 0)             // polarity Ø (sweep-verified)
+            case 0x44: inputs[i].group = (v != 0)                // the ganging bit
             default: break
             }
         }
@@ -5976,11 +5978,25 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !suppressActions, !isLearning, a >= 0, a <= 1 else { return }
         let b1 = a * 2, b2 = b1 + 1
         let on = !(inputs[b1].group ?? false)        // toggle intent
+        // 11.7: the group register = 0x44 (sweep-verified; the daemon wrote
+        // BOTH pair members) — the direct path needs no captured ids
         let id1 = inputGroupIds[b1], id2 = inputGroupIds[b2]
-        guard !id1.isEmpty, !id2.isEmpty else { return }
-        QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off")")
-        onWriteBool?(id1, on)
-        onWriteBool?(id2, on)
+        if !id1.isEmpty, !id2.isEmpty, isGlueConnected?() == true {
+            QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off") (glue)")
+            onWriteBool?(id1, on)
+            onWriteBool?(id2, on)
+        } else if isDirectMode?() == true {
+            QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off") (directUSB 0x44)")
+            onDirectInputFlag?(0x44, b1, on)
+            onDirectInputFlag?(0x44, b2, on)
+            // mirror the gains too: the newly-ganged pair should agree —
+            // take the ACTIVE input's gain onto the partner
+            let srcGain = inputs[b1].refLevel == 4 ? inputs[b1].instGain : inputs[b1].micGain
+            if on, let g = srcGain {
+                _ = onDirectInputGain?(b2, g)
+                if inputs[b2].refLevel == 4 { inputs[b2].instGain = g } else { inputs[b2].micGain = g }
+            }
+        } else { return }
         inputs[b1].group = on
         inputs[b2].group = on
         refresh()
