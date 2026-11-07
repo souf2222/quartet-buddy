@@ -3181,6 +3181,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var fastPollUntil = Date.distantPast
     private var lastPollAt = Date.distantPast
 
+    /// 11.7: the HID reports push — the device says something changed,
+    /// the sweep fires instantly (the force = the gate skipped).
+    func triggerDeviceSweep() {
+        readInputsFromDevice(force: true)
+    }
+
     private func readInputsFromDevice(force: Bool = false) {
         guard readInputDirect != nil else { return }
         deviceReadQueue.async { [weak self] in

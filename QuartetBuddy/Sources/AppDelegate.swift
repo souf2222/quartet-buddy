@@ -1535,6 +1535,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.selectedOutput == .headphones ? 1 : 0
         }
         control.readStatusDirect = { [weak self] in self?.directUSB.readStatus() }
+        // the HID push: the encoder/touchscreen events → the instant sweep
+        // (control = this function's local — the shared singleton)
+        directUSB.startHIDWatcher { [weak control] in
+            control?.triggerDeviceSweep()
+        }
         control.readInputDirect = { [weak self] i, bReq in
             // i ≥ 100 = the monitor slot (i-100); below = the input index
             let idx = i >= 100 ? UInt16(i - 100) : UInt16(i)

@@ -1,5 +1,6 @@
 import Foundation
 import IOUSBHost
+import IOKit.hid
 import IOKit
 
 /// Direct USB control of the Quartet — no ApogeeGlue daemon required (11.6).
@@ -182,6 +183,46 @@ final class DirectUSBClient {
     }
     static func appMode(forDeviceByte b: UInt8) -> Int {
         switch b { case 0: return 2; case 1: return 3; case 2: return 1; case 3: return 4; default: return 1 }
+    }
+
+    // MARK: HID event watcher — the encoder + touchscreen are a HID device
+    // inside the Quartet; macOS PUSHES their input reports the instant
+    // something moves. We don't decode them: any report = "something
+    // changed" → the poll sweep fires immediately. Zero-CPU, zero-latency.
+
+    private var hidManager: IOHIDManager?
+
+    /// Subscribe to the Quartet's HID reports (the shared HID access —
+    /// no conflict with the vendor session or CoreAudio).
+    func startHIDWatcher(onChange: @escaping () -> Void) {
+        guard hidManager == nil else { return }
+        let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        // the string-literal keys (the HID's CFString keys — the Swift
+        // overlay doesn't export the kIOHID* constants on this SDK)
+        let match: [String: Any] = ["VendorID": 0x0C60,
+                                    "ProductID": 0x14]
+        IOHIDManagerSetDeviceMatching(mgr, match as CFDictionary)
+        // the closure boxed as an NSMutableArray holding one item (the
+        // Swift closures aren't AnyObject; the box sidesteps the cast)
+        let box = NSMutableArray(object: onChange)
+        let ctx = Unmanaged.passRetained(box)
+        IOHIDManagerRegisterInputReportCallback(
+            mgr,
+            { ctx, _, _, _, _, _, _ in
+                guard let ctx else { return }
+                let box = Unmanaged<NSMutableArray>.fromOpaque(ctx).takeUnretainedValue()
+                if let cb = box.firstObject as? () -> Void { cb() }
+            },
+            ctx.toOpaque())
+        IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        let r = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+        if r == kIOReturnSuccess {
+            hidManager = mgr
+            QBLog.log("directUSB: HID watcher live (the device pushes its events)")
+        } else {
+            ctx.release()
+            QBLog.log("directUSB: HID watcher failed \(r)")
+        }
     }
 
     /// The 7-byte status poll (bRequest 0x29, wIndex = 0) — the device's
