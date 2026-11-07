@@ -3089,6 +3089,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var readInputDirect: ((Int, UInt8) -> UInt8?)?
     /// 11.7: the 7-byte status poll (the change-gate's cheap read).
     var readStatusDirect: (() -> [UInt8]?)?
+    /// 11.7: the 60-byte change-bitmap (the device's event summary).
+    var readChangeBitmapDirect: (() -> [UInt8]?)?
     /// True when the device is owned by the app's own USB session (the glue
     /// offline) — the controls work without captured path-ids then.
     var isDirectMode: (() -> Bool)?
@@ -3187,29 +3189,29 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         readInputsFromDevice(force: true)
     }
 
+    /// The sweep's tick counter — the cold registers ride every 8th sweep.
+    private var sweepTick = 0
+
     private func readInputsFromDevice(force: Bool = false) {
         guard readInputDirect != nil else { return }
         deviceReadQueue.async { [weak self] in
-        if !force {
-            // the 0x29 poll = ONE 7-byte read: if the device reports no
-            // change, the 28-register sweep is skipped
-            self?.lastPollAt = Date()
-            if let st = self?.readStatusDirect?(), st.count == 7 {
-                if st == self?.lastStatusBytes {
-                    return   // nothing changed — idle
-                }
-                self?.lastStatusBytes = st
-                self?.fastPollUntil = Date().addingTimeInterval(1.5)   // the burst!
-            }
-        }
+        // 11.7 SPLIT SWEEP: the HOT registers (the gains — the encoder's
+        // usual target) on every sweep = 6 reads ≈ 60 ms; the COLD (the
+        // types, 48V, SL, Ø, mutes, dims) every 8th sweep or on force.
+        // (The 0x14 bitmap = NOT a change map — all-zero even during
+        // hardware changes; the 0x29 gate = dropped with it.)
+        self?.sweepTick += 1
         var reads = [(Int, UInt8)]()
-        for i in 0..<4 {
-            reads.append((i, 0x34)); reads.append((i, 0x16)); reads.append((i, 0x15))
-            reads.append((i, 0x11)); reads.append((i, 0x13))
-        }
-        for o in 0..<2 {
-            reads.append((o + 100, 0x33)); reads.append((o + 100, 0x35))
-            reads.append((o + 100, 0x40)); reads.append((o + 100, 0x46))
+        for i in 0..<4 { reads.append((i, 0x34)) }
+        reads.append((100, 0x33)); reads.append((101, 0x33))
+        if force || self!.sweepTick % 8 == 0 {
+            for i in 0..<4 {
+                reads.append((i, 0x16)); reads.append((i, 0x15))
+                reads.append((i, 0x11)); reads.append((i, 0x13))
+            }
+            reads.append((100, 0x35)); reads.append((101, 0x35))
+            reads.append((100, 0x40)); reads.append((101, 0x40))
+            reads.append((100, 0x46)); reads.append((101, 0x46))
         }
         // 11.7 CRASH FIX: the concurrent __send calls on one IOUSBHostDevice
         // race the device object (EXC_BAD_ACCESS on a hardware gain change).

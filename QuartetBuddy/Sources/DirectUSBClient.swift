@@ -249,6 +249,22 @@ final class DirectUSBClient {
         } catch { return nil }
     }
 
+    /// The 60-byte CHANGE-BITMAP (bRequest 0x14) — the device's event
+    /// summary: all-zero when nothing changed; the set bits = the changed
+    /// registers (read-to-clear). The decode session logs the bitmap.
+    func readChangeBitmap() -> [UInt8]? {
+        guard let dev = device else { return nil }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0xC0
+        req.bRequest = 0x14
+        req.wLength = 60
+        let d = NSMutableData(data: Data(repeating: 0, count: 60))
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.3)
+            return (d as Data).map { $0 }
+        } catch { return nil }
+    }
+
     /// A raw 1-byte register write — the general form of every decoded
     /// register (bRequest, wIndex, one byte). Used by the pad enum, the
     /// routing register and any future single-byte setting.
