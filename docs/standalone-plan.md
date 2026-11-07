@@ -553,6 +553,29 @@ loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
 **⇒ The goal reached: only Quartet Buddy installed, fully working.**
 A reboot is recommended once to flush the kernel-side merge nubs.
 
+### THE GLUE SWEEP (11/7 afternoon): the daemon restored UNDER THE SHIM
+The systematic decode: /Library/Apogee restored from the backup (ONLY the
+debug glue app — no launchd, no messenger/kext), the device replugged,
+the daemon launched under /tmp/usbsniff.dylib, EVERY tree property toggled
+A→B→A via prop_probe's TCP set-op with timestamps (tools/sweep_toggle.py),
+then the daemon stopped GRACEFULLY (pkill -15) and the files deleted again.
+
+**Lessons + finds from round 1:**
+* the tree's var-tags: 1=int32, 3=bool, **4=DOUBLE** — the probe's guessed
+  tag 2 (32-bit float) is SILENTLY IGNORED by the daemon (no USB write,
+  no error). All float properties need the 8-byte double write.
+* `0x44` = the hwin GROUP (ganging) bit: setting hwin0.group writes 0x44
+  on wI=0 AND wI=1 — the PAIR partner is written too (2 channels).
+* the daemon SKIPS USB writes when its cached model already has the value
+  (group=False after True wrote nothing — the model was back to False... or
+  the write landed outside the correlation window — the fixed sweep re-decodes).
+* the fresh-tree correlation: softLimit=True(default) ↔ 0x11=01 everywhere;
+  hwin1 instSettings gain 17.0 ↔ 0x3e=0x11(17) → **0x3e = the INSTRUMENT
+  preamp gain** (0x34 = the MIC gain — the app's two gain stores confirmed).
+* the tree's analogRefLevel did NOT match the device's 0x16 types after the
+  replug — the daemon seeds some properties from its SAVED model, not from
+  the device registers (the model also lives in ApogeeSupport/Settings).
+
 ### INPUT SECTION DECODED + VERIFIED (11/7, the afternoon session)
 The addressing fix that unblocked everything: **per-input registers are
 addressed wValue=0, wIndex=input** (NOT wValue=input+2 — my earlier guess
