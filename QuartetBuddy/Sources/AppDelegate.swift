@@ -211,6 +211,10 @@ enum OutputTarget: String, CaseIterable, Codable {
 
     var gainId: [UInt8] { self == .mainOut ? PathIds.active.hwout0Gain : PathIds.active.hwout1Gain }
     var muteId: [UInt8] { self == .mainOut ? PathIds.active.hwout0Mute : PathIds.active.hwout1Mute }
+
+    /// The vendor-request channel (the wIndex in bRequest 0x33/0x35):
+    /// hwout0 = Main Out → ch0, hwout1 = HP → ch1 (verified by read-backs).
+    var usbChannel: UInt16 { self == .mainOut ? 0 : 1 }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -297,6 +301,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// half of the binding. Our own enforce writes land here too and are
     /// filtered out by the value check.
     ///
+    // MARK: - transport selection (11.6): the glue tree when connected, the
+    // direct-USB vendor requests when the daemon is gone
+
+    /// Try to make sure a direct-USB session exists (opens lazily). The
+    /// open fails while ApogeeGlue holds the device exclusively.
+    private func ensureDirectUSB() -> Bool {
+        if directUSB.opened { return true }
+        let ok = directUSB.open()
+        if ok { QBLog.log("transport: direct-USB session opened") }
+        return ok
+    }
+
+    /// The gain write with the transport selection. Returns the dB applied
+    /// (for the caller's state bookkeeping) or nil when both transports
+    /// are unavailable.
+    @discardableResult
+    private func writeGain(_ target: OutputTarget, _ db: Double) -> Bool {
+        if case .connected = glue.state {
+            glue.setDouble(id: target.gainId, db)
+            return true
+        }
+        guard ensureDirectUSB() else {
+            QBLog.log("transport: gain write unavailable (no glue, no direct session)")
+            return false
+        }
+        // the vendor protocol takes whole |dB|; keep the sign implicit
+        // (the Quartet's fader gains are ≤ 0)
+        let whole = Int(db.rounded())
+        let ok = directUSB.setGain(channel: target.usbChannel, minusDB: whole)
+        if ok { QBLog.log(String(format: "transport: directUSB gain %@ %.0f dB", target.rawValue, db)) }
+        return ok
+    }
+
+    /// The mute write with the transport selection.
+    @discardableResult
+    private func writeMute(_ target: OutputTarget, _ m: Bool) -> Bool {
+        if case .connected = glue.state {
+            glue.setBool(id: target.muteId, m)
+            return true
+        }
+        guard ensureDirectUSB() else { return false }
+        let ok = directUSB.setMute(channel: target.usbChannel, on: m)
+        if ok { QBLog.log("transport: directUSB mute \(target.rawValue) \(m ? "on" : "off")") }
+        return ok
+    }
+
     /// RANGE-VALIDATED: a wedged Apogee driver makes CoreAudio reads return
     /// garbage (a -255 dB sentinel was observed live, Oct 19 2026), which
     /// this path would otherwise echo into the hardware fader in a feedback
@@ -305,8 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func osSliderMoved(to db: Double) {
         guard !PathIdSetupController.shared.sessionActive,
               !QuartetControlController.shared.isLearning else { return }   // a capture is listening
-        guard gainKnown else { return }
-        guard case .connected = glue.state else { return }   // bridge down: let tree re-sync later
+        guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         guard Self.isValidDB(db) else {
             QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
             return
@@ -316,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding
         QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
                          db, target.rawValue, current))
-        glue.setDouble(id: target.gainId, db)
+        guard writeGain(target, db) else { return }
         gain[target] = db
         lastSliderDB = db
         refreshMenu()
@@ -391,13 +440,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func osMuteChanged(to m: Bool) {
         guard !PathIdSetupController.shared.sessionActive,
               !QuartetControlController.shared.isLearning else { return }   // a capture is listening
-        guard gainKnown else { return }
-        guard case .connected = glue.state else { return }
+        guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         let target = selectedOutput
         let current = muted[target] ?? false
         guard m != current else { return }
         QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
-        glue.setBool(id: target.muteId, m)
+        guard writeMute(target, m) else { return }
         muted[target] = m
         refreshMenu()
     }
@@ -1302,11 +1350,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Wire the Quartet Control window's callbacks to this delegate's plumbing.
     private func setupConsoleWindow() {
         let control = QuartetControlController.shared
-        control.onWriteDouble = { [weak self] id, value in self?.glue.setDouble(id: id, value) }
+        control.onWriteDouble = { [weak self] id, value in
+            guard let self else { return }
+            if self.glue.state == .connected { self.glue.setDouble(id: id, value); return }
+            // offline: the known gain path-ids translate to the vendor requests
+            let active = PathIds.active
+            if id == active.hwout0Gain { _ = self.writeGain(.mainOut, value) }
+            else if id == active.hwout1Gain { _ = self.writeGain(.headphones, value) }
+            else { QBLog.log("transport: no direct mapping for double write (glue offline) — dropped") }
+        }
         // (The routing cards' trim knobs are SOFTWARE trim, applied inside
         // InsertServer's chain. The firmware's line-out trim lives in
         // Settings ▸ Quartet ▸ Output Levels, wired in setupSettingsWindow.)
-        control.onWriteBool = { [weak self] id, value in self?.glue.setBool(id: id, value) }
+        control.onWriteBool = { [weak self] id, value in
+            guard let self else { return }
+            if self.glue.state == .connected { self.glue.setBool(id: id, value); return }
+            let active = PathIds.active
+            if id == active.hwout0Mute { _ = self.writeMute(.mainOut, value) }
+            else if id == active.hwout1Mute { _ = self.writeMute(.headphones, value) }
+            else if id == PathIds.dev("identify"), value {
+                _ = self.tryDirectIdentify(on: true)
+            }
+            else { QBLog.log("transport: no direct mapping for bool write (glue offline) — dropped") }
+        }
         control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
@@ -1324,7 +1390,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
-            return self.glue.state == .connected && self.quartetPresence.isConnected
+            if self.glue.state == .connected, self.quartetPresence.isConnected { return true }
+            // offline: the direct-USB session makes the device controllable
+            return self.quartetPresence.isConnected && self.ensureDirectUSB()
         }
         // Auto Gain: the engine writes the preamp through the control
         // window's plumbing and reports its status in the status line

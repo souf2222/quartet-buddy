@@ -496,6 +496,21 @@ vendor requests work immediately. With the probes fired mid-capture:
     IOConnectCallScalarMethod(connect, 7, {0,0xC0,0x29|…, …}, 8, …)               // polls/reads
 ~100 lines of Swift. No Apogee code, no kext, no daemon.
 
+### ✅ 11.6 OFFLINE UI: the control window works with the daemon GONE
+**User-verified end-to-end**: ApogeeGlue stopped → the control window's
+faders/mutes keep working via the direct-USB vendor requests. The
+"Device unavailable — waiting for Apogee Control 2." gating is gone.
+
+The wiring (AppDelegate):
+* `writeGain/writeMute(target, …)` = the transport selection: the glue tree
+  when connected, the direct vendor requests (0x33 gain / 0x35 mute,
+  wIndex = the channel) when the daemon is gone,
+* `isGlueConnected` → the glue connected **OR** the direct session openable
+  (the control window stays live offline),
+* `onWriteDouble/onWriteBool` → the path-id → vendor-command translation for
+  the known properties (the hwout gains/mutes + the identify),
+* the OS slider/mute sync gates relaxed for the direct session.
+
 ### Interposer status: infrastructure proven; the blocker was a race
 **The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
 * learns the static IOUSBLib vtables by QI-ing its own objects (two-level
