@@ -914,7 +914,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         ("Mute", [("Speaker", 0x20002), ("Headphone", 0x20003), ("All Outputs", 0x20004)]),
         ("Dim", [("Speaker", 0x30002), ("Headphone", 0x30003), ("All Outputs", 0x30004)]),
         ("Sum to Mono", [("Speaker", 0x40002), ("Headphone", 0x40003), ("All Outputs", 0x40004)]),
-        ("Toggle", [("Mute Speaker/HP", 0x5000B), ("Speaker Set 1/2", 0x5000C)]),
         ("Clear Meters", [("", 0x60001)]),
         ("Engage Speaker Set", [("Set 1", 0x70005), ("Set 2", 0x70006), ("Set 3", 0x70007)]),
     ]

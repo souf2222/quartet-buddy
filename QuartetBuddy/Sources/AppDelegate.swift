@@ -1299,25 +1299,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
     /// own writes): the tree code (actionType<<16)|param → the device byte
     /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
-    // THE TRUE ENUM — THE 1-BASED SEQUENTIAL (01 = Mute Speaker). BOTH of
-    // the user's live tests confirm it independently:
-    //   • assigning "Mute Speaker" under the 02-map muted the HEADPHONE
-    //     ⇒ the device's 02 = Mute Headphone ✓ (the 1-based's 02!)
-    //   • assigning "Mute Headphone" under the 03-map (the byte 04) did
-    //     DIM SPEAKER ⇒ the device's 04 = Dim Speaker ✓ (the 1-based's 04!)
-    // The enum = the menu order starting at 1; 0x00 = inert (the encoder's
-    // out-of-menu note); 0x11+ = unassigned. The captured payloads read one
-    // lower because the shim dumps the request buffer at method ENTRY while
-    // the daemon's write queue reuses the same stack buffer.
+    // THE TRUE ENUMS — 1-BASED SEQUENTIAL, SEPARATE PER REGISTER (the
+    // user's two tests + the live rule: THE TOGGLES ARE ENCODER-ONLY —
+    // the pads can't do them, so 0x49's menu = the mute/dim/sum/sets
+    // family and 0x4b's = the short mute+toggle list):
+    //  • 0x49 (the pads A/B/C): 01=MuteSpk 02=MuteHP 03=MuteAll
+    //    04=DimSpk 05=DimHP 06=DimAll 07=SumSpk 08=SumHP 09=SumAll
+    //    0a=Clear 0b=Set1 0c=Set2 0d=Set3
+    //  • 0x4b (the encoder push): 01=MuteSpk 02=MuteHP 03=MuteAll
+    //    04=ToggleMuteSpkHP  (the byte 04 = the toggle — the capture!)
     static let padCodeToByte: [Int: UInt8] = [
         0x20002: 0x01, 0x20003: 0x02, 0x20004: 0x03,          // Mute Spk/HP/All
         0x30002: 0x04, 0x30003: 0x05, 0x30004: 0x06,          // Dim Spk/HP/All
         0x40002: 0x07, 0x40003: 0x08, 0x40004: 0x09,          // Sum Spk/HP/All
-        0x5000B: 0x0a, 0x5000C: 0x0b, 0x60001: 0x0c,          // Toggle Mute/Set, Clear
-        0x70005: 0x0d, 0x70006: 0x0e, 0x70007: 0x0f,          // Engage Set 1/2/3
+        0x60001: 0x0a,                                        // Clear Meters
+        0x70005: 0x0b, 0x70006: 0x0c, 0x70007: 0x0d,          // Engage Set 1/2/3
+    ]
+    static let encoderCodeToByte: [Int: UInt8] = [
+        0x20002: 0x01, 0x20003: 0x02, 0x20004: 0x03,          // Mute Spk/HP/All
+        0x5000B: 0x04,                                        // Toggle Mute Spk/HP
     ]
     static let padByteToCode: [UInt8: Int] =
         Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
+    static let encoderByteToCode: [UInt8: Int] =
+        Dictionary(uniqueKeysWithValues: encoderCodeToByte.map { ($1, $0) })
     /// The pad's register: 0x49 wIndex = the pad (0-2); the encoder = 0x4b wI=0.
     static func padRegister(slot: Int) -> (reg: UInt8, index: UInt16) {
         slot < 3 ? (0x49, UInt16(slot)) : (0x4b, 0)
@@ -1808,8 +1813,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return [Int?](repeating: nil, count: 4) }
             return (0..<4).map { slot in
                 let (reg, idx) = Self.padRegister(slot: slot)
+                // the encoder's reverse map = its own short enum
                 return self.directUSB.readInput(input: idx, bRequest: reg)
-                    .flatMap { Self.padByteToCode[$0] }
+                    .flatMap { slot < 3 ? Self.padByteToCode[$0] : Self.encoderByteToCode[$0] }
             }
         }
         settingsWindow.writePadAssignment = { [weak self] slot, value in
@@ -1817,9 +1823,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
             guard slot >= 0, slot < names.count else { return }
             // 11.7: ONE write — the device's flash commits it (the
-            // power-cycle test verified the persistence)
-            guard let byte = Self.padCodeToByte[value] else {
-                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte")
+            // power-cycle test verified the persistence). The encoder's
+            // enum = its own short list (the toggles live there only).
+            let byte = slot < 3 ? Self.padCodeToByte[value]
+                                : Self.encoderCodeToByte[value]
+            guard let byte else {
+                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte for this slot")
                 return
             }
             let (reg, idx) = Self.padRegister(slot: slot)
@@ -1856,9 +1865,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
             guard slot >= 0, slot < names.count else { return }
             // 11.7: ONE write — the device's flash commits it (the
-            // power-cycle test verified the persistence)
-            guard let byte = Self.padCodeToByte[value] else {
-                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte")
+            // power-cycle test verified the persistence). The encoder's
+            // enum = its own short list (the toggles live there only).
+            let byte = slot < 3 ? Self.padCodeToByte[value]
+                                : Self.encoderCodeToByte[value]
+            guard let byte else {
+                QBLog.log("settings: pad code \(String(value, radix: 16)) has no device enum byte for this slot")
                 return
             }
             let (reg, idx) = Self.padRegister(slot: slot)
