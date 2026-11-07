@@ -1290,6 +1290,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The connected Quartet's own node from the latest glue tree (the
     /// node's type IS the serial — see PathIds.dev).
+    /// The device-node flag registers (11/7 sweep): peakHold=0x1f,
+    /// overHold=0x20, lockHomeScreen=0x4a, keyboardVolumeControls=0x51.
+    static func flagRegister(_ name: String) -> UInt8? {
+        switch name {
+        case "peakHold": return 0x1f
+        case "overHold": return 0x20
+        case "lockHomeScreen": return 0x4a
+        case "keyboardVolumeControls": return 0x51
+        default: return nil
+        }
+    }
+
     private func deviceNode() -> [String: Any]? {
         guard let tree = lastTree,
               let serial = GlueClient.quartetSerial(in: tree) else { return nil }
@@ -1584,6 +1596,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow.writeDeviceFlag = { [weak self] name, on in
             self?.setDeviceFlag(name, on: on)
+        }
+        // 11.7: the device-flag registers (sweep-verified) — the offline path
+        settingsWindow.readFlagDirect = { [weak self] name in
+            guard let self, let reg = Self.flagRegister(name) else { return nil }
+            return self.directUSB.readInput(input: 0, bRequest: reg)
+        }
+        settingsWindow.writeFlagDirect = { [weak self] name, on in
+            guard let self, let reg = Self.flagRegister(name) else { return false }
+            let ok = self.directUSB.setInputFlag(reg, input: 0, on: on)
+            QBLog.log("settings: flag \(name) → 0x\(String(reg, radix: 16))=\(on ? 1 : 0) \(ok ? "ok" : "FAILED")")
+            return ok
         }
         // Talkback source picker (Settings ▸ Talkback).
         settingsWindow.readTalkback = { [weak self] in self?.talkbackDescription() }

@@ -33,6 +33,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     ///   by its property name).
     var readDeviceProps: (() -> [String: Any]?)?
     var writeDeviceFlag: ((String, Bool) -> Void)?
+    /// 11.7 offline: the flag's live byte straight from the device
+    /// (peakHold=0x1f, overHold=0x20, lockHomeScreen=0x4a, keyboard=0x51).
+    var readFlagDirect: ((String) -> UInt8?)?
+    /// 11.7 offline: the flag write straight to the device. Returns false
+    /// when the register is unknown — the checkbox then reverts.
+    var writeFlagDirect: ((String, Bool) -> Bool)?
 
     /// Talkback source picker: `readTalkback` → the helper app's subtree
     /// description (sources + selection), `writeTalkbackSource` → the
@@ -1041,6 +1047,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             if let props, let v = GlueClient.intIn(props, key) {
                 check.state = v == 1 ? .on : .off
                 check.isEnabled = true
+            } else if let v = readFlagDirect?(key) {
+                // 11.7 offline: the device answers the flag registers directly
+                check.state = v != 0 ? .on : .off
+                check.isEnabled = true
             } else {
                 check.isEnabled = false
             }
@@ -1052,7 +1062,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     @objc private func deviceFlagChanged(_ sender: NSButton) {
         guard !touchscreenSyncing,
               let key = sender.identifier?.rawValue else { return }
-        writeDeviceFlag?(key, sender.state == .on)
+        if writeDeviceFlag != nil, readFlagDirect?(key) == nil {
+            writeDeviceFlag?(key, sender.state == .on)
+        } else if writeFlagDirect?(key, sender.state == .on) != true {
+            QBLog.log("settings: flag \(key) write failed offline — reverting")
+            sender.state = sender.state == .on ? .off : .on
+        }
     }
 
     // --- Channel Names
