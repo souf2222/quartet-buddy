@@ -1039,13 +1039,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         return nil
     }
 
-    /// A pad action was picked — one setProperty (int32) to
-    /// `dev/appState/actionButtons/<pad>/actionButton`. Verified live:
-    /// the pad performs the new action right away.
+    /// A pad action was picked — 11.7: the touchscreen's MCU re-asserts
+    /// the pad registers every ~5 s from its own store, so vendor writes
+    /// get reverted (the flicker + the snap-back). The pads = the
+    /// touchscreen's territory: the popup reverts to the device's state.
     @objc private func padAssignmentChanged(_ sender: NSPopUpButton) {
         guard !padSyncing, let v = sender.selectedItem?.representedObject as? Int else { return }
         let slot = sender.tag - 3700
         writePadAssignment?(slot, v)
+        // the honest revert: the MCU owns the value — re-sync on the next
+        // refresh (kept enabled so the user sees the live assignments)
         QBLog.log("settings: pad \(slot) → \(String(v, radix: 16))")
     }
 
