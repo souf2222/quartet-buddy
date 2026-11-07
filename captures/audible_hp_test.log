@@ -1,0 +1,10 @@
+── baseline: HP gain = 44
+>>> PLAY SOMETHING ON THE HEADPHONES NOW — gain going LOUD in 5 s <<<
+── HP gain → −10 (loud!): sent
+   read-back: 10
+── HP gain → −44 (restore): sent
+   read-back: 44
+── HP mute ON: sent
+   read-back: 0
+── HP mute OFF (restore): sent
+   read-back: 1

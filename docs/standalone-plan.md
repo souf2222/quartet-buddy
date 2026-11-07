@@ -356,6 +356,20 @@ and add the OUT-request payload dumps at write time.
 * The UI's state model for `.directUSB` = built from the read-backs
   (write → read-back = the authoritative value) + the polls = the liveness.
 
+### ✅ AUDIBLE CONFIRMATION (direct_probe4, user-verified!)
+The headphone output = **ch1** ("HP", the tree names map: hwout0 = Main Out,
+hwout1 = HP, hwout2-7 = the fixed-level Analog Outs 1-6 — no per-channel
+gains on those, hence the tree's gain=None).
+
+The user-verified audible sequence (the daemon stopped, our client only):
+* HP gain −44 → **−10 (LOUD — the user heard it jump!)** → restore −44
+* HP mute on → off — heard ✓
+* The read-backs return the WRITTEN values (the gain byte = |dB| confirmed:
+  write 10 → read 10; write 44 → read 44)
+
+**⇒ The device applies our vendor commands. The protocol is proven end-to-end
+for gain, mute, and identify. 11.5 = COMPLETE.**
+
 ### PROTOCOL DECODED (worker13 + replug + 30 s settle): 16332 frames
 With the device re-enumerated (unplug/replug) and the settle time extended,
 the shim captured the **complete control protocol** (16332 frames,
