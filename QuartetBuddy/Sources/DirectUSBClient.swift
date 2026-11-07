@@ -424,6 +424,28 @@ final class DirectUSBClient {
         }
     }
 
+    /// The mixer channel MUTE — sweep-VERIFIED: 0x4F, wIndex = the channel
+    /// (0…12, 14 = the master), 1 byte 0/1.
+    @discardableResult
+    func setMixerMute(channel: UInt16, mute: Bool) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x4F
+        req.wValue = 0
+        req.wIndex = channel
+        req.wLength = 1
+        let d = NSMutableData(bytes: [mute ? UInt8(1) : UInt8(0)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "mixer mute: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// The mixer channel pan — sweep-VERIFIED: 0x4D, wIndex = the channel,
     /// value = round(pan × 128) (0.5 = center = 0x40).
     @discardableResult

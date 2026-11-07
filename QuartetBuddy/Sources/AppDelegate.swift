@@ -900,11 +900,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Explicit talkback state (hold-to-talk presses this with true/false).
+    /// 11.7 TALKBACK ENGINE — the ApogeeTalkbackHelper's mechanism,
+    /// reimplemented on the decoded mixer registers (the helper's strings:
+    /// Apogee::TalkbackManager + Apogee::MixerSideEffects = the mixer-side
+    /// manipulation; the talkback sources/destinations = the mic channel
+    /// into the mix + the mains' dim). ON = the source's mixer channel
+    /// unmuted + the Main Out dimmed; OFF = the mic muted again + the dim
+    /// released. The mic stays muted in the mix otherwise (the feedback
+    /// guard), which is also why the helper's default model mutes it.
     private func setTalkback(_ on: Bool) {
         guard on != talkbackOn else { return }
-        glue.setBool(id: PathIds.talkbackOn, on)
+        if directUSB.opened {
+            let ch = UInt16(max(0, min(3, talkbackSourceInput)))
+            let unmute = directUSB.setMixerMute(channel: ch, mute: !on)   // on = open the mic
+            let dim = directUSB.setOutputFlag(0x40, output: 0, on: on)    // the mains' dim
+            QBLog.log("talkback: \(on ? "on" : "off") — mic channel \(ch + 1) \(on ? "opened" : "muted") (\(unmute ? "ok" : "FAILED")), mains dim \(on ? "on" : "off") (\(dim ? "ok" : "FAILED"))")
+        } else {
+            glue.setBool(id: PathIds.talkbackOn, on)
+        }
         talkbackOn = on
         refreshMenu()
+    }
+    /// The talkback's source input (0-3) — the Settings' picker stores it;
+    /// default = input 1.
+    var talkbackSourceInput: Int {
+        get { UserDefaults.standard.integer(forKey: "talkback.sourceInput") }
+        set { UserDefaults.standard.set(newValue, forKey: "talkback.sourceInput") }
     }
 
     /// ± dB adjustment on one output (hardware fader, range-clamped).
