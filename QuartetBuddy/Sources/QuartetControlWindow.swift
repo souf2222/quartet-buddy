@@ -3087,6 +3087,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// 11.6 offline state: a direct device read for an input —
     /// (input index, bRequest) → the 1-byte value (nil = the read failed).
     var readInputDirect: ((Int, UInt8) -> UInt8?)?
+    /// 11.7: the 7-byte status poll (the change-gate's cheap read).
+    var readStatusDirect: (() -> [UInt8]?)?
     /// True when the device is owned by the app's own USB session (the glue
     /// offline) — the controls work without captured path-ids then.
     var isDirectMode: (() -> Bool)?
@@ -3172,9 +3174,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// (0x33 gain, 0x35 mute, 0x40 dim, 0x46 sum ×2 monitors). The reads run
     /// CONCURRENTLY (~0.3 s total instead of ~2 s sequential) so hardware
     /// changes track nearly live.
-    private func readInputsFromDevice() {
+    /// The last 0x29 status bytes — the change-gate: identical ⇒ the sweep
+    /// is skipped entirely (3 tiny reads/s idle instead of 84).
+    private var lastStatusBytes: [UInt8] = []
+
+    private func readInputsFromDevice(force: Bool = false) {
         guard readInputDirect != nil else { return }
         deviceReadQueue.async { [weak self] in
+        if !force {
+            // the 0x29 poll = ONE 7-byte read: if the device reports no
+            // change, the 28-register sweep is skipped
+            if let st = self?.readStatusDirect?(), st.count == 7 {
+                if st == self?.lastStatusBytes {
+                    return   // nothing changed — idle
+                }
+                self?.lastStatusBytes = st
+            }
+        }
         var reads = [(Int, UInt8)]()
         for i in 0..<4 {
             reads.append((i, 0x34)); reads.append((i, 0x16)); reads.append((i, 0x15))
@@ -3435,13 +3451,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // the input state comes from the device's read-backs
         let inputsUnknown = inputs.allSatisfy { $0.micGain == nil && $0.refLevel == nil }
         if inputsUnknown, readInputDirect != nil {
-            readInputsFromDevice()
+            readInputsFromDevice(force: true)
         }
         // 11.6: while the window is visible in direct mode, follow the
         // HARDWARE — front-panel gain/type changes flow back on this cadence
         let directMode = connected && (isDirectMode?() ?? false)
         if directMode, readInputDirect != nil, devicePollTimer == nil {
-            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 guard let self, self.window?.isVisible == true else { return }
                 self.readInputsFromDevice()
             }

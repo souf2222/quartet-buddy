@@ -1534,6 +1534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return 0 }
             return self.selectedOutput == .headphones ? 1 : 0
         }
+        control.readStatusDirect = { [weak self] in self?.directUSB.readStatus() }
         control.readInputDirect = { [weak self] i, bReq in
             // i ≥ 100 = the monitor slot (i-100); below = the input index
             let idx = i >= 100 ? UInt16(i - 100) : UInt16(i)

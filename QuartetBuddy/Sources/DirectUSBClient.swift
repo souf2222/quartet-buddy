@@ -184,6 +184,22 @@ final class DirectUSBClient {
         switch b { case 0: return 2; case 1: return 3; case 2: return 1; case 3: return 4; default: return 1 }
     }
 
+    /// The 7-byte status poll (bRequest 0x29, wIndex = 0) — the device's
+    /// change broadcast; byte3 flips on activity (the captures show
+    /// 0x40 ↔ 0x00). The change-gate reads ONLY this when idle.
+    func readStatus() -> [UInt8]? {
+        guard let dev = device else { return nil }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0xC0
+        req.bRequest = 0x29
+        req.wLength = 7
+        let d = NSMutableData(data: Data(repeating: 0, count: 7))
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.3)
+            return (d as Data).map { $0 }
+        } catch { return nil }
+    }
+
     /// A raw 1-byte register write — the general form of every decoded
     /// register (bRequest, wIndex, one byte). Used by the pad enum, the
     /// routing register and any future single-byte setting.
