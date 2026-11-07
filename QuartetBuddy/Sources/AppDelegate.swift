@@ -1433,6 +1433,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// itself as one bogus "source" (its `numberOfInputChannels` absent →
     /// always 1 channel → grayed channel picker).
     func talkbackDescription() -> TalkbackSourceDescription? {
+        // 11.7 offline: the app's OWN model — the source = this Quartet,
+        // 4 analog inputs; the selection = the stored engine input. (The
+        // tree's Talkback node = the daemon's/helpers' — gone offline.)
+        if lastTree == nil {
+            let saved = talkbackSourceInput
+            return TalkbackSourceDescription(sources: [("Quartet", 4)],
+                                             selectedDevice: "Quartet",
+                                             selectedChannel: saved)
+        }
         guard let tree = lastTree,
               let talkback = GlueClient.findNode(in: tree, type: "Talkback"),
               let props = talkback["props"] as? [String: Any] else { return nil }
@@ -1464,6 +1473,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// live values ("Quartet" + channel 0); the sources' own `active`
     /// flags are presence bits — never written.
     func selectTalkbackSource(device: String, channel: Int) {
+        // 11.7 offline: the app's engine stores the source INPUT directly
+        if lastTree == nil {
+            talkbackSourceInput = max(0, min(3, channel))
+            QBLog.log("talkback: source '\(device)' channel \(channel) stored (the engine's input \(talkbackSourceInput + 1))")
+            return
+        }
         let devId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceDevice")
         let chId = PathIds.app("Apogee Talkback helper/Talkback/selectedTalkbackSourceChannel")
         QBLog.log("talkback: source '\(device)' channel \(channel)")
