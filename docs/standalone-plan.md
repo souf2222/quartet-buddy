@@ -553,6 +553,38 @@ loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
 **⇒ The goal reached: only Quartet Buddy installed, fully working.**
 A reboot is recommended once to flush the kernel-side merge nubs.
 
+### ROUND 2 (11/7 evening): the pads COMPLETE, the routing partially, the talkback placed
+**The pad action enum — COMPLETE (0x49 wI=0-2 pads A-C, 0x4b wI=0 encoder):**
+`0x20002→02` MuteSpk, `0x20003→03` MuteHP, `0x20004→04` MuteAll,
+`0x30002→05` DimSpk, `0x30003→06` DimHP, `0x30004→07` DimAll,
+`0x40002→08` SumSpk, `0x40003→09` SumHP, `0x40004→0e` SumAll,
+`0x5000C→0a` ToggleSpkSet, `0x60001→0b` ClearMeters,
+`0x70005→0c` EngageSet1, `0x70006→0d` EngageSet2,
+`0x5000B→0f` ToggleMuteSpkHP, `0x70007→(03?!` EngageSet3 — dubious, likely
+absent from the device enum). The tree codes = (actionType<<16)|param.
+
+**The output routing:** the tree codes = `0x1000000N` = USB playback ch N
+(the defaults prove it); the device register = **0x53**, wIndex = out−2
+(hwout2→0 ✓, hwout3→1 ✓, hwout5→2 observed); the HP (hwout1) writes land
+on wI=3 — the monitor space differs. The value bytes for the ANALOG outs
+(clean R4 sequence, dedupe-aware): **PB1-2→01, PB3-4→02, PB5-6→03**;
+PB7-8→00 (rejected/absent for the analog outs?!); the mixer-family codes
+(0x11…0x1A) all collapse to 05 in the writes — the tree accepts everything
+but the device translation only covers some. The HP's own code
+0x18000026 (live) vs 0x18000020 (the backup) = the user changed the HP
+source once; 0x18000026 → 00 in one probe, 05 in another — the queue lag
+(dedupe + ~9 s flush) corrupts single-sample attribution.
+**STATUS: the playback sources for the analog outs = shippable; the mixer
+source codes + the HP monitor space = need ONE more session with a
+write→read-back protocol (the shim's POLL lines carry the device's true
+state; the daemon never reads 0x53 back itself — the app must read it
+directly after each write).**
+
+**The talkback:** the app-scoped path (/Apps/Apogee Talkback helper/…)
+produced ZERO USB writes — the feature lived in the deleted
+ApogeeTalkbackHelper. Revival = reimplement in the app with the decoded
+mixer registers (dim the mains + route the talkback mic into the HP path).
+
 ### ⭐ THE COMPLETE REGISTER MAP (11/7 sweep — decoded from the daemon's own USB writes)
 The sweep toggled every tree property A→B→A while the shim captured the
 wire; the timeline correlation (write ≈ mark−1.5…−3 s, lazy queue flush)
