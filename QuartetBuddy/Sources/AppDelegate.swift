@@ -579,7 +579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the first write. When ApogeeGlue is running it wins the
                 // exclusive open and the glue path stays primary.
                 DispatchQueue.main.async { [weak self] in
-                    _ = self?.directUSB.open()
+                    _ = self?.ensureDirectUSB()   // opens + re-pushes the saved routing
                     self?.refreshMenu()
                 }
             }
