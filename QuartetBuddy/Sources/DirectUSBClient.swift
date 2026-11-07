@@ -208,9 +208,17 @@ final class DirectUSBClient {
         let ctx = Unmanaged.passRetained(box)
         IOHIDManagerRegisterInputReportCallback(
             mgr,
-            { ctx, _, _, _, _, _, _ in
+            { ctx, _, _, reportType, reportID, report, reportLen in
                 guard let ctx else { return }
+                // (ctx, result, sender, type, reportID, report*, reportLength)
                 let box = Unmanaged<NSMutableArray>.fromOpaque(ctx).takeUnretainedValue()
+                // 11.7 decode session: the report's bytes → the log (the
+                // encoder/touch event format); the callback fires too
+                // the report = UnsafeMutablePointer<UInt8>, the len = CFIndex
+                let bytes = (0..<min(Int(reportLen), 12)).map {
+                    String(format: "%02x", report[$0])
+                }.joined(separator: " ")
+                QBLog.log("hid: type=\(reportType.rawValue) id=\(reportID) len=\(reportLen) [\(bytes)]")
                 if let cb = box.firstObject as? () -> Void { cb() }
             },
             ctx.toOpaque())
