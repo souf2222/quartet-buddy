@@ -553,6 +553,41 @@ loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
 **⇒ The goal reached: only Quartet Buddy installed, fully working.**
 A reboot is recommended once to flush the kernel-side merge nubs.
 
+### INPUT SECTION DECODED + VERIFIED (11/7, the afternoon session)
+The addressing fix that unblocked everything: **per-input registers are
+addressed wValue=0, wIndex=input** (NOT wValue=input+2 — my earlier guess
+silently failed; reads returned nil → the UI stayed empty).
+
+**The verified input register map (live write/read-back on 11/7):**
+* `0x34` wIndex=input, 1 byte = **the per-INPUT preamp GAIN, |dB| (0…75)**
+  — NOT the mixer's dB+48 (the preamp goes UP; in0 read 0x21=33 dB,
+  in1 0x2b=43 dB — classic mic gains; unused inputs read 0x00 = 0 dB).
+  Write 0x30/0x40 → read-back 0x30/0x40 ✓. Sibling of the output's 0x33.
+* `0x36` wIndex=input, 1 byte = **the input TYPE**: writable (0↔1 verified);
+  all-Mic inputs read 0 → hypothesis: 0=Mic, 1=Line, 2=Instrument
+  (app enum 1=Mic 2=+4 3=−10 4=Inst; +4/−10 collapse to Line=1; the sub-ref
+  lives in another register). PENDING: touchscreen type-change diff.
+* `0x11/0x13/0x15/0x16/0x3e/0x44` per input: read OK, semantics unknown
+  (all in0-in3 currently 11:01 13:00 15:00 16:02 3e:00 44:00).
+* `0x10` wIndex=block(0-3), 28 bytes = `12×(gain,0xA1) + 4B tail` — READABLE
+  (my earlier belief: write-only, wrong). All 4 blocks currently
+  `16 a1`×12 + tail `20000000`/`00002000` alternating. 12 slots = the 12
+  input channels (4 analog + 8 ADAT)? Semantics TBD — not needed for the
+  preamps (0x34 owns those). The tail alternates per block parity.
+* `0x14` (60 B, polled ×1994 in the capture) = all zeros in practice —
+  a change-event/meter block, not state.
+* `0x29` 7 B poll: `02 01 00 41 00 00 00`; `0x31` 8 B = the serial block.
+* `0x28` wI=0..2, 3 B; `0x49` wI=0..2 1 B; `0x18` per out 0-5 (2/3 = c8,
+  4/5 = 0a) — unknown, likely LED/touchscreen config.
+* The full read surface (capture): per-input sweep {0x11,0x13,0x15,0x16,
+  0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
+  matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
+
+**Wired into the app (built 12:54):** setInputGain→0x34, setInputType→0x36
+(+ the app↔device enum map in DirectUSBClient), readInput addressing fix,
+the read sweep = {0x34,0x36}×4, the type popup's offline fallback
+(onDirectInputType), the onWriteInt→0x36 translation for captured ids.
+
 ### 11.6 status after the uninstall (the honest ledger)
 **Working offline (user-verified):**
 * the menubar icon (white, no flicker) + "Quartet Connected (direct USB)"

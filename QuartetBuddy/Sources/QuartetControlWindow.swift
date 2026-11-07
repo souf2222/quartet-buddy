@@ -3087,6 +3087,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// 11.6 offline state: a direct device read for an input —
     /// (input index, bRequest) → the 1-byte value (nil = the read failed).
     var readInputDirect: ((Int, UInt8) -> UInt8?)?
+    /// 11.6 offline: write an input's preamp gain straight to the device
+    /// (bRequest 0x34, wIndex = the input, |dB| byte). Returns false on failure.
+    var onDirectInputGain: ((Int, Double) -> Bool)?
+    /// 11.6 offline: write an input's mode (the app enum 1/2/3/4) straight
+    /// to the device (bRequest 0x36, wIndex = the input).
+    var onDirectInputType: ((Int, Int32) -> Bool)?
     /// Whether a read-back refresh is in flight (prevents the recursion).
     private var deviceRefreshInFlight = false
     /// The last tree the app received (seeds the window with real values).
@@ -3152,8 +3158,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         for (i, bReq, v) in values {
             inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
             switch bReq {
-            case 0x10: inputs[i].micGain = Double(Int(v) - 48)   // clamp(dB+48) → dB
-            case 0x36: inputs[i].refLevel = Int(v)               // the type/level's raw
+            case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
+            case 0x36: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
             default: break
             }
         }
@@ -3354,10 +3360,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // (rebuilds only when the advertised list changes)
         refreshSampleRatePopup()
         let connected = isGlueConnected?() ?? false
-        // 11.6 offline: the input state comes from the device's read-backs
-        if !connected && !deviceRefreshInFlight, readInputDirect != nil {
+        // 11.6: when the tree never arrived (the daemon gone, no snapshot),
+        // the input state comes from the device's read-backs
+        let inputsUnknown = inputs.allSatisfy { $0.micGain == nil && $0.refLevel == nil }
+        if inputsUnknown && !deviceRefreshInFlight, readInputDirect != nil {
             deviceRefreshInFlight = true
-            let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x10), (i, 0x36)] }
+            let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36)] }
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 var values: [(Int, UInt8, UInt8)] = []
                 for (i, bReq) in reads {
@@ -5825,11 +5833,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     @objc private func levelItemChosen(_ item: NSMenuItem) {
         let i = item.tag - 100
         guard !suppressActions, !isLearning, !AutoGainEngine.shared.isRunning,
-              let v = (item.representedObject as? NSNumber)?.intValue,
-              let id = PathIds.active.hwinRefLevel[i] else { return refresh() }
+              let v = (item.representedObject as? NSNumber)?.intValue else { return refresh() }
         guard (1...4).contains(v) else { return refresh() }
-        inputs[i].refLevel = v
-        onWriteInt?(id, Int32(v))
+        if let id = PathIds.active.hwinRefLevel[i], !id.isEmpty {
+            inputs[i].refLevel = v
+            onWriteInt?(id, Int32(v))
+        } else {
+            // 11.6 offline: no captured id — write the type straight to the device
+            guard onDirectInputType?(i, Int32(v)) == true else { return refresh() }
+            inputs[i].refLevel = v
+        }
         refresh()
     }
 
@@ -5876,6 +5889,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let t = PathIds.active
         let rl = inputs[i].refLevel
         let activeId = rl == 4 ? t.hwinInstGain[i] : t.hwinMicGain[i]
+        if activeId == nil || activeId?.isEmpty == true {
+            // 11.6 offline: no captured id — write straight to the device
+            guard onDirectInputGain?(i, v) == true else { return }
+            if rl == 4 { inputs[i].instGain = v } else { inputs[i].micGain = v }
+            return
+        }
         guard let id = activeId else { return }
         onWriteDouble?(id, v)
         if rl == 4 { inputs[i].instGain = v } else { inputs[i].micGain = v }

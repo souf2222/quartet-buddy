@@ -154,10 +154,13 @@ final class DirectUSBClient {
         guard let dev = device else { return false }
         var req = IOUSBDeviceRequest()
         req.bmRequestType = 0x40
-        req.bRequest = 0x10
-        req.wValue = input + 2          // the address: input index + 2
+        req.bRequest = 0x34             // the per-INPUT gain (sibling of the output's 0x33)
+        req.wValue = 0
+        req.wIndex = input
         req.wLength = 1
-        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
+        // the preamp range is 0…75 dB UP, so the byte = |dB| (NOT the mixer's
+        // dB+48): live-verified 11/7 — in0 read 0x21 = 33 dB, in1 0x2b = 43 dB
+        let clamped = Swift.max(0, Swift.min(75, Int(db.rounded())))
         let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
         do {
             try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
@@ -169,16 +172,25 @@ final class DirectUSBClient {
         }
     }
 
-    /// An input's type (bRequest 0x36, the same address scheme): the type
-    /// byte's semantics = the device's own (mic = 0, line = 1, per the
-    /// tree's enum).
+    /// The app's input-mode enum (1=Mic 2=+4dBu 3=−10dBV 4=Instrument) →
+    /// the device's 0x36 byte (hypothesis 11/7: 0=Mic 1=Line 2=Instrument —
+    /// all-Mic inputs read 0; +4/−10 collapse to Line, the ref lives elsewhere).
+    static func deviceByte(forAppMode app: Int) -> UInt8 {
+        switch app { case 1: return 0; case 2, 3: return 1; case 4: return 2; default: return 0 }
+    }
+    static func appMode(forDeviceByte b: UInt8) -> Int {
+        switch b { case 0: return 1; case 1: return 2; case 2: return 4; default: return 1 }
+    }
+
+    /// An input's type (bRequest 0x36, wIndex = the input): 1 byte.
     @discardableResult
     func setInputType(input: UInt16, raw: UInt8) -> Bool {
         guard let dev = device else { return false }
         var req = IOUSBDeviceRequest()
         req.bmRequestType = 0x40
         req.bRequest = 0x36
-        req.wValue = input + 2
+        req.wValue = 0
+        req.wIndex = input
         req.wLength = 1
         let d = NSMutableData(bytes: [raw], length: 1)
         do {
@@ -191,13 +203,15 @@ final class DirectUSBClient {
         }
     }
 
-    /// The read-back for an input property (bmReq 0xC0, 1-byte response).
+    /// The read-back for an input property (bmReq 0xC0, 1-byte response;
+    /// wValue = 0, wIndex = the input — verified 11/7 with 0x34/0x36).
     func readInput(input: UInt16, bRequest: UInt8) -> UInt8? {
         guard let dev = device else { return nil }
         var req = IOUSBDeviceRequest()
         req.bmRequestType = 0xC0
         req.bRequest = bRequest
-        req.wValue = input + 2
+        req.wValue = 0
+        req.wIndex = input
         req.wLength = 1
         let d = NSMutableData(data: Data(repeating: 0, count: 1))
         do {

@@ -1466,7 +1466,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             QBLog.log("transport: no direct mapping for bool write (glue offline) — dropped")
         }
-        control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
+        control.onWriteInt = { [weak self] id, value in
+            guard let self else { return }
+            // offline: the captured refLevel ids translate to the 0x36 writes
+            if self.glue.state != .connected {
+                for (input, ids) in PathIds.active.hwinRefLevel where ids == id {
+                    _ = self.directUSB.setInputType(input: UInt16(input),
+                                                    raw: DirectUSBClient.deviceByte(forAppMode: Int(value)))
+                    return
+                }
+            }
+            self.glue.setInt(id: id, value)
+        }
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
@@ -1483,6 +1494,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control.readInputDirect = { [weak self] i, bReq in
             self?.directUSB.readInput(input: UInt16(i), bRequest: bReq)
+        }
+        control.onDirectInputGain = { [weak self] i, v in
+            guard let self else { return false }
+            if self.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {
+                self.glue.setDouble(id: id, v); return true
+            }
+            let ok = self.directUSB.setInputGain(input: UInt16(i), db: v)
+            if !ok { QBLog.log("directUSB: input gain write failed: \(self.directUSB.lastError ?? "?")") }
+            return ok
+        }
+        control.onDirectInputType = { [weak self] i, v in
+            guard let self else { return false }
+            let raw = DirectUSBClient.deviceByte(forAppMode: Int(v))
+            let ok = self.directUSB.setInputType(input: UInt16(i), raw: raw)
+            QBLog.log("transport: directUSB input \(i + 1) mode \(v) → 0x36=\(raw) \(ok ? "ok" : "FAILED")")
+            return ok
         }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
