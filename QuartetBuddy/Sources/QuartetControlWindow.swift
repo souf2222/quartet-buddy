@@ -3100,8 +3100,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// 11.6 offline: write an input's mode (the app enum 1/2/3/4) straight
     /// to the device (bRequest 0x36, wIndex = the input).
     var onDirectInputType: ((Int, Int32) -> Bool)?
-    /// Whether a read-back refresh is in flight (prevents the recursion).
-    private var deviceRefreshInFlight = false
+    /// 11.7 CRASH FIX: ONE serial queue owns ALL device reads — the timer
+    /// tick, the empty-state path and any other sweep land here and run
+    /// strictly one at a time. (The old in-flight flag was itself read from
+    /// multiple threads = the two sweeps could still overlap = the
+    /// concurrent USB = EXC_BREAKPOINT on the device object.)
+    private let deviceReadQueue = DispatchQueue(label: "qb.deviceRead", qos: .utility)
     /// 11.6: the hardware is the truth in direct mode — re-poll the input
     /// registers on this cadence so front-panel changes (the encoder, the
     /// touchscreen) show up in the UI.
@@ -3169,8 +3173,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// CONCURRENTLY (~0.3 s total instead of ~2 s sequential) so hardware
     /// changes track nearly live.
     private func readInputsFromDevice() {
-        guard !deviceRefreshInFlight, readInputDirect != nil else { return }
-        deviceRefreshInFlight = true
+        guard readInputDirect != nil else { return }
+        deviceReadQueue.async { [weak self] in
         var reads = [(Int, UInt8)]()
         for i in 0..<4 {
             reads.append((i, 0x34)); reads.append((i, 0x16)); reads.append((i, 0x15))
@@ -3192,12 +3196,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 }
             }
             DispatchQueue.main.async { [weak self] in
-                self?.deviceRefreshInFlight = false
                 self?.applyInputReadBacks(values)
                 self?.suppressActions = true
                 self?.refresh()
                 self?.suppressActions = false
             }
+        }
         }
     }
 
@@ -3205,7 +3209,6 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// (the offline UI's truth = the device itself).
     private func applyInputReadBacks(_ values: [(Int, UInt8, UInt8)]) {
         for (i, bReq, v) in values {
-            inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
             if i >= 100 {
                 // 11.7: the OUTPUT registers (i-100 = the monitor slot 0/1)
                 let o = i - 100
@@ -3220,6 +3223,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 }
                 continue
             }
+            guard i < inputs.count else { continue }
+            inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
             switch bReq {
             case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
             case 0x16: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
@@ -3429,7 +3434,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // 11.6: when the tree never arrived (the daemon gone, no snapshot),
         // the input state comes from the device's read-backs
         let inputsUnknown = inputs.allSatisfy { $0.micGain == nil && $0.refLevel == nil }
-        if inputsUnknown && !deviceRefreshInFlight, readInputDirect != nil {
+        if inputsUnknown, readInputDirect != nil {
             readInputsFromDevice()
         }
         // 11.6: while the window is visible in direct mode, follow the
@@ -3437,7 +3442,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let directMode = connected && (isDirectMode?() ?? false)
         if directMode, readInputDirect != nil, devicePollTimer == nil {
             devicePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                guard let self, self.window?.isVisible == true, !self.deviceRefreshInFlight else { return }
+                guard let self, self.window?.isVisible == true else { return }
                 self.readInputsFromDevice()
             }
         } else if !directMode, let t = devicePollTimer {
