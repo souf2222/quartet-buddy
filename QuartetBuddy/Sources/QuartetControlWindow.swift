@@ -3166,7 +3166,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func readInputsFromDevice() {
         guard !deviceRefreshInFlight, readInputDirect != nil else { return }
         deviceRefreshInFlight = true
-        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36), (i, 0x15)] }
+        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x16), (i, 0x15)] }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var values: [(Int, UInt8, UInt8)] = []
             for (i, bReq) in reads {
@@ -3189,7 +3189,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
             switch bReq {
             case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
-            case 0x36: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
+            case 0x16: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
             case 0x15: inputs[i].phantom = (v != 0)              // +48V (touchscreen-verified)
             default: break
             }

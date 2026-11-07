@@ -583,6 +583,22 @@ silently failed; reads returned nil → the UI stayed empty).
   0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
   matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
 
+**0x16 = the INPUT TYPE — TOUCHSCREEN-VERIFIED (11/7, the decisive diff):**
+the user CAN switch the input type on the device's touchscreen (unlike
+SL/Ø). After they switched input 4 to Instrument MANUALLY, the diff vs
+the known state showed ONE register move: in3's 0x16 02→03. All-Mic
+inputs read 0x16=02. So: 02=Mic, 03=Instrument, Line=the pending third
+value (the user is switching in4 to Line for the next diff). The app now
+reads AND writes 0x16 (map: 1(Mic)→2, 4(Inst)→3, Line→pending-no-write).
+Also captured in the same diff: the user's hardware gain changes
+(in0/in1 0x34 → 00) flowed into the registers — the device register is
+the single source of truth.
+
+**0x36 = NOT the type — writable-but-unknown (parked):** the setter at
+0x100009b08 serves two tree properties → 0/1, bails otherwise. My 0x36=1
+write on in4 stuck (read-back verified) but the touchscreen's own type
+switch overrode/reverted it to 0. Function TBD (hpf/pad candidates).
+
 **0x36 = the MIC/INSTRUMENT preamp selector (11/7, setter decode + live):**
 the setter at 0x100009b08 compares the incoming property value against
 TWO runtime globals (two tree property-ids) and emits ONLY 0 or 1 —

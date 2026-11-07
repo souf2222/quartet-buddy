@@ -175,18 +175,15 @@ final class DirectUSBClient {
     }
 
     /// The app's input-mode enum (1=Mic 2=+4dBu 3=−10dBV 4=Instrument) →
-    /// the device's 0x36 byte. DECODED 11/7 from the setter at 0x100009b08:
-    /// the register serves TWO tree properties (two runtime path-ids) —
-    /// one writes 0, the other writes 1, EVERYTHING ELSE IS IGNORED (the
-    /// setter bails) — that's why "mode 4 → 0x36=2" did nothing. All-Mic
-    /// inputs read 0 ⇒ 0=Mic, 1=Instrument. The Line modes (+4/−10) don't
-    /// touch 0x36 at all (the daemon's line path is a different setter —
-    /// pending). For Line we leave the register alone and return true.
+    /// the device's 0x16 TYPE byte. TOUCHSCREEN-VERIFIED 11/7: 02=Mic,
+    /// 03=Instrument (the user's hardware switch flipped ONLY 0x16 02→03).
+    /// Line (+4/−10) = the pending third value — nil until decoded, the
+    /// write is skipped then.
     static func deviceByte(forAppMode app: Int) -> UInt8? {
-        switch app { case 1: return 0; case 4: return 1; default: return nil } // nil = don't write
+        switch app { case 1: return 2; case 4: return 3; default: return nil }
     }
     static func appMode(forDeviceByte b: UInt8) -> Int {
-        switch b { case 0: return 1; case 1: return 4; default: return 1 }
+        switch b { case 2: return 1; case 3: return 4; default: return 1 }
     }
 
     /// +48V phantom power per input (bRequest 0x15, wIndex = the input) —
@@ -212,13 +209,17 @@ final class DirectUSBClient {
         }
     }
 
-    /// An input's type (bRequest 0x36, wIndex = the input): 1 byte.
+    /// An input's TYPE — bRequest 0x16, wIndex = the input, 1 byte.
+    /// DECODED 11/7 via the user's touchscreen switch: all-Mic inputs read
+    /// 0x16=02; switching input 4 to Instrument on the hardware flipped
+    /// ONLY in3's 0x16 → 03. (0x36 is writable but NOT the type — parked.)
+    /// The Line value is pending the touchscreen's Line switch diff.
     @discardableResult
     func setInputType(input: UInt16, raw: UInt8) -> Bool {
         guard let dev = device else { return false }
         var req = IOUSBDeviceRequest()
         req.bmRequestType = 0x40
-        req.bRequest = 0x36
+        req.bRequest = 0x16
         req.wValue = 0
         req.wIndex = input
         req.wLength = 1
