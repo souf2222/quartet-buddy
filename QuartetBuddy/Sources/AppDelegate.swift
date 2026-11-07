@@ -1298,13 +1298,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
     /// own writes): the tree code (actionType<<16)|param → the device byte
     /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
+    // CORRECTED per the user's dropdown order (the device enum = SEQUENTIAL,
+    // matching Control 2's menu): the earlier capture's tail values were the
+    // flush-queue reordering — the user's scramble proved it.
     static let padCodeToByte: [Int: UInt8] = [
         0x20002: 0x02, 0x20003: 0x03, 0x20004: 0x04,          // Mute Spk/HP/All
         0x30002: 0x05, 0x30003: 0x06, 0x30004: 0x07,          // Dim Spk/HP/All
-        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0e,          // Sum Spk/HP/All
-        0x5000C: 0x0a, 0x60001: 0x0b,                          // ToggleSet, ClearMeters
-        0x70005: 0x0c, 0x70006: 0x0d,                          // Engage Set 1/2
-        0x5000B: 0x0f,                                          // Toggle Mute Spk/HP
+        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0a,          // Sum Spk/HP/All
+        0x5000B: 0x0b, 0x5000C: 0x0c, 0x60001: 0x0d,          // Toggle Mute, Toggle Set, Clear
+        0x70005: 0x0e, 0x70006: 0x0f, 0x70007: 0x10,          // Engage Set 1/2/3
     ]
     static let padByteToCode: [UInt8: Int] =
         Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
@@ -1801,6 +1803,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     GlueClient.intProp($0, "actionButton")
                 }
             }
+        }
+        // 11.7: HARDWARE OUTPUT ROUTING — the 0x53 register, the 0-based
+        // source index (0=PB1-2 … 3=PB7-8, 4=Mixer1, 5=Mixer2). The HP's
+        // slot = 3 in the monitor space (the daemon's own writes); the
+        // analog pairs = out−2 on BOTH strips. The state = the app's saved
+        // value (the device's 0x53 read-back doesn't parse as the index).
+        settingsWindow.readHwoutRouting = { [weak self] in
+            guard let self else { return [] }
+            return (0..<4).map { slot in
+                let v = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int
+                return v ?? (slot == 0 ? nil : slot - 1)   // the analog pairs' default = their own PB pair
+            }
+        }
+        settingsWindow.writeHwoutRouting = { [weak self] slot, source in
+            guard let self else { return }
+            let indexes: [UInt16] = slot == 0 ? [3]           // the HP: the monitor slot
+                : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)] // the pair's two strips
+            for wI in indexes {
+                let ok = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+                QBLog.log("settings: routing slot \(slot) → 0x53 wI=\(wI) =\(source) \(ok ? "ok" : "FAILED")")
+            }
+            UserDefaults.standard.set(source, forKey: "hwout.route.\(slot)")
         }
         settingsWindow.writePadAssignment = { [weak self] slot, value in
             guard let self else { return }

@@ -1198,6 +1198,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     var readHwoutTrims: (() -> [(name: String, trim: Double?)])?
     var writeHwoutTrim: ((Int, Double) -> Void)?
 
+    // --- Hardware output routing (11.7): the 0x53 register — each mono
+    // output's source = the 0-based pair index: 0=Playback 1-2, 1=PB 3-4,
+    // 2=PB 5-6, 3=PB 7-8, 4=Mixer 1, 5=Mixer 2. The HP's slot = 3 in the
+    // monitor space (the daemon's own writes); the analog pairs = out−2.
+    static let routingSources = ["Playback 1-2", "Playback 3-4", "Playback 5-6",
+                                 "Playback 7-8", "Mixer 1", "Mixer 2"]
+    var readHwoutRouting: (() -> [Int?])?
+    var writeHwoutRouting: ((Int, Int) -> Void)?
+    private var routingPopups: [NSPopUpButton] = []
+    private var routingSuppress = false
+
     private var lineOutPopups: [NSPopUpButton] = []
     private var lineOutLabels: [NSTextField] = []
     private var lineOutSuppress = false
@@ -1240,6 +1251,40 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         // --- Line-output trim (firmware) — settings-side hardware trim
 
         buildHwoutTrims(stack)
+
+        // --- Hardware output routing — the DAC's source per output pair
+        SettingsSection.add(to: stack, "Hardware output routing")
+        let rows = [("Headphones", 0), ("Analog Out 1 / 2", 1),
+                    ("Analog Out 3 / 4", 2), ("Analog Out 5 / 6", 3)]
+        for (title, slot) in rows {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 13)
+            label.setContentCompressionResistancePriority(
+                NSLayoutConstraint.Priority(751), for: .horizontal)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            let wrap = NSStackView()
+            wrap.orientation = .horizontal
+            wrap.spacing = 8
+            wrap.addArrangedSubview(label)
+            let p = NSPopUpButton()
+            p.translatesAutoresizingMaskIntoConstraints = false
+            for (i, name) in Self.routingSources.enumerated() {
+                p.addItem(withTitle: name)
+                p.lastItem?.representedObject = i
+            }
+            p.action = #selector(routingChanged(_:))
+            p.target = self
+            p.tag = 3800 + slot
+            wrap.addArrangedSubview(p)
+            routingPopups.append(p)
+            stack.addArrangedSubview(wrap)
+            NSLayoutConstraint.activate([
+                label.widthAnchor.constraint(equalToConstant: SettingsLayout.labelColumn),
+                p.widthAnchor.constraint(equalToConstant: 150),
+            ])
+        }
+        stack.addArrangedSubview(SettingsHelpText.label(
+            "What each hardware output pair plays: the USB playback pairs\nor one of the two hardware mixers. Written straight to the\nunit (register 0x53); Mixer 1/2 sources are new-decode — verify\nby ear and say the word if a mixer routes wrong."))
     }
 
     /// Line-output TRIM (firmware): the hardware strips' `trim` property,
@@ -1371,6 +1416,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         QBLog.log("settings: line out \(i + 1) level → \(v == 3 ? "−10 dBV" : "+4 dBu")")
     }
 
+    /// A routing source picked — both strips of the pair (the HP = one).
+    @objc private func routingChanged(_ sender: NSPopUpButton) {
+        guard !routingSuppress,
+              let slot = routingPopups.firstIndex(of: sender),
+              let v = sender.selectedItem?.representedObject as? Int else { return }
+        writeHwoutRouting?(slot, v)
+        QBLog.log("settings: routing slot \(slot) → \(Self.routingSources[v])")
+    }
+
+    private func refreshRouting() {
+        guard !routingPopups.isEmpty else { return }
+        routingSuppress = true
+        defer { routingSuppress = false }
+        let read = readHwoutRouting?() ?? []
+        for (slot, popup) in routingPopups.enumerated() {
+            if slot < read.count, let v = read[slot], (0..<Self.routingSources.count).contains(v) {
+                popup.isEnabled = true
+                popup.selectItem(at: v)
+            } else {
+                popup.isEnabled = false
+            }
+        }
+    }
+
     /// Page-level hardware refresh: status line, availability notice and
     /// the four hardware-backed sections (each disables its own controls
     /// when the tree is gone, keeping the last read values as labels).
@@ -1382,6 +1451,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         hardwareNotice.isHidden = connected
         refreshTouchscreen()
         refreshPads()
+        refreshRouting()
         rebuildNames()
         refreshLineOuts()
         refreshHwoutTrims()
