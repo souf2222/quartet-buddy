@@ -175,15 +175,13 @@ final class DirectUSBClient {
     }
 
     /// The app's input-mode enum (1=Mic 2=+4dBu 3=−10dBV 4=Instrument) →
-    /// the device's 0x16 TYPE byte. TOUCHSCREEN-VERIFIED 11/7: 02=Mic,
-    /// 03=Instrument (the user's hardware switch flipped ONLY 0x16 02→03).
-    /// Line (+4/−10) = the pending third value — nil until decoded, the
-    /// write is skipped then.
+    /// the device's 0x16 TYPE byte. COMPLETE, touchscreen-verified 11/7
+    /// across three hardware switches: 0=+4dBu, 1=−10dBV, 2=Mic, 3=Instrument.
     static func deviceByte(forAppMode app: Int) -> UInt8? {
-        switch app { case 1: return 2; case 4: return 3; default: return nil }
+        switch app { case 1: return 2; case 2: return 0; case 3: return 1; case 4: return 3; default: return nil }
     }
     static func appMode(forDeviceByte b: UInt8) -> Int {
-        switch b { case 2: return 1; case 3: return 4; default: return 1 }
+        switch b { case 0: return 2; case 1: return 3; case 2: return 1; case 3: return 4; default: return 1 }
     }
 
     /// +48V phantom power per input (bRequest 0x15, wIndex = the input) —
@@ -210,10 +208,8 @@ final class DirectUSBClient {
     }
 
     /// An input's TYPE — bRequest 0x16, wIndex = the input, 1 byte.
-    /// DECODED 11/7 via the user's touchscreen switch: all-Mic inputs read
-    /// 0x16=02; switching input 4 to Instrument on the hardware flipped
-    /// ONLY in3's 0x16 → 03. (0x36 is writable but NOT the type — parked.)
-    /// The Line value is pending the touchscreen's Line switch diff.
+    /// COMPLETE enum, touchscreen-verified 11/7: 0=+4dBu, 1=−10dBV,
+    /// 2=Mic, 3=Instrument. (0x36 is writable but NOT the type — parked.)
     @discardableResult
     func setInputType(input: UInt16, raw: UInt8) -> Bool {
         guard let dev = device else { return false }

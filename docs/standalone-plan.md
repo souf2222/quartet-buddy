@@ -583,6 +583,13 @@ silently failed; reads returned nil → the UI stayed empty).
   0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
   matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
 
+**0x16 TYPE ENUM COMPLETE (11/7):** the user set input 2 = +4dBu and
+input 3 = −10dBV on the touchscreen; the diff read in1 0x16=00, in2
+0x16=01. Full enum: **0=+4dBu, 1=−10dBV, 2=Mic, 3=Instrument** — the app
+reads and writes all four modes now (verified read-side against three
+independent hardware switches; write-side uses the identical addressing
+as 0x34/0x15 which are write-verified).
+
 **0x16 = the INPUT TYPE — TOUCHSCREEN-VERIFIED (11/7, the decisive diff):**
 the user CAN switch the input type on the device's touchscreen (unlike
 SL/Ø). After they switched input 4 to Instrument MANUALLY, the diff vs
