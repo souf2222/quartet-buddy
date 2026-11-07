@@ -593,6 +593,15 @@ write→read-back protocol (the shim's POLL lines carry the device's true
 state; the daemon never reads 0x53 back itself — the app must read it
 directly after each write).**
 
+**0x4a = lockHomeScreen — CONFIRMED BY THE USER'S EYES (11/7):** during
+the guided register hunt (8 candidates, 0-writes, 8 s apart) the user saw
+the touchscreen's lock state change. The home screen = UNLOCKED now
+(0x4a=0). The flags 0x1f (peakHold) / 0x20 (overHold) = the same family —
+the user will verify their behavior in use. NOTE: registers 0x22/0x24 read
+back 0x1b regardless of writes (computed/live-value registers, not flags).
+The earlier "not working" = a timing window (the user tested before the
+flags build's relaunch completed).
+
 **The talkback:** the app-scoped path (/Apps/Apogee Talkback helper/…)
 produced ZERO USB writes — the feature lived in the deleted
 ApogeeTalkbackHelper. Revival = reimplement in the app with the decoded
