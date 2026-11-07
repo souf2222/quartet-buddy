@@ -3087,6 +3087,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// 11.6 offline state: a direct device read for an input —
     /// (input index, bRequest) → the 1-byte value (nil = the read failed).
     var readInputDirect: ((Int, UInt8) -> UInt8?)?
+    /// True when the device is owned by the app's own USB session (the glue
+    /// offline) — the controls work without captured path-ids then.
+    var isDirectMode: (() -> Bool)?
+    /// 11.6 offline: the +48V write (bRequest 0x15, wIndex = the input).
+    var onDirectPhantom: ((Int, Bool) -> Bool)?
     /// 11.6 offline: write an input's preamp gain straight to the device
     /// (bRequest 0x34, wIndex = the input, |dB| byte). Returns false on failure.
     var onDirectInputGain: ((Int, Double) -> Bool)?
@@ -3161,7 +3166,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func readInputsFromDevice() {
         guard !deviceRefreshInFlight, readInputDirect != nil else { return }
         deviceRefreshInFlight = true
-        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36)] }
+        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36), (i, 0x15)] }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var values: [(Int, UInt8, UInt8)] = []
             for (i, bReq) in reads {
@@ -3185,6 +3190,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             switch bReq {
             case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
             case 0x36: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
+            case 0x15: inputs[i].phantom = (v != 0)              // +48V (touchscreen-verified)
             default: break
             }
         }
@@ -3393,7 +3399,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
         // 11.6: while the window is visible in direct mode, follow the
         // HARDWARE — front-panel gain/type changes flow back on this cadence
-        let directMode = connected && !(isGlueConnected?() ?? false)
+        let directMode = connected && (isDirectMode?() ?? false)
         if directMode, readInputDirect != nil, devicePollTimer == nil {
             devicePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 guard let self, self.window?.isVisible == true, !self.deviceRefreshInFlight else { return }
@@ -3412,7 +3418,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let lineMode = st.refLevel == 2 || st.refLevel == 3
             // direct mode (glue offline): the vendor writes exist (0x34/0x36)
             // — no captured path-id needed
-            let directMode = connected && !(isGlueConnected?() ?? false)
+            let directMode = connected && (isDirectMode?() ?? false)
             levelPopups[i].isEnabled = connected && !learning && autoRunning.isEmpty
                 && (directMode || t.hwinRefLevel[i] != nil)
             // the hardware level is UNKNOWN while the device is away —
@@ -3469,7 +3475,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // 48V applies to Mic mode only — visible but grayed elsewhere
             setToggle(toggles48V[i], st.phantom,
                       enabled: preampActive && st.refLevel != 4
-                          && connected && !learning && t.hwinPhantom[i] != nil)
+                          && connected && !learning
+                          && (directMode || t.hwinPhantom[i] != nil))
             setToggle(softLimitToggles[i], st.softLimit,
                       enabled: connected && !learning && t.hwinSoftLimit[i] != nil)
             setToggle(polarityToggles[i], st.polarity,
@@ -6129,7 +6136,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let t = PathIds.active
         let id: [UInt8]?
         switch tag - i {
-        case 300: id = t.hwinPhantom[i]; inputs[i].phantom = on
+        case 300:
+            inputs[i].phantom = on
+            // 11.6: the direct path first — 0x15 is touchscreen-diff VERIFIED
+            if let id = t.hwinPhantom[i], !id.isEmpty {
+                onWriteBool?(id, on)
+            } else if isDirectMode?() == true, onDirectPhantom?(i, on) == true {
+                QBLog.log("control: 48V in\(i + 1) → \(on ? "on" : "off") via directUSB")
+            } else {
+                inputs[i].phantom = nil
+                return refresh()
+            }
+            return
         case 400: id = t.hwinSoftLimit[i]; inputs[i].softLimit = on
         case 500: id = t.hwinPolarity[i]; inputs[i].polarity = on
         default: id = nil

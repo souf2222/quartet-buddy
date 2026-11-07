@@ -1495,6 +1495,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.readInputDirect = { [weak self] i, bReq in
             self?.directUSB.readInput(input: UInt16(i), bRequest: bReq)
         }
+        control.isDirectMode = { [weak self] in
+            guard let self else { return false }
+            return self.glue.state != .connected && self.directUSB.hasSession
+        }
+        control.onDirectPhantom = { [weak self] i, on in
+            guard let self else { return false }
+            if self.glue.state == .connected, let id = PathIds.active.hwinPhantom[i] {
+                self.glue.setBool(id: id, on); return true
+            }
+            return self.directUSB.setPhantom(input: UInt16(i), on: on)
+        }
         control.onDirectInputGain = { [weak self] i, v in
             guard let self else { return false }
             if self.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {

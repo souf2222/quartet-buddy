@@ -583,6 +583,12 @@ silently failed; reads returned nil → the UI stayed empty).
   0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
   matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
 
+**0x15 = +48V phantom — VERIFIED by touchscreen diff (11/7):** the user
+toggled 48V on input 1 on the DEVICE's touchscreen and probe7 caught the
+only change: in0's 0x15 0x00→0x01. The touchscreen exposes 48V — SL/Ø are
+likely there too (candidates: 0x13 writable-unknown, 0x11, 0x16, 0x44).
+in1's 0x3e reads 0x11 (pre-existing, unexplained).
+
 **probe9 (11/7): the writable per-input registers:** `0x13` (wIndex=input)
 accepts writes and STICKS (write 1 → reads 1; restored 0) — function
 unknown, a 48V/SL/Ø candidate. `0x11` reads 1 everywhere (write inconclusive).

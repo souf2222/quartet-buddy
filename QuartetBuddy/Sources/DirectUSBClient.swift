@@ -29,6 +29,8 @@ final class DirectUSBClient {
 
     /// The device session, created in open().
     private var device: IOUSBHostDevice?
+    /// True while a direct session owns the device (the app's offline mode).
+    var hasSession: Bool { device != nil }
     private let queue = DispatchQueue(label: "quartetbuddy.directusb")
     private(set) var opened = false
 
@@ -180,6 +182,29 @@ final class DirectUSBClient {
     }
     static func appMode(forDeviceByte b: UInt8) -> Int {
         switch b { case 0: return 1; case 1: return 2; case 2: return 4; default: return 1 }
+    }
+
+    /// +48V phantom power per input (bRequest 0x15, wIndex = the input) —
+    /// VERIFIED 11/7: the user's touchscreen 48V toggle flipped in0's 0x15
+    /// from 0x00 to 0x01 (the only register that moved).
+    @discardableResult
+    func setPhantom(input: UInt16, on: Bool) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x15
+        req.wValue = 0
+        req.wIndex = input
+        req.wLength = 1
+        let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "phantom: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
     }
 
     /// An input's type (bRequest 0x36, wIndex = the input): 1 byte.
