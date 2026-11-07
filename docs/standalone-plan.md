@@ -318,6 +318,34 @@ Remaining decode (mechanical now that the anchor is found):
 3. the checksum/CRC (the JUCE-style fold from prop_probe? the same family?),
 4. the RX-side tag (`…RX`) and `processMessageFromDevice` field offsets.
 
+### CAPTURE SUCCESS (worker13 + replug): the vendor-request wire format decoded
+With the serialized worker + **unplug/replug** (device re-enumeration — the
+firmware refuses a new master's vendor requests until re-enumerated!), the
+shim captured **1103 frames** with the device responding (kr=0):
+
+**Session setup (IOConnectCallScalarMethod on AppleUSBHostDeviceUserClient):**
+* `sel=2` (open?) → kr=0, out0=2579/7443
+* `sel=8` (get info, 4 scalars 255,255,65535,65535) → out0=70659 (0x11403 = version?)
+* `sel=0` (1 scalar, 0)
+
+**The state poll (every ~100–200 ms):**
+    IOConnectCallScalarMethod(conn, sel=7, {0, 0xC0, 0x29, 0, 0, 7, pData, 500}, 8)
+* s1 = bmRequestType **0xC0** (IN|vendor|device), s2 = **bRequest 0x29**, 
+* s5 = wLength 7 (a 7-byte response), s6 = pData, s7 = timeout 500 ms.
+
+**The command write (fired 4× at startup — the 4 analog outputs' gains):**
+    IOConnectCallScalarMethod(conn, sel=6, {0, 0x40, 0x10, 0, wIndex, 28, pData, 500}, 8)
+* s1 = bmRequestType **0x40** (OUT|vendor|device), s2 = **bRequest 0x10**,
+* s3 = wValue 0, s4 = **wIndex = the channel (0/1/2/3)**, s5 = **wLength 28** (payload!),
+* the 28-byte payload (live dump, ch0–3): `16 a1` × 12 + `20 00 00 00` —
+  12 gain-ish pairs (0x16 = 22 = the clamp(dB+48) encoding? → −26 dB default)
+  + a trailing u32 0x20.
+
+**Probe writes (identify/buffer/refLevel) were tree-accepted but did NOT hit
+USB this run** — the identify "did not apply" transient + the tree-only echo
+path; next session: retry the probes mid-capture after the transient clears,
+and add the OUT-request payload dumps at write time.
+
 ### Interposer status: infrastructure proven; the blocker was a race
 **The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
 * learns the static IOUSBLib vtables by QI-ing its own objects (two-level
@@ -330,36 +358,25 @@ Remaining decode (mechanical now that the anchor is found):
   DYLD_FORCE_FLAT_NAMESPACE, which chained-fixup binaries ignore — never
   fired; kept for reference).
 
-**Why zero frames appeared:** the kernel log shows a dozen different
-ApogeeGlue PIDs fighting over the exclusive USB open across our worker runs
-(2040 failed-open attempts against one pid alone — launchd KeepAlive
-respawns + leftover debug daemons + a per-second retry loop). **Every debug
-daemon LOST the race**, printed "Failed to open device", and sat in a retry
-loop — no I/O through the hooked objects. The lldb routes died separately on
-the background-session restriction (attach AND launch both refused; debugserver
-exits silently; binary pages immutable so GOT patches fail with EACCES).
-
-**The other decisive clue:** the debug daemon's own stdout prints
-`sendUSBInVendorRequest: kIOReturnNotResponding` — the Quartet's control
-path is **vendor requests**, and the daemon's I/O goes through
-`IOConnectCall*` on the modern `AppleUSBHostDeviceUserClient` (matching the
-ioreg user-client evidence), NOT through the IOUSBLib COM objects' pipe
-methods. That is why the vtable hooks never see traffic even when the open
-succeeds.
-
-**Remaining blocker for full capture:** calling the real `IOConnectCall*`
-from an interposer. dyld4 applies `__interpose` to the interposing dylib's
-own imports AND poisons `dlsym` (RTLD_NEXT and handle lookups) for
-interposed symbols; binary pages are immutable (mprotect → EACCES) so GOT
-patching fails; DYLD_FORCE_FLAT_NAMESPACE is ignored by chained fixups.
-Remaining options: parse the IOKit export trie from the mapped shared cache
-in-process (symbol vmaddr + image slide), or parse the DSC file offline.
+**Why zero frames appeared (complete root cause):**
+1. A dozen daemon PIDs fought over the exclusive USB open (2040 kernel
+   failures) — early debug daemons lost the race outright.
+2. **The device itself holds session state**: after the old daemon dies
+   mid-session, the Quartet firmware ignores vendor requests from any new
+   session (`sendUSBInVendorRequest: kIOReturnNotResponding` spam every
+   second) until the device is **re-enumerated** (unplug/replug). The debug
+   daemons were talking to a device wedged on its dead master.
+3. Original binary entitlements (`allow-unsigned-executable-memory`,
+   `disable-executable-page-protection`) get stripped by the re-sign; the
+   binary's `__DATA` is page-immutable on this macOS, so vptr swaps from the
+   shim silently never stick (writes to the shared-cache/binary pages).
 
 **The airtight run recipe (next session):**
 1. `launchctl bootout` **both** jobs (apogeeglue AND apogeemessenger),
 2. `pkill -9 -f ApogeeGlue` + poll until `pgrep -f ApogeeGlue` is empty,
-3. poll `ioreg` until the Quartet has **no** `UsbExclusiveOwner`,
-4. launch the debug daemon (shim inserted) → verify via
+3. **physically unplug + replug the Quartet** (re-enumeration!), poll `ioreg`
+   for the fresh device instance,
+4. launch the debug daemon (shim inserted) → verify
    `UsbExclusiveOwner = <debug pid>`,
 5. fire `identify` / `reflevel` via `prop_probe.py` → frames appear in
    `/tmp/usbsniff.log`,
