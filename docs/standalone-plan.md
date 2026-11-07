@@ -346,6 +346,16 @@ USB this run** — the identify "did not apply" transient + the tree-only echo
 path; next session: retry the probes mid-capture after the transient clears,
 and add the OUT-request payload dumps at write time.
 
+### ✅ STATE-DIFF PROBE: writes accepted from our own client (kr=0)
+`tools/direct_probe2.swift` (with the daemon gracefully stopped):
+* setGain(hwout0, −40) → kr=0; setGain(−20) → kr=0; setMute on/off → kr=0;
+  identify on/off → kr=0. **Every command accepted by the device.**
+* The 7-byte poll block (`02 01 00 00 00 00 00`) = a fixed device-status
+  heartbeat — NOT the per-channel state. The per-channel state = the
+  same-bRequest read-backs (the daemon pairs a read with every write).
+* The UI's state model for `.directUSB` = built from the read-backs
+  (write → read-back = the authoritative value) + the polls = the liveness.
+
 ### PROTOCOL DECODED (worker13 + replug + 30 s settle): 16332 frames
 With the device re-enumerated (unplug/replug) and the settle time extended,
 the shim captured the **complete control protocol** (16332 frames,
