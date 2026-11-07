@@ -216,6 +216,9 @@ enum OutputTarget: String, CaseIterable, Codable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let glue = GlueClient()
+    /// Direct-USB control (11.6): the vendor-request session on the Quartet
+    /// itself — works with ApogeeGlue gone (the exclusive open = ours then).
+    let directUSB = DirectUSBClient()
     /// Every keyboard shortcut: bindings, global registration, app-only
     /// matching, conflicts, defaults (see Shortcuts.swift).
     let shortcuts = ShortcutManager()
@@ -1192,12 +1195,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// preference (the touchscreen's settings page) — no level quantities,
     /// so the dB range-validation story doesn't apply.
     func setDeviceFlag(_ name: String, on: Bool) {
+        // identify rides the direct-USB vendor request when the device is
+        // reachable (no daemon needed — 11.6); the glue path stays the
+        // fallback while ApogeeGlue holds the device exclusively.
+        if name == "identify" {
+            if tryDirectIdentify(on: on) { return }
+        }
         guard let id = PathIds.dev(name) else {
             QBLog.log("device: \(name) — no serial connected, write dropped")
             return
         }
         QBLog.log("device: \(name) \(on ? "1" : "0")")
         glue.setBool(id: id, on)
+    }
+
+    /// The direct-USB identify blink (vendor request 0xB6): on now, off
+    /// after 6 s (the daemon's timing). Returns false when the device
+    /// can't be opened (the glue fallback applies).
+    private func tryDirectIdentify(on: Bool) -> Bool {
+        if !directUSB.opened && !directUSB.open() {
+            QBLog.log("directUSB: unavailable — \(directUSB.lastError); falling back to glue")
+            return false
+        }
+        guard directUSB.identify(on: on) else { return false }
+        if on {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                _ = self?.directUSB.identify(on: false)
+            }
+        }
+        return true
     }
 
     // MARK: - Talkback source (the "who's talking" input the helper uses)

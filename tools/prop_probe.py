@@ -28,7 +28,7 @@ Examples:
   python3 prop_probe.py rename hwin0 "Kick"
   python3 prop_probe.py tbsource "MacBook Air Microphone" 0
 """
-import socket, struct, sys, time, zlib, os, importlib.util
+import socket, struct, sys, time, zlib, os, re, importlib.util
 sys.path.insert(0, os.path.dirname(__file__))
 import jucevt
 spec = importlib.util.spec_from_file_location("probe", os.path.join(os.path.dirname(__file__), "probe.py"))
@@ -263,6 +263,34 @@ def main():
             i = out.find("Quartet")
             print("CoreAudio block:", out[i:i + 400].replace("\n", " | ") if i >= 0 else "Quartet not found")
         verdict = (after == v)
+    elif op == "set":
+        # generic: set <relpath-under-/dev/serial/> <value>
+        # value parsing: 1/0|true/false → bool, int → int, float → float, else string
+        rel, raw = args[1], args[2]
+        v: object
+        if raw.lower() in ("1", "true", "on"):
+            v, tag, data = True, 3, bool_data(True)
+        elif raw.lower() in ("0", "false", "off"):
+            v, tag, data = False, 3, bool_data(False)
+        elif re.fullmatch(r"-?\d+", raw):
+            v, tag, data = int(raw), 1, int_data(int(raw))
+        elif re.fullmatch(r"-?\d+\.\d*(e-?\d+)?", raw, re.IGNORECASE):
+            v, tag, data = float(raw), 2, struct.pack("<f", float(raw))
+        else:
+            v, tag, data = raw, 5, string_data(raw)
+        parts = rel.split("/")
+        pid = dev_path(serial, rel)
+        echo = apply_write(sock, pid, tag, data)
+        tree2 = reread()
+        node = find_type(tree2, "dev")
+        ok = node is not None
+        for part in parts[:-1]:
+            if not ok: break
+            node = find_type(node, part)
+            ok = node is not None
+        after = node["props"].get(parts[-1]) if ok else None
+        print(f"tree {rel} AFTER = {describe_value(after)}")
+        verdict = (on_val(after) == v) or (after == v)
     elif op == "rename":
         target, name = args[1], args[2]
         if target.startswith("hwin"):
