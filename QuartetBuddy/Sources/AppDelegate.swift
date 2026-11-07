@@ -1573,7 +1573,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Device-node flags (Settings ▸ Quartet ▸ Controls): the
         // window reads raw dev-node props and asks us for each write.
         settingsWindow.readDeviceProps = { [weak self] in
-            self.flatMap { $0.deviceNode().flatMap { $0["props"] as? [String: Any] } }
+            guard let self else { return nil }
+            if let node = self.deviceNode(), let props = node["props"] as? [String: Any] {
+                return props
+            }
+            // 11.6 offline: the tree is gone (no daemon) but the direct USB
+            // session owns the device — report PRESENT with no tree props.
+            // The tree-fed flags degrade to disabled; the page shows connected.
+            return self.directUSB.hasSession ? [:] : nil
         }
         settingsWindow.writeDeviceFlag = { [weak self] name, on in
             self?.setDeviceFlag(name, on: on)
