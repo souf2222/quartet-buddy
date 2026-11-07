@@ -511,6 +511,29 @@ The wiring (AppDelegate):
   the known properties (the hwout gains/mutes + the identify),
 * the OS slider/mute sync gates relaxed for the direct session.
 
+### ✅ 11.7 UNINSTALL COMPLETE (Nov 7 2026, user-verified)
+Removed (all backed up to `~/apogee-backup-2026-11-07/` first):
+* `/Library/LaunchDaemons/com.apogeedigital.apogeeglue.plist` + the messenger
+* `/Library/Application Support/Apogee/` (ApogeeGlue.app)
+* `/Library/Extensions/QuartetUSBOverideDriver.kext`
+* `/Applications/Apogee Control 2.app`
+* `/Library/Preferences/com.apogee.*` + the caches
+
+Verification: no launchd jobs, no kext, no support files, no processes, not
+loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
+(the legacy IOUSBDevice facade nubs the daemon needed — irrelevant now).
+
+**Post-uninstall behavior (user-verified live):**
+* audio keeps playing (Apple's class-compliant `usbaudiod` — no daemon ever
+  needed for audio),
+* the app's sliders/mutes write via **direct USB** — the log shows
+  `transport: directUSB gain Headphones …` streaming while the daemon is
+  *gone*,
+* the identify blink = direct vendor request 0xB6.
+
+**⇒ The goal reached: only Quartet Buddy installed, fully working.**
+A reboot is recommended once to flush the kernel-side merge nubs.
+
 ### Interposer status: infrastructure proven; the blocker was a race
 **The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
 * learns the static IOUSBLib vtables by QI-ing its own objects (two-level
