@@ -554,6 +554,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deviceMonitor.start()
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
+            if connected {
+                // 11.6: claim the direct-USB session eagerly on arrival so
+                // the menubar icon + the offline transport are ready before
+                // the first write. When ApogeeGlue is running it wins the
+                // exclusive open and the glue path stays primary.
+                DispatchQueue.main.async { [weak self] in
+                    _ = self?.directUSB.open()
+                    self?.refreshMenu()
+                }
+            }
             if !connected, self?.talkbackOn == true {
                 // the TalkbackHelper resets talkback when the device goes away
                 QBLog.log("talkback: assumed off (device disconnected)")
@@ -589,6 +599,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Glue
 
+    // MARK: - the tree snapshot (the offline boot + the state recovery)
+
+    private static var treeSnapshotURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("QuartetBuddy/lastTree.json", isDirectory: true)
+    }
+
+    /// Persist the full tree so an offline boot can populate the UI.
+    private func saveTreeSnapshot(_ tree: [String: Any]) {
+        do {
+            let url = Self.treeSnapshotURL
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: tree)
+            try data.write(to: url)
+        } catch {
+            QBLog.log("tree snapshot save failed: \(error)")
+        }
+    }
+
+    private static func loadTreeSnapshot() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: treeSnapshotURL),
+              let tree = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return tree
+    }
+
+    /// Apply a tree (live or the saved snapshot) to the app's state model.
+    private func applyTree(_ tree: [String: Any]) {
+        lastTree = tree
+        // The device node's type is its serial — path-ids are hashed
+        // per-serial, so pick this unit's id table before anything else.
+        PathIds.select(serial: GlueClient.quartetSerial(in: tree))
+        if glue.state == .connected { syncSavedHardwareTrims() }
+        if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
+           let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
+            gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
+            gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
+            muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
+            speakerDim = (GlueClient.intProp(hw0, "dim") ?? 0) == 1
+            speakerSum = (GlueClient.intProp(hw0, "sum") ?? 0) == 1
+            muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
+            headphoneDim = (GlueClient.intProp(hw1, "dim") ?? 0) == 1
+            headphoneSum = (GlueClient.intProp(hw1, "sum") ?? 0) == 1
+            gainKnown = true
+            syncMacSlider(force: true)
+        }
+        if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
+           let props = tb["props"] as? [String: Any],
+           let on = props["talkbackOn"] as? Bool {
+            talkbackOn = on
+        }
+        // full-state sync for the Quartet Control window (inputs + monitors)
+        QuartetControlController.shared.updateTree(tree)
+        refreshMenu()
+    }
+
     private func setupGlue() {
         glue.onState = { [weak self] state in
             self?.refreshMenu()
@@ -600,32 +666,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         glue.onTree = { [weak self] tree in
             guard let self else { return }
-            self.lastTree = tree
-            // The device node's type is its serial — path-ids are hashed
-            // per-serial, so pick this unit's id table before anything else.
-            PathIds.select(serial: GlueClient.quartetSerial(in: tree))
-            self.syncSavedHardwareTrims()
-            if let hw0 = GlueClient.findNode(in: tree, type: "hwout0"),
-               let hw1 = GlueClient.findNode(in: tree, type: "hwout1") {
-                self.gain[.mainOut] = GlueClient.doubleProp(hw0, "gain") ?? 0
-                self.gain[.headphones] = GlueClient.doubleProp(hw1, "gain") ?? 0
-                self.muted[.mainOut] = (GlueClient.intProp(hw0, "mute") ?? 0) == 1
-                self.speakerDim = (GlueClient.intProp(hw0, "dim") ?? 0) == 1
-                self.speakerSum = (GlueClient.intProp(hw0, "sum") ?? 0) == 1
-                self.muted[.headphones] = (GlueClient.intProp(hw1, "mute") ?? 0) == 1
-                self.headphoneDim = (GlueClient.intProp(hw1, "dim") ?? 0) == 1
-                self.headphoneSum = (GlueClient.intProp(hw1, "sum") ?? 0) == 1
-                self.gainKnown = true
-                self.syncMacSlider(force: true)
-            }
-            if let tb = GlueClient.findNode(in: tree, type: "Talkback"),
-               let props = tb["props"] as? [String: Any],
-               let on = props["talkbackOn"] as? Bool {
-                self.talkbackOn = on
-            }
-            // full-state sync for the Quartet Control window (inputs + monitors)
-            QuartetControlController.shared.updateTree(tree)
-            self.refreshMenu()
+            self.applyTree(tree)
+            self.saveTreeSnapshot(tree)
+        }
+        // 11.6 offline boot: the last-known tree, so the UI comes up
+        // populated even with ApogeeGlue gone
+        if let saved = Self.loadTreeSnapshot() {
+            QBLog.log("boot: applying the saved tree snapshot (glue offline mode)")
+            self.applyTree(saved)
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
@@ -951,14 +999,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The last menubar-icon state — the image is only swapped when either
+    /// dimension changes (rebuilding the image on every reconnect attempt
+    /// made the icon flicker grey/white).
+    private var lastIconActive: Bool?
+    private var lastIconHeadphones: Bool?
+
+    /// The device's real availability: the glue tree when the daemon runs,
+    /// otherwise the direct-USB session (11.6).
+    private func deviceUsable() -> Bool {
+        if quartetPresence.isConnected && glue.state == .connected { return true }
+        return quartetPresence.isConnected && directUSB.opened
+    }
+
     private func rebuildMenu() {
         menu.removeAllItems()
 
-        // menubar icon + tooltip
+        // menubar icon + tooltip — only swap the image when the state flips
         statusItem?.button?.title = ""
-        let appActive = quartetPresence.isConnected && glue.state == .connected
-        statusItem?.button?.image = LogoIcon.image(headphonesSelected: selectedOutput == .headphones,
-                                                    active: appActive)
+        let appActive = deviceUsable()
+        let headphonesSelected = selectedOutput == .headphones
+        if appActive != lastIconActive || headphonesSelected != lastIconHeadphones {
+            statusItem?.button?.image = LogoIcon.image(headphonesSelected: headphonesSelected,
+                                                        active: appActive)
+            lastIconActive = appActive
+            lastIconHeadphones = headphonesSelected
+        }
         updateTalkbackDot()
         let mainGain = gain[.mainOut] ?? 0
         let hpGain = gain[.headphones] ?? 0
@@ -969,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(sectionHeader("Quartet Buddy"))
         let stateLine: String
         if !quartetPresence.isConnected { stateLine = "Quartet Not Connected" }
-        else if glue.state != .connected { stateLine = "Glue Offline" }
+        else if glue.state != .connected { stateLine = "Quartet Connected (direct USB)" }
         else { stateLine = "Quartet Connected" }
         let stateItem = menu.addItem(withTitle: stateLine, action: nil, keyEquivalent: "")
         stateItem.isEnabled = false
@@ -1353,11 +1419,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onWriteDouble = { [weak self] id, value in
             guard let self else { return }
             if self.glue.state == .connected { self.glue.setDouble(id: id, value); return }
-            // offline: the known gain path-ids translate to the vendor requests
+            // offline: the known path-ids translate to the vendor requests
             let active = PathIds.active
-            if id == active.hwout0Gain { _ = self.writeGain(.mainOut, value) }
-            else if id == active.hwout1Gain { _ = self.writeGain(.headphones, value) }
-            else { QBLog.log("transport: no direct mapping for double write (glue offline) — dropped") }
+            if id == active.hwout0Gain { _ = self.writeGain(.mainOut, value); return }
+            if id == active.hwout1Gain { _ = self.writeGain(.headphones, value); return }
+            // the input preamp gains: mic + instrument = the same vendor command
+            for (input, ids) in active.hwinMicGain where ids == id {
+                _ = self.directUSB.setInputGain(input: UInt16(input), db: value); return
+            }
+            for (input, ids) in active.hwinInstGain where ids == id {
+                _ = self.directUSB.setInputGain(input: UInt16(input), db: value); return
+            }
+            // the dim levels (the floats! the monitor register 0x0C)
+            if id == active.hwout0Dim { _ = self.directUSB.setMonitorLevel(reg: 0x4C, output: 0, db: value); return }
+            if id == active.hwout1Dim { _ = self.directUSB.setMonitorLevel(reg: 0x4D, output: 1, db: value); return }
+            QBLog.log("transport: no direct mapping for double write (glue offline) — dropped")
         }
         // (The routing cards' trim knobs are SOFTWARE trim, applied inside
         // InsertServer's chain. The firmware's line-out trim lives in
@@ -1366,12 +1442,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             if self.glue.state == .connected { self.glue.setBool(id: id, value); return }
             let active = PathIds.active
-            if id == active.hwout0Mute { _ = self.writeMute(.mainOut, value) }
-            else if id == active.hwout1Mute { _ = self.writeMute(.headphones, value) }
-            else if id == PathIds.dev("identify"), value {
-                _ = self.tryDirectIdentify(on: true)
+            if id == active.hwout0Mute { _ = self.writeMute(.mainOut, value); return }
+            if id == active.hwout1Mute { _ = self.writeMute(.headphones, value); return }
+            if id == PathIds.dev("identify") { _ = self.tryDirectIdentify(on: value); return }
+            // the dims (0x4F) + the sums (0x4E) at the monitor register 0x0C
+            if id == active.hwout0Dim { _ = self.directUSB.setMonitorFlag(reg: 0x4F, output: 0, on: value); return }
+            if id == active.hwout1Dim { _ = self.directUSB.setMonitorFlag(reg: 0x4F, output: 1, on: value); return }
+            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.directUSB.setMonitorFlag(reg: 0x4E, output: 0, on: value); return }
+            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.directUSB.setMonitorFlag(reg: 0x4E, output: 1, on: value); return }
+            // the input-side bools: the phantom, the soft limit, the polarity, the level
+            for (input, ids) in active.hwinPhantom where ids == id {
+                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
             }
-            else { QBLog.log("transport: no direct mapping for bool write (glue offline) — dropped") }
+            for (input, ids) in active.hwinSoftLimit where ids == id {
+                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
+            }
+            for (input, ids) in active.hwinPolarity where ids == id {
+                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
+            }
+            for (input, ids) in active.hwinRefLevel where ids == id {
+                // the level = the int32 (2/3) — the type-ish command; the raw byte = the value
+                _ = self.directUSB.setInputType(input: UInt16(input), raw: UInt8(value ? 1 : 0)); return
+            }
+            QBLog.log("transport: no direct mapping for bool write (glue offline) — dropped")
         }
         control.onWriteInt = { [weak self] id, value in self?.glue.setInt(id: id, value) }
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }

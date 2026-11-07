@@ -147,6 +147,114 @@ final class DirectUSBClient {
         }
     }
 
+    /// An input's preamp gain (bRequest 0x10, address = input + 2, the
+    /// clamp(dB+48) byte). The device applies it to the input preamp.
+    @discardableResult
+    func setInputGain(input: UInt16, db: Double) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x10
+        req.wValue = input + 2          // the address: input index + 2
+        req.wLength = 1
+        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
+        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "input gain: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// An input's type (bRequest 0x36, the same address scheme): the type
+    /// byte's semantics = the device's own (mic = 0, line = 1, per the
+    /// tree's enum).
+    @discardableResult
+    func setInputType(input: UInt16, raw: UInt8) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x36
+        req.wValue = input + 2
+        req.wLength = 1
+        let d = NSMutableData(bytes: [raw], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "input type: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// The read-back for an input property (bmReq 0xC0, 1-byte response).
+    func readInput(input: UInt16, bRequest: UInt8) -> UInt8? {
+        guard let dev = device else { return nil }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0xC0
+        req.bRequest = bRequest
+        req.wValue = input + 2
+        req.wLength = 1
+        let d = NSMutableData(data: Data(repeating: 0, count: 1))
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return (d as Data).first
+        } catch {
+            lastError = "input read: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Monitor-functions register (address 0x0C): the dim level (float!) and
+    /// the dim/sum enables (bools). The setters' cmdIds: 0x4C/0x4D = the two
+    /// dim levels (the speakers / the HP), 0x4E/0x4F = the enables.
+    @discardableResult
+    func setMonitorLevel(reg: UInt8, output: UInt16, db: Double) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = reg
+        req.wValue = 0x0C                  // the monitor-functions register
+        req.wIndex = output
+        req.wLength = 1
+        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
+        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "monitor level: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// reg: 0x4F = dim enable, 0x4E = sum-to-mono (per the setter decode);
+    /// wValue = the monitor register 0x0C, wIndex = the output (0 = Main, 1 = HP).
+    @discardableResult
+    func setMonitorFlag(reg: UInt8, output: UInt16, on: Bool) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = reg
+        req.wValue = 0x0C
+        req.wIndex = output
+        req.wLength = 1
+        let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "monitor flag: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// The device state poll — the 7-byte response block (nil on error).
     func poll() -> [UInt8]? {
         guard let dev = device else { return nil }

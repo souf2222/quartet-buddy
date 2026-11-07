@@ -553,6 +553,31 @@ loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
 **⇒ The goal reached: only Quartet Buddy installed, fully working.**
 A reboot is recommended once to flush the kernel-side merge nubs.
 
+### 11.6 status after the uninstall (the honest ledger)
+**Working offline (user-verified):**
+* the menubar icon (white, no flicker) + "Quartet Connected (direct USB)"
+* the app's faders/mutes → the direct vendor requests (the log proves it)
+* the hotkeys (⌘⇧S = the output switch), the identify blink
+* the eager direct session at boot + on the device arrival
+* the offline boot = the saved tree snapshot
+  (~/Library/Application Support/QuartetBuddy/lastTree.json)
+
+**Not yet (the input section offline):**
+* the input TYPE's path-id is not in the captured DeviceTable (the table has
+  no field for it) → its writes log "no direct mapping … dropped"
+* the input section's UI state = from the tree snapshot only — the live
+  read-backs (0x10/0x33/0x35/0x36 IN) are not wired into the UI refresh yet
+* the monitor/dim property name was wrong in the probe (monitor/dim — the
+  real path = the hwout0.dim)
+
+**Next session's work list:**
+1. the DeviceTable += the input-type id (a new capture step), or the
+   reverse-lookup via the tree snapshot's node ids
+2. the control window's input section = the read-back-backed refresh
+   (0x10/0x33/0x35/0x36 IN reads = the live state without the tree)
+3. the same for the dim/sum (the monitor register 0x0C reads)
+4. then 11.7's final pass: the README + the uninstall guide for the users
+
 ### Interposer status: infrastructure proven; the blocker was a race
 **The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
 * learns the static IOUSBLib vtables by QI-ing its own objects (two-level
