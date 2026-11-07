@@ -441,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// session open (boot + device arrival).
     private func pushSavedRouting() {
         for slot in 0..<4 {
-            let def: Int = slot == 0 ? 3 : slot - 1
+            let def: Int = slot == 3 ? 3 : slot   // the HP = PB 7-8; the pairs = their own PB
             let source = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int ?? def
             let indexes: [UInt16] = slot == 0 ? [3]
                 : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)]
@@ -1832,13 +1832,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return [] }
             return (0..<4).map { slot in
                 let v = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int
-                return v ?? (slot == 0 ? 3 : slot - 1)   // the HP's default = PB 7-8 (the user's spec)
+                return v ?? (slot == 3 ? 3 : slot)   // the HP's default = PB 7-8; the pairs = their own PB
             }
         }
         settingsWindow.writeHwoutRouting = { [weak self] slot, source in
             guard let self else { return }
-            let indexes: [UInt16] = slot == 0 ? [3]           // the HP: the monitor slot
-                : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)] // the pair's two strips
+            // the PAIR slots (the user's live mapping): 0=Out1-2(Main),
+            // 1=Out3-4, 2=Out5-6, 3=Headphones — ONE write per pair
+            let indexes: [UInt16] = [UInt16(slot)]
             for wI in indexes {
                 let ok = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
                 QBLog.log("settings: routing slot \(slot) → 0x53 wI=\(wI) =\(source) \(ok ? "ok" : "FAILED")")

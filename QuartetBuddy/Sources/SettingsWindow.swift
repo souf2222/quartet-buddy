@@ -1254,8 +1254,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         // --- Hardware output routing — the DAC's source per output pair
         SettingsSection.add(to: stack, "Hardware output routing")
-        let rows = [("Headphones", 0), ("Analog Out 1 / 2", 1),
-                    ("Analog Out 3 / 4", 2), ("Analog Out 5 / 6", 3)]
+        // the PAIR slots (the user's live mapping, 11/7): wI 0 = Out 1-2
+        // (Main), 1 = Out 3-4, 2 = Out 5-6, 3 = the Headphones
+        let rows = [("Out 1-2 (Main)", 0), ("Out 3-4 (Analog 1/2)", 1),
+                    ("Out 5-6 (Analog 3/4)", 2), ("Headphones", 3)]
         for (title, slot) in rows {
             let label = NSTextField(labelWithString: title)
             label.font = .systemFont(ofSize: 13)
