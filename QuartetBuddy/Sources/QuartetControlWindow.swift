@@ -3092,6 +3092,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var isDirectMode: (() -> Bool)?
     /// 11.6 offline: the +48V write (bRequest 0x15, wIndex = the input).
     var onDirectPhantom: ((Int, Bool) -> Bool)?
+    /// 11.7: the per-input flag writes (0x11 = softLimit, 0x13 = polarity).
+    var onDirectInputFlag: ((UInt8, Int, Bool) -> Bool)?
     /// 11.6 offline: write an input's preamp gain straight to the device
     /// (bRequest 0x34, wIndex = the input, |dB| byte). Returns false on failure.
     var onDirectInputGain: ((Int, Double) -> Bool)?
@@ -3166,7 +3168,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func readInputsFromDevice() {
         guard !deviceRefreshInFlight, readInputDirect != nil else { return }
         deviceRefreshInFlight = true
-        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x16), (i, 0x15)] }
+        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x16), (i, 0x15), (i, 0x11), (i, 0x13)] }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var values: [(Int, UInt8, UInt8)] = []
             for (i, bReq) in reads {
@@ -3191,6 +3193,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
             case 0x16: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
             case 0x15: inputs[i].phantom = (v != 0)              // +48V (touchscreen-verified)
+            case 0x11: inputs[i].softLimit = (v != 0)            // softLimit (sweep-verified)
+            case 0x13: inputs[i].polarity = (v != 0)             // polarity Ø (sweep-verified)
             default: break
             }
         }
@@ -6148,8 +6152,32 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 return refresh()
             }
             return
-        case 400: id = t.hwinSoftLimit[i]; inputs[i].softLimit = on
-        case 500: id = t.hwinPolarity[i]; inputs[i].polarity = on
+        case 400:
+            inputs[i].softLimit = on
+            // 11.7 sweep-verified: softLimit = 0x11 — no captured id needed
+            if let id2 = t.hwinSoftLimit[i], !id2.isEmpty {
+                id = id2
+                onWriteBool?(id2, on)
+            } else if isDirectMode?() == true, onDirectInputFlag?(0x11, i, on) == true {
+                QBLog.log("control: softLimit in\(i + 1) → \(on ? "on" : "off") via directUSB")
+            } else {
+                inputs[i].softLimit = nil
+                return refresh()
+            }
+            return
+        case 500:
+            inputs[i].polarity = on
+            // 11.7 sweep-verified: polarityInvert Ø = 0x13
+            if let id2 = t.hwinPolarity[i], !id2.isEmpty {
+                id = id2
+                onWriteBool?(id2, on)
+            } else if isDirectMode?() == true, onDirectInputFlag?(0x13, i, on) == true {
+                QBLog.log("control: polarity in\(i + 1) → \(on ? "on" : "off") via directUSB")
+            } else {
+                inputs[i].polarity = nil
+                return refresh()
+            }
+            return
         default: id = nil
         }
         guard !suppressActions, !isLearning, let id else { return refresh() }

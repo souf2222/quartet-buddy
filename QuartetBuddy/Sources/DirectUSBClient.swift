@@ -184,6 +184,28 @@ final class DirectUSBClient {
         switch b { case 0: return 2; case 1: return 3; case 2: return 1; case 3: return 4; default: return 1 }
     }
 
+    /// The per-input BOOL flags — sweep-VERIFIED 11/7: softLimit = 0x11
+    /// (default ON), polarityInvert Ø = 0x13, phantom = 0x15. wIndex = input.
+    @discardableResult
+    func setInputFlag(_ reg: UInt8, input: UInt16, on: Bool) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = reg
+        req.wValue = 0
+        req.wIndex = input
+        req.wLength = 1
+        let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "input flag \(reg): \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// +48V phantom power per input (bRequest 0x15, wIndex = the input) —
     /// VERIFIED 11/7: the user's touchscreen 48V toggle flipped in0's 0x15
     /// from 0x00 to 0x01 (the only register that moved).
@@ -250,39 +272,18 @@ final class DirectUSBClient {
         }
     }
 
-    /// Monitor-functions register (address 0x0C): the dim level (float!) and
-    /// the dim/sum enables (bools). The setters' cmdIds: 0x4C/0x4D = the two
-    /// dim levels (the speakers / the HP), 0x4E/0x4F = the enables.
+    /// The monitor-output flags — sweep-VERIFIED 11/7 (the daemon's own
+    /// writes): dim = bRequest 0x40, sum = 0x46, wIndex = the output
+    /// (0 = Main, 1 = HP), wValue = 0, 1 byte 0/1. (The old 0x4E/0x4F-at-
+    /// register-0x0C guesses were wrong; 0x4E/0x4F are the mixer's
+    /// solo/mute, 0x4C/0x4D the fader/pan.)
     @discardableResult
-    func setMonitorLevel(reg: UInt8, output: UInt16, db: Double) -> Bool {
+    func setOutputFlag(_ reg: UInt8, output: UInt16, on: Bool) -> Bool {
         guard let dev = device else { return false }
         var req = IOUSBDeviceRequest()
         req.bmRequestType = 0x40
         req.bRequest = reg
-        req.wValue = 0x0C                  // the monitor-functions register
-        req.wIndex = output
-        req.wLength = 1
-        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
-        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
-        do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
-            return true
-        } catch {
-            lastError = "monitor level: \(error.localizedDescription)"
-            QBLog.log("directUSB: \(lastError)")
-            return false
-        }
-    }
-
-    /// reg: 0x4F = dim enable, 0x4E = sum-to-mono (per the setter decode);
-    /// wValue = the monitor register 0x0C, wIndex = the output (0 = Main, 1 = HP).
-    @discardableResult
-    func setMonitorFlag(reg: UInt8, output: UInt16, on: Bool) -> Bool {
-        guard let dev = device else { return false }
-        var req = IOUSBDeviceRequest()
-        req.bmRequestType = 0x40
-        req.bRequest = reg
-        req.wValue = 0x0C
+        req.wValue = 0
         req.wIndex = output
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
@@ -290,7 +291,76 @@ final class DirectUSBClient {
             try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
             return true
         } catch {
-            lastError = "monitor flag: \(error.localizedDescription)"
+            lastError = "output flag: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// The mixer channel fader — sweep-VERIFIED: 0x4C, wIndex = the channel
+    /// (0…12, 14 = master), value = clamp(dB + 48, 0…54).
+    @discardableResult
+    func setMixerVolume(channel: UInt16, db: Double) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x4C
+        req.wValue = 0
+        req.wIndex = channel
+        req.wLength = 1
+        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
+        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "mixer volume: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// The mixer channel pan — sweep-VERIFIED: 0x4D, wIndex = the channel,
+    /// value = round(pan × 128) (0.5 = center = 0x40).
+    @discardableResult
+    func setMixerPan(channel: UInt16, pan: Double) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x4D
+        req.wValue = 0
+        req.wIndex = channel
+        req.wLength = 1
+        let clamped = Swift.max(0, Swift.min(128, Int((pan * 128).rounded())))
+        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "mixer pan: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
+    /// The analog-output TRIM — sweep-VERIFIED: 0x18, wIndex = out−2
+    /// (hwout2…7 → 0…5), value = |dB| × 10, attenuation-only (0…240).
+    @discardableResult
+    func setOutputTrim(output: UInt16, db: Double) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = 0x18
+        req.wValue = 0
+        req.wIndex = output
+        req.wLength = 1
+        let atten = Swift.max(0, Swift.min(240, Int((-db * 10).rounded())))
+        let d = NSMutableData(bytes: [UInt8(atten)], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "output trim: \(error.localizedDescription)"
             QBLog.log("directUSB: \(lastError)")
             return false
         }

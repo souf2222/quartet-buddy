@@ -1430,9 +1430,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for (input, ids) in active.hwinInstGain where ids == id {
                 _ = self.directUSB.setInputGain(input: UInt16(input), db: value); return
             }
-            // the dim levels (the floats! the monitor register 0x0C)
-            if id == active.hwout0Dim { _ = self.directUSB.setMonitorLevel(reg: 0x4C, output: 0, db: value); return }
-            if id == active.hwout1Dim { _ = self.directUSB.setMonitorLevel(reg: 0x4D, output: 1, db: value); return }
+            // 11.7 sweep: the dim LEVEL doesn't exist on the wire (dim is a
+            // bool at 0x40) — the old float writes were a misdecode; drop them
+            QBLog.log("transport: no direct mapping for double write (glue offline) — dropped")
             QBLog.log("transport: no direct mapping for double write (glue offline) — dropped")
         }
         // (The routing cards' trim knobs are SOFTWARE trim, applied inside
@@ -1445,24 +1445,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if id == active.hwout0Mute { _ = self.writeMute(.mainOut, value); return }
             if id == active.hwout1Mute { _ = self.writeMute(.headphones, value); return }
             if id == PathIds.dev("identify") { _ = self.tryDirectIdentify(on: value); return }
-            // the dims (0x4F) + the sums (0x4E) at the monitor register 0x0C
-            if id == active.hwout0Dim { _ = self.directUSB.setMonitorFlag(reg: 0x4F, output: 0, on: value); return }
-            if id == active.hwout1Dim { _ = self.directUSB.setMonitorFlag(reg: 0x4F, output: 1, on: value); return }
-            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.directUSB.setMonitorFlag(reg: 0x4E, output: 0, on: value); return }
-            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.directUSB.setMonitorFlag(reg: 0x4E, output: 1, on: value); return }
-            // the input-side bools: the phantom, the soft limit, the polarity, the level
+            // 11.7 sweep-verified: dim = 0x40, sum = 0x46 (wIndex = the output)
+            if id == active.hwout0Dim { _ = self.directUSB.setOutputFlag(0x40, output: 0, on: value); return }
+            if id == active.hwout1Dim { _ = self.directUSB.setOutputFlag(0x40, output: 1, on: value); return }
+            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.directUSB.setOutputFlag(0x46, output: 0, on: value); return }
+            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.directUSB.setOutputFlag(0x46, output: 1, on: value); return }
+            // the input-side bools — sweep-verified registers, no ids needed:
             for (input, ids) in active.hwinPhantom where ids == id {
-                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
+                _ = self.directUSB.setInputFlag(0x15, input: UInt16(input), on: value); return
             }
             for (input, ids) in active.hwinSoftLimit where ids == id {
-                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
+                _ = self.directUSB.setInputFlag(0x11, input: UInt16(input), on: value); return
             }
             for (input, ids) in active.hwinPolarity where ids == id {
-                _ = self.directUSB.setInputType(input: UInt16(input), raw: value ? 1 : 0); return
-            }
-            for (input, ids) in active.hwinRefLevel where ids == id {
-                // the level = the int32 (2/3) — the type-ish command; the raw byte = the value
-                _ = self.directUSB.setInputType(input: UInt16(input), raw: UInt8(value ? 1 : 0)); return
+                _ = self.directUSB.setInputFlag(0x13, input: UInt16(input), on: value); return
             }
             QBLog.log("transport: no direct mapping for bool write (glue offline) — dropped")
         }
@@ -1506,6 +1502,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.glue.setBool(id: id, on); return true
             }
             return self.directUSB.setPhantom(input: UInt16(i), on: on)
+        }
+        control.onDirectInputFlag = { [weak self] reg, i, on in
+            guard let self else { return false }
+            return self.directUSB.setInputFlag(reg, input: UInt16(i), on: on)
         }
         control.onDirectInputGain = { [weak self] i, v in
             guard let self else { return false }
