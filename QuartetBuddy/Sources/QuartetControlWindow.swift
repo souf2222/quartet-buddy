@@ -3095,6 +3095,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onDirectInputType: ((Int, Int32) -> Bool)?
     /// Whether a read-back refresh is in flight (prevents the recursion).
     private var deviceRefreshInFlight = false
+    /// 11.6: the hardware is the truth in direct mode — re-poll the input
+    /// registers on this cadence so front-panel changes (the encoder, the
+    /// touchscreen) show up in the UI.
+    private var devicePollTimer: Timer?
     /// The last tree the app received (seeds the window with real values).
     var onSeedTree: (() -> [String: Any]?)?
     /// Toolbar settings button → Settings window.
@@ -3151,6 +3155,27 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var interfaceName: String = "Apogee Quartet"
 
     // MARK: state
+
+    /// 11.6: one async read sweep of the input registers (0x34 gain,
+    /// 0x36 type ×4 inputs) → applyInputReadBacks → refresh.
+    private func readInputsFromDevice() {
+        guard !deviceRefreshInFlight, readInputDirect != nil else { return }
+        deviceRefreshInFlight = true
+        let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36)] }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var values: [(Int, UInt8, UInt8)] = []
+            for (i, bReq) in reads {
+                if let v = self?.readInputDirect?(i, bReq) { values.append((i, bReq, v)) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.deviceRefreshInFlight = false
+                self?.applyInputReadBacks(values)
+                self?.suppressActions = true
+                self?.refresh()
+                self?.suppressActions = false
+            }
+        }
+    }
 
     /// 11.6: apply the device's read-back values to the input states
     /// (the offline UI's truth = the device itself).
@@ -3364,19 +3389,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // the input state comes from the device's read-backs
         let inputsUnknown = inputs.allSatisfy { $0.micGain == nil && $0.refLevel == nil }
         if inputsUnknown && !deviceRefreshInFlight, readInputDirect != nil {
-            deviceRefreshInFlight = true
-            let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x34), (i, 0x36)] }
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                var values: [(Int, UInt8, UInt8)] = []
-                for (i, bReq) in reads {
-                    if let v = self?.readInputDirect?(i, bReq) { values.append((i, bReq, v)) }
-                }
-                DispatchQueue.main.async { [weak self] in
-                    self?.deviceRefreshInFlight = false
-                    self?.applyInputReadBacks(values)
-                    self?.refreshNow()
-                }
+            readInputsFromDevice()
+        }
+        // 11.6: while the window is visible in direct mode, follow the
+        // HARDWARE — front-panel gain/type changes flow back on this cadence
+        let directMode = connected && !(isGlueConnected?() ?? false)
+        if directMode, readInputDirect != nil, devicePollTimer == nil {
+            devicePollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                guard let self, self.window?.isVisible == true, !self.deviceRefreshInFlight else { return }
+                self.readInputsFromDevice()
             }
+        } else if !directMode, let t = devicePollTimer {
+            t.invalidate(); devicePollTimer = nil
         }
         let learning = isLearning
         let autoRunning = AutoGainEngine.shared.runningInputs
@@ -3386,7 +3410,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let st = inputs[i]
             let t = PathIds.active
             let lineMode = st.refLevel == 2 || st.refLevel == 3
-            levelPopups[i].isEnabled = connected && !learning && t.hwinRefLevel[i] != nil && autoRunning.isEmpty
+            // direct mode (glue offline): the vendor writes exist (0x34/0x36)
+            // — no captured path-id needed
+            let directMode = connected && !(isGlueConnected?() ?? false)
+            levelPopups[i].isEnabled = connected && !learning && autoRunning.isEmpty
+                && (directMode || t.hwinRefLevel[i] != nil)
             // the hardware level is UNKNOWN while the device is away —
             // the tree still holds the last value, but it is not live
             if connected, let rl = st.refLevel {
@@ -3427,7 +3455,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             gainKnobs[i].isEnabled = preampActive && connected && !learning
-                && micId != nil && instId != nil && autoRunning.isEmpty
+                && (directMode || (micId != nil && instId != nil)) && autoRunning.isEmpty
             let shown: Double
             if st.refLevel == 4 { shown = st.instGain ?? st.micGain ?? 0 }
             else { shown = st.micGain ?? st.instGain ?? 0 }

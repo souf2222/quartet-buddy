@@ -583,6 +583,15 @@ silently failed; reads returned nil → the UI stayed empty).
   0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
   matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
 
+**probe9 (11/7): the writable per-input registers:** `0x13` (wIndex=input)
+accepts writes and STICKS (write 1 → reads 1; restored 0) — function
+unknown, a 48V/SL/Ø candidate. `0x11` reads 1 everywhere (write inconclusive).
+After a write to an unusual register, subsequent reads can fail transiently
+(0xff) — the device goes briefly busy; probe7 immediately after read
+everything fine again. Also: the user's own encoder test changed in0's 0x34
+from 0x21 to 0x00 — the DEVICE register is the truth (front-panel writes land
+there), so the UI re-poll (2 s cadence in direct mode, added) is the right model.
+
 **Wired into the app (built 12:54):** setInputGain→0x34, setInputType→0x36
 (+ the app↔device enum map in DirectUSBClient), readInput addressing fix,
 the read sweep = {0x34,0x36}×4, the type popup's offline fallback
