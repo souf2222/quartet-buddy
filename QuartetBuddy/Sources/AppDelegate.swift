@@ -1317,17 +1317,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
     /// own writes): the tree code (actionType<<16)|param → the device byte
     /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
-    // THE DAEMON'S TRUE TABLE (reproduced identically in two independent
-    // sweeps — the tail's non-sequential bytes are the firmware's real enum,
-    // NOT flush-queue reordering; the "sequential" reinterpretation scrambled
-    // the pads live). The user's list = the MENU order, not the byte order.
+    // THE TRUE ENUM — SEQUENTIAL FROM 0x03 (the user's live test 11/7:
+    // assigning "Mute Speaker" (=the captured 02) muted the HEADPHONE ⇒
+    // the device's MuteSpk = 03). Root cause of the off-by-one in every
+    // capture: the shim dumps the request buffer at method ENTRY and the
+    // daemon's write queue REUSES the same stack buffer — every captured
+    // payload was the PREVIOUS write's value. The device's enum = 1-based
+    // sequential, matching the user's menu order:
     static let padCodeToByte: [Int: UInt8] = [
-        0x20002: 0x02, 0x20003: 0x03, 0x20004: 0x04,          // Mute Spk/HP/All
-        0x30002: 0x05, 0x30003: 0x06, 0x30004: 0x07,          // Dim Spk/HP/All
-        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0e,          // Sum Spk/HP, Sum All
-        0x5000C: 0x0a, 0x60001: 0x0b,                          // Toggle Set, Clear Meters
-        0x70005: 0x0c, 0x70006: 0x0d,                          // Engage Set 1/2
-        0x5000B: 0x0f,                                          // Toggle Mute Spk/HP
+        0x20002: 0x03, 0x20003: 0x04, 0x20004: 0x05,          // Mute Spk/HP/All
+        0x30002: 0x06, 0x30003: 0x07, 0x30004: 0x08,          // Dim Spk/HP/All
+        0x40002: 0x09, 0x40003: 0x0a, 0x40004: 0x0b,          // Sum Spk/HP/All
+        0x5000B: 0x0c, 0x5000C: 0x0d, 0x60001: 0x0e,          // Toggle Mute/Set, Clear
+        0x70005: 0x0f, 0x70006: 0x10, 0x70007: 0x11,          // Engage Set 1/2/3
     ]
     static let padByteToCode: [UInt8: Int] =
         Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
