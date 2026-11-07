@@ -553,6 +553,58 @@ loaded in the kernel. **A reboot flushes the last kernel-side merge nubs**
 **⇒ The goal reached: only Quartet Buddy installed, fully working.**
 A reboot is recommended once to flush the kernel-side merge nubs.
 
+### ⭐ THE COMPLETE REGISTER MAP (11/7 sweep — decoded from the daemon's own USB writes)
+The sweep toggled every tree property A→B→A while the shim captured the
+wire; the timeline correlation (write ≈ mark−1.5…−3 s, lazy queue flush)
+yields the FULL map. Capture: captures/usbsniff_sweep_2026-11-07.log (37 MB)
++ captures/sweep_timeline_2026-11-07.txt. All writes: bmRequestType=0x40,
+wValue=0, wIndex=selector, 1 byte, unless noted.
+
+**INPUTS (wIndex = input 0…3):**
+* `0x11` softLimit (0/1; default 1 — the tree's softLimit=True ✓)
+* `0x13` polarityInvert Ø (0/1)
+* `0x15` phantom +48V (0/1)  [touchscreen-verified earlier]
+* `0x16` input TYPE: 0=+4dBu, 1=−10dBV, 2=Mic, 3=Instrument  [touchscreen-verified]
+* `0x34` MIC preamp gain, |dB| (0…75)
+* `0x3e` INSTRUMENT preamp gain, |dB| (the app's separate inst store!)
+* `0x44` group/ganging (0/1) — the daemon writes BOTH pair members
+
+**ANALOG OUTS (wIndex = out−2, i.e. hwout2…7 → 0…5):**
+* `0x18` output TRIM: |dB|×10, attenuation-only (0…~240)
+  (−10→0x64, −20→0xc8, −5→0x32, 0→0x00; the pre-existing c8/c8/0a/0a
+  match the tree's −20/−20/−1/−1 EXACTLY)
+* `0xb6` output REF LEVEL bit: +4dBu=0, −10dBV=1
+  (⚠ 0xB6 was earlier mis-attributed to "identify" — the blink may have
+  been the output LEDs reacting to the level change; re-verify identify)
+
+**MONITOR OUTPUTS (hwout0=Main, hwout1=HP; wIndex = the output):**
+* `0x33` gain |dB|, `0x35` mute (verified earlier)
+* `0x40` dim flag (0/1)   ← NOT 0x4F as guessed
+* `0x46` sum-to-mono flag (0/1)  ← NOT 0x4E as guessed
+* `0x45` mainOutputFormat bit; `0x47` activeSpeakerSet bit
+
+**MIXER (wIndex = channel 0…12, 14 = MASTER):**
+* `0x4C` fader volume, clamp(dB+48, 0…54)  (−10→0x26, −6→0x2a)
+* `0x4D` pan, round(pan×128)  (0.25→0x20, 0.5→0x40)  ← NOT the dim level
+* `0x4E` solo (0/1)   ← NOT the mute
+* `0x4F` mute (0/1)   ← NOT the dim enable
+* after EVERY mixer change the daemon also commits two 28-byte `0x10`
+  block writes (wIndex=0 and 1; 12×(val,0xA1)-ish + tail) — a state
+  snapshot, likely the power-cycle persistence mechanism. Layout TBD;
+  the individual registers above suffice for control.
+* the matrix cells (wValue=input, wIndex=output) were audibly verified
+  earlier with the same 0x4C/0x4E — the cell space and the channel-fader
+  space coexist in one register family.
+
+**DEVICE (wIndex=0):**
+* `0x1f` peakHold, `0x20` overHold, `0x4a` lockHomeScreen (0/1)
+* `0x51` keyboardVolumeControls (0/1)
+* `0x49` wIndex=0…2 = the pad A/B/C action (enum byte: 131076→3, 262147→8)
+* `0x4b` wIndex=0 = the encoder-push action (enum byte: 327691→4)
+* `0x29` 7 B poll; `0x31` 8 B serial; `0x14` 60 B change-event block
+* the app's dim/sum guesses (0x4E/0x4F at reg 0x0C) were WRONG — the real
+  dim/sum = 0x40/0x46 with wIndex=the output.
+
 ### THE GLUE SWEEP (11/7 afternoon): the daemon restored UNDER THE SHIM
 The systematic decode: /Library/Apogee restored from the backup (ONLY the
 debug glue app — no launchd, no messenger/kext), the device replugged,

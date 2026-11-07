@@ -1,0 +1,607 @@
+1794076139.701  SERIAL quartet1528B15CEE547FA
+1794076139.701  PROPERTIES 422
+1794076139.701  PROP quartet1528B15CEE547FA/ignoreSideEffects = False
+1794076139.701  PROP quartet1528B15CEE547FA/treeVersion = 5
+1794076139.702  PROP quartet1528B15CEE547FA/identify = False
+1794076139.702  PROP quartet1528B15CEE547FA/name = 'Quartet'
+1794076139.702  PROP quartet1528B15CEE547FA/model = 4
+1794076139.702  PROP quartet1528B15CEE547FA/samplerate = 48000.0
+1794076139.702  PROP quartet1528B15CEE547FA/keyboardVolumeControls = 0
+1794076139.702  PROP quartet1528B15CEE547FA/peakHold = 1
+1794076139.702  PROP quartet1528B15CEE547FA/overHold = 1
+1794076139.702  PROP quartet1528B15CEE547FA/lockHomeScreen = True
+1794076139.702  PROP quartet1528B15CEE547FA/safeMode = False
+1794076154.454  SERIAL quartet1528B15CEE547FA
+1794076154.454  PROPERTIES 422
+1794076154.454  PROP quartet1528B15CEE547FA/ignoreSideEffects = False
+1794076154.454  PROP quartet1528B15CEE547FA/treeVersion = 5
+1794076154.454  PROP quartet1528B15CEE547FA/identify = False
+1794076154.454  PROP quartet1528B15CEE547FA/name = 'Quartet'
+1794076154.454  PROP quartet1528B15CEE547FA/model = 4
+1794076154.454  PROP quartet1528B15CEE547FA/samplerate = 48000.0
+1794076154.454  PROP quartet1528B15CEE547FA/keyboardVolumeControls = 0
+1794076154.454  PROP quartet1528B15CEE547FA/peakHold = 1
+1794076154.454  PROP quartet1528B15CEE547FA/overHold = 1
+1794076154.454  PROP quartet1528B15CEE547FA/lockHomeScreen = True
+1794076154.454  PROP quartet1528B15CEE547FA/safeMode = False
+1794076154.454  PROP quartet1528B15CEE547FA/supportedBufferSizesBitSet = 0
+1794076154.454  PROP quartet1528B15CEE547FA/preferredBufferSize = 128
+1794076154.454  PROP quartet1528B15CEE547FA/appState/selectedChannel = 2
+1794076154.454  PROP quartet1528B15CEE547FA/appState/selectedMixer = 0
+1794076154.454  PROP quartet1528B15CEE547FA/appState/sleepms = 50
+1794076154.454  PROP quartet1528B15CEE547FA/appState/actionButtons/Encoder_Push/actionButton = 327691
+1794076154.454  PROP quartet1528B15CEE547FA/appState/actionButtons/Touchpad_A/actionButton = 131076
+1794076154.455  PROP quartet1528B15CEE547FA/appState/actionButtons/Touchpad_B/actionButton = 262147
+1794076154.455  PROP quartet1528B15CEE547FA/appState/actionButtons/Touchpad_C/actionButton = 262147
+1794076154.455  PROP quartet1528B15CEE547FA/versionTree/version = 50331657
+1794076154.455  PROP quartet1528B15CEE547FA/versionTree/boardVersion = 50331648
+1794076154.455  PROP quartet1528B15CEE547FA/versionTree/fpgaVersion = 167772160
+1794076154.455  PROP quartet1528B15CEE547FA/versionTree/xmosVersion = 50331657
+1794076154.455  PROP quartet1528B15CEE547FA/versionTree/xmosSourceVersion = 50331657
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/name = 'Analog IN 1'
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/index = 0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/mixerChannel = 0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/channelType = 0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/analogRefLevel = 1
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/softLimit = True
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/polarityInvert = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/group = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/micSettings/phantom = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/micSettings/PreModelQuartet/gain = 0.0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin0/instSettings/PreModelQuartet/gain = 0.0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/name = 'Analog IN 2'
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/index = 1
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/mixerChannel = 1
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/channelType = 0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/analogRefLevel = 1
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/softLimit = True
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/polarityInvert = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/group = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/micSettings/phantom = False
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/micSettings/PreModelQuartet/gain = 0.0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin1/instSettings/PreModelQuartet/gain = 17.0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/name = 'Analog IN 3'
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/index = 2
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/mixerChannel = 2
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/channelType = 0
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/analogRefLevel = 1
+1794076154.455  PROP quartet1528B15CEE547FA/hwin/hwin2/softLimit = True
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin2/polarityInvert = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin2/group = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin2/micSettings/phantom = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin2/micSettings/PreModelQuartet/gain = 0.0
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin2/instSettings/PreModelQuartet/gain = 0.0
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/name = 'Analog IN 4'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/index = 3
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/mixerChannel = 3
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/channelType = 0
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/analogRefLevel = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/softLimit = True
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/polarityInvert = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/group = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/micSettings/phantom = False
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/micSettings/PreModelQuartet/gain = 0.0
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin3/instSettings/PreModelQuartet/gain = 0.0
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin4/name = 'Optical IN 1'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin4/index = 4
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin4/mixerChannel = 4
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin4/channelType = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin5/name = 'Optical IN 2'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin5/index = 5
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin5/mixerChannel = 5
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin5/channelType = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin6/name = 'Optical IN 3'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin6/index = 6
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin6/mixerChannel = 6
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin6/channelType = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin7/name = 'Optical IN 4'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin7/index = 7
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin7/mixerChannel = 7
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin7/channelType = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin8/name = 'Optical IN 5'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin8/index = 8
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin8/mixerChannel = 8
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin8/channelType = 1
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin9/name = 'Optical IN 6'
+1794076154.456  PROP quartet1528B15CEE547FA/hwin/hwin9/index = 9
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin9/mixerChannel = 9
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin9/channelType = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin10/name = 'Optical IN 7'
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin10/index = 10
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin10/mixerChannel = 10
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin10/channelType = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin11/name = 'Optical IN 8'
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin11/index = 11
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin11/mixerChannel = 11
+1794076154.457  PROP quartet1528B15CEE547FA/hwin/hwin11/channelType = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/name = 'Main Out'
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/index = 0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/channelType = 0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/monitorType = 0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/gain = -36.0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/dim = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/mute = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/sum = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/mainOutputFormat = 2
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout0/activeSpeakerSet = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/name = 'HP'
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/index = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/channelType = 0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/monitorType = 1
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/gain = -40.0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/dim = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/mute = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/sum = False
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout1/routeSource = 402653190
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/name = 'Analog Out 1'
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/index = 2
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/mixerChannel = 13
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/channelType = 0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/analogRefLevel = 2
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/trim = 0.0
+1794076154.457  PROP quartet1528B15CEE547FA/hwout/hwout2/routeSource = 268435456
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/name = 'Analog Out 2'
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/index = 3
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/mixerChannel = 14
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/channelType = 0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/analogRefLevel = 2
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/trim = 0.0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout3/routeSource = 268435457
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/name = 'Analog Out 3'
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/index = 4
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/mixerChannel = 15
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/channelType = 0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/analogRefLevel = 2
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/trim = -20.0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout4/routeSource = 268435458
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/name = 'Analog Out 4'
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/index = 5
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/mixerChannel = 16
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/channelType = 0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/analogRefLevel = 2
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/trim = -20.0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout5/routeSource = 268435459
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/name = 'Analog Out 5'
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/index = 6
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/mixerChannel = 17
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/channelType = 0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/analogRefLevel = 2
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/trim = -1.0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout6/routeSource = 268435460
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/name = 'Analog Out 6'
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/index = 7
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/mixerChannel = 18
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/channelType = 0
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/analogRefLevel = 2
+1794076154.458  PROP quartet1528B15CEE547FA/hwout/hwout7/trim = -1.0
+1794076154.459  PROP quartet1528B15CEE547FA/hwout/hwout7/routeSource = 268435461
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback0/name = 'Playback 1-2'
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback0/index = 0
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback0/mixerChannel = 12
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback1/name = 'Playback 3-4'
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback1/index = 1
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback1/mixerChannel = 12
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback2/name = 'Playback 5-6'
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback2/index = 2
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback2/mixerChannel = 12
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback3/name = 'Playback 7-8'
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback3/index = 3
+1794076154.459  PROP quartet1528B15CEE547FA/swout/playback3/mixerChannel = 12
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/name = 'Mixer 1'
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/index = 0
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/index = 0
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/hidden = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/name = 'Analog IN 1'
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/isStereo = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/volume = 0.0
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/pan = 0.5
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/mute = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/solo = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel0/soloSafe = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/index = 1
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/hidden = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/name = 'Analog IN 2'
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/isStereo = False
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/volume = 0.0
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/pan = 0.5
+1794076154.459  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/mute = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/solo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel1/soloSafe = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/index = 2
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/hidden = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/name = 'Analog IN 3'
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/isStereo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/volume = 0.0
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/pan = 0.5
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/mute = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/solo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel2/soloSafe = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/index = 3
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/hidden = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/name = 'Analog IN 4'
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/isStereo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/volume = 0.0
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/pan = 0.5
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/mute = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/solo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel3/soloSafe = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/index = 4
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/hidden = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/name = 'Optical IN 1'
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/isStereo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/volume = 0.0
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/pan = 0.5
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/mute = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/solo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel4/soloSafe = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/index = 5
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/hidden = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/name = 'Optical IN 2'
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/isStereo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/volume = 0.0
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/pan = 0.5
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/mute = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/solo = False
+1794076154.460  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel5/soloSafe = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/index = 6
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/hidden = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/name = 'Optical IN 3'
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/isStereo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/volume = 0.0
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/pan = 0.5
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/mute = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/solo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel6/soloSafe = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/index = 7
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/hidden = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/name = 'Optical IN 4'
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/isStereo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/volume = 0.0
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/pan = 0.5
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/mute = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/solo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel7/soloSafe = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/index = 8
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/hidden = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/name = 'Optical IN 5'
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/isStereo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/volume = 0.0
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/pan = 0.5
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/mute = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/solo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel8/soloSafe = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/index = 9
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/hidden = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/name = 'Optical IN 6'
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/isStereo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/volume = 0.0
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/pan = 0.5
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/mute = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/solo = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel9/soloSafe = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/index = 10
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/hidden = False
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/name = 'Optical IN 7'
+1794076154.461  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/isStereo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/volume = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/pan = 0.5
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/mute = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/solo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel10/soloSafe = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/index = 11
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/hidden = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/name = 'Optical IN 8'
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/isStereo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/volume = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/pan = 0.5
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/mute = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/solo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel11/soloSafe = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/index = 12
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/hidden = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/name = 'Playback'
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/volume = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/pan = 0.5
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/mute = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/solo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/soloSafe = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/channel12/routeSource = 402653184
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/master/index = 3
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/master/hidden = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/master/name = 'Mixer Master'
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/master/volume = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer0/channels/master/mute = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/name = 'Mixer 2'
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/index = 1
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/index = 0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/hidden = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/name = 'Analog IN 1'
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/isStereo = False
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/volume = 0.0
+1794076154.462  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/pan = 0.5
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/mute = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/solo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel0/soloSafe = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/index = 1
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/hidden = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/name = 'Analog IN 2'
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/isStereo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/volume = 0.0
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/pan = 0.5
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/mute = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/solo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel1/soloSafe = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/index = 2
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/hidden = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/name = 'Analog IN 3'
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/isStereo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/volume = 0.0
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/pan = 0.5
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/mute = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/solo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel2/soloSafe = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/index = 3
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/hidden = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/name = 'Analog IN 4'
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/isStereo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/volume = 0.0
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/pan = 0.5
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/mute = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/solo = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel3/soloSafe = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/index = 4
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/hidden = False
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/name = 'Optical IN 1'
+1794076154.463  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/isStereo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/volume = 0.0
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/pan = 0.5
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/mute = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/solo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel4/soloSafe = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/index = 5
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/hidden = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/name = 'Optical IN 2'
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/isStereo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/volume = 0.0
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/pan = 0.5
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/mute = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/solo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel5/soloSafe = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/index = 6
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/hidden = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/name = 'Optical IN 3'
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/isStereo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/volume = 0.0
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/pan = 0.5
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/mute = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/solo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel6/soloSafe = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/index = 7
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/hidden = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/name = 'Optical IN 4'
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/isStereo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/volume = 0.0
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/pan = 0.5
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/mute = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/solo = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel7/soloSafe = False
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/index = 8
+1794076154.464  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/hidden = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/name = 'Optical IN 5'
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/isStereo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/volume = 0.0
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/pan = 0.5
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/mute = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/solo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel8/soloSafe = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/index = 9
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/hidden = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/name = 'Optical IN 6'
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/isStereo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/volume = 0.0
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/pan = 0.5
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/mute = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/solo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel9/soloSafe = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/index = 10
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/hidden = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/name = 'Optical IN 7'
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/isStereo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/volume = 0.0
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/pan = 0.5
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/mute = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/solo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel10/soloSafe = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/index = 11
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/hidden = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/name = 'Optical IN 8'
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/isStereo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/volume = 0.0
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/pan = 0.5
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/mute = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/solo = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel11/soloSafe = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/index = 12
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/hidden = False
+1794076154.465  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/name = 'Playback'
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/volume = 0.0
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/pan = 0.5
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/mute = False
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/solo = False
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/soloSafe = False
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/channel12/routeSource = 402653184
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/master/index = 3
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/master/hidden = False
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/master/name = 'Mixer Master'
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/master/volume = 0.0
+1794076154.466  PROP quartet1528B15CEE547FA/mixers/mixer1/channels/master/mute = 0.0
+1794076193.087  SERIAL quartet1528B15CEE547FA
+1794076196.097  SET hwin/hwin0/softLimit = False
+1794076201.614  SET hwin/hwin0/softLimit = True
+1794076207.130  SET hwin/hwin0/polarityInvert = True
+1794076212.642  SET hwin/hwin0/polarityInvert = False
+1794076218.156  SET hwin/hwin0/group = True
+1794076223.672  SET hwin/hwin0/group = False
+1794076230.872  SERIAL quartet1528B15CEE547FA
+1794076233.881  SET hwin/hwin0/softLimit = False
+1794076239.394  SET hwin/hwin0/softLimit = True
+1794076244.907  SET hwin/hwin0/polarityInvert = True
+1794076250.418  SET hwin/hwin0/polarityInvert = False
+1794076255.930  SET hwin/hwin0/group = True
+1794076261.443  SET hwin/hwin0/group = False
+1794076271.316  SERIAL quartet1528B15CEE547FA
+1794076274.326  SET hwin/hwin0/softLimit = False
+1794076279.841  SET hwin/hwin0/softLimit = True
+1794076285.353  SET hwin/hwin0/polarityInvert = True
+1794076290.865  SET hwin/hwin0/polarityInvert = False
+1794076296.380  SET hwin/hwin0/group = True
+1794076301.894  SET hwin/hwin0/group = False
+1794076307.409  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 30.0
+1794076312.923  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 0.0
+1794076318.433  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 12.0
+1794076323.950  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 0.0
+1794076329.461  SET hwin/hwin0/micSettings/phantom = True
+1794076334.977  SET hwin/hwin0/micSettings/phantom = False
+1794076340.488  SET hwin/hwin0/analogRefLevel = 2
+1794076346.005  SET hwin/hwin0/analogRefLevel = 1
+1794076351.521  SET peakHold = 0
+1794076357.036  SET peakHold = 1
+1794076362.553  SET overHold = 0
+1794076368.065  SET overHold = 1
+1794076373.580  SET lockHomeScreen = False
+1794076379.097  SET lockHomeScreen = True
+1794076384.611  SET keyboardVolumeControls = 1
+1794076390.121  SET keyboardVolumeControls = 0
+1794076395.640  SET hwout/hwout0/dim = True
+1794076401.159  SET hwout/hwout0/dim = False
+1794076406.671  SET hwout/hwout0/sum = True
+1794076412.187  SET hwout/hwout0/sum = False
+1794076417.704  SET hwout/hwout1/dim = True
+1794076423.221  SET hwout/hwout1/dim = False
+1794076428.736  SET hwout/hwout1/sum = True
+1794076434.252  SET hwout/hwout1/sum = False
+1794076439.763  SET hwout/hwout2/analogRefLevel = 3
+1794076445.279  SET hwout/hwout2/analogRefLevel = 2
+1794076450.796  SET hwout/hwout4/trim = -10.0
+1794076456.310  SET hwout/hwout4/trim = -20.0
+1794076461.822  SET hwout/hwout4/trim = 0.0
+1794076467.335  SET hwout/hwout4/trim = -20.0
+1794076472.851  SET hwout/hwout2/trim = -5.0
+1794076478.366  SET hwout/hwout2/trim = 0.0
+1794076483.881  SET hwout/hwout0/mainOutputFormat = 0
+1794076489.396  SET hwout/hwout0/mainOutputFormat = 2
+1794076494.914  SET hwout/hwout0/activeSpeakerSet = 0
+1794076500.430  SET hwout/hwout0/activeSpeakerSet = 1
+1794076505.945  SET mixers/mixer0/channels/channel0/pan = 0.25
+1794076511.461  SET mixers/mixer0/channels/channel0/pan = 0.5
+1794076516.975  SET mixers/mixer0/channels/channel0/solo = True
+1794076522.486  SET mixers/mixer0/channels/channel0/solo = False
+1794076528.001  SET mixers/mixer0/channels/channel0/volume = -10.0
+1794076533.514  SET mixers/mixer0/channels/channel0/volume = 0.0
+1794076539.026  SET mixers/mixer0/channels/channel0/mute = True
+1794076544.539  SET mixers/mixer0/channels/channel0/mute = False
+1794076550.053  SET mixers/mixer0/channels/master/volume = -6.0
+1794076555.567  SET mixers/mixer0/channels/master/volume = 0.0
+1794076561.083  SET mixers/mixer0/channels/master/mute = 1.0
+1794076566.596  SET mixers/mixer0/channels/master/mute = 0.0
+1794076577.896  SERIAL quartet1528B15CEE547FA
+1794076580.906  SET hwin/hwin0/softLimit = False
+1794076586.417  SET hwin/hwin0/softLimit = True
+1794076591.932  SET hwin/hwin0/polarityInvert = True
+1794076597.447  SET hwin/hwin0/polarityInvert = False
+1794076602.962  SET hwin/hwin0/group = True
+1794076608.477  SET hwin/hwin0/group = False
+1794076613.992  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 30.0
+1794076619.509  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 0.0
+1794076625.025  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 12.0
+1794076628.807  SERIAL quartet1528B15CEE547FA
+1794076659.697  SERIAL quartet1528B15CEE547FA
+1794076663.522  SET hwin/hwin0/softLimit = False AFTER=False
+1794076669.856  SET hwin/hwin0/softLimit = True AFTER=True
+1794076676.187  SET hwin/hwin0/polarityInvert = True AFTER=True
+1794076682.511  SET hwin/hwin0/polarityInvert = False AFTER=False
+1794076688.838  SET hwin/hwin0/group = True AFTER=True
+1794076695.164  SET hwin/hwin0/group = False AFTER=False
+1794076701.497  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 30.0 AFTER=30.0
+1794076707.827  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 0.0 AFTER=0.0
+1794076742.649  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 12.0 AFTER=12.0
+1794076749.060  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 0.0 AFTER=0.0
+1794076755.404  SET hwin/hwin0/micSettings/phantom = True AFTER=True
+1794076802.412  SET hwin/hwin0/micSettings/phantom = False AFTER=False
+1794076808.741  SET hwin/hwin0/analogRefLevel = 2 AFTER=2
+1794076815.070  SET hwin/hwin0/analogRefLevel = 1 AFTER=1
+1794076821.396  SET peakHold = 0 AFTER=0
+1794076827.728  SET peakHold = 1 AFTER=1
+1794076834.058  SET overHold = 0 AFTER=0
+1794076840.381  SET overHold = 1 AFTER=1
+1794076846.705  SET lockHomeScreen = False AFTER=False
+1794076853.029  SET lockHomeScreen = True AFTER=True
+1794076859.357  SET keyboardVolumeControls = 1 AFTER=1
+1794076865.686  SET keyboardVolumeControls = 0 AFTER=0
+1794076872.012  SET hwout/hwout0/dim = True AFTER=True
+1794076878.342  SET hwout/hwout0/dim = False AFTER=False
+1794076884.671  SET hwout/hwout0/sum = True AFTER=True
+1794076890.998  SET hwout/hwout0/sum = False AFTER=False
+1794076897.329  SET hwout/hwout1/dim = True AFTER=True
+1794076903.653  SET hwout/hwout1/dim = False AFTER=False
+1794076909.981  SET hwout/hwout1/sum = True AFTER=True
+1794076916.308  SET hwout/hwout1/sum = False AFTER=False
+1794076922.637  SET hwout/hwout2/analogRefLevel = 3 AFTER=3
+1794076928.965  SET hwout/hwout2/analogRefLevel = 2 AFTER=2
+1794076935.293  SET hwout/hwout4/trim = -10.0 AFTER=-10.0
+1794076941.615  SET hwout/hwout4/trim = -20.0 AFTER=-20.0
+1794076947.945  SET hwout/hwout4/trim = 0.0 AFTER=0.0
+1794076954.276  SET hwout/hwout4/trim = -20.0 AFTER=-20.0
+1794076960.606  SET hwout/hwout2/trim = -5.0 AFTER=-5.0
+1794076966.936  SET hwout/hwout2/trim = 0.0 AFTER=0.0
+1794076973.266  SET hwout/hwout0/mainOutputFormat = 0 AFTER=0
+1794076979.591  SET hwout/hwout0/mainOutputFormat = 2 AFTER=2
+1794076985.923  SET hwout/hwout0/activeSpeakerSet = 0 AFTER=0
+1794076992.251  SET hwout/hwout0/activeSpeakerSet = 1 AFTER=1
+1794076998.578  SET mixers/mixer0/channels/channel0/pan = 0.25 AFTER=0.25
+1794077004.904  SET mixers/mixer0/channels/channel0/pan = 0.5 AFTER=0.5
+1794077011.232  SET mixers/mixer0/channels/channel0/solo = True AFTER=True
+1794077017.557  SET mixers/mixer0/channels/channel0/solo = False AFTER=False
+1794077023.890  SET mixers/mixer0/channels/channel0/volume = -10.0 AFTER=-10.0
+1794077030.221  SET mixers/mixer0/channels/channel0/volume = 0.0 AFTER=0.0
+1794077036.553  SET mixers/mixer0/channels/channel0/mute = True AFTER=True
+1794077042.886  SET mixers/mixer0/channels/channel0/mute = False AFTER=False
+1794077049.211  SET mixers/mixer0/channels/master/volume = -6.0 AFTER=-6.0
+1794077055.539  SET mixers/mixer0/channels/master/volume = 0.0 AFTER=0.0
+1794077061.870  SET mixers/mixer0/channels/master/mute = 1.0 AFTER=1.0
+1794077068.199  SET mixers/mixer0/channels/master/mute = 0.0 AFTER=0.0
+1794077074.526  SET appState/actionButtons/Touchpad_A/actionButton = 262147 AFTER=262147
+1794077080.858  SET appState/actionButtons/Touchpad_A/actionButton = 131076 AFTER=131076
+1794077087.190  SET appState/actionButtons/Encoder_Push/actionButton = 262147 AFTER=262147
+1794077093.520  SET appState/actionButtons/Encoder_Push/actionButton = 327691 AFTER=327691
+1794077096.033  RESTORE-START
+1794077099.856  SET hwin/hwin0/softLimit = False AFTER=False
+1794077103.677  SET hwin/hwin0/polarityInvert = False AFTER=False
+1794077107.500  SET hwin/hwin0/group = False AFTER=False
+1794077111.324  SET hwin/hwin0/micSettings/PreModelQuartet/gain = 0.0 AFTER=0.0
+1794077115.152  SET hwin/hwin0/instSettings/PreModelQuartet/gain = 0.0 AFTER=0.0
+1794077118.980  SET hwin/hwin0/micSettings/phantom = False AFTER=False
+1794077122.808  SET hwin/hwin0/analogRefLevel = 1 AFTER=1
+1794077126.637  SET peakHold = 1 AFTER=1
+1794077130.461  SET overHold = 1 AFTER=1
+1794077134.284  SET lockHomeScreen = True AFTER=True
+1794077138.107  SET keyboardVolumeControls = 0 AFTER=0
+1794077141.936  SET hwout/hwout0/dim = False AFTER=False
+1794077145.757  SET hwout/hwout0/sum = False AFTER=False
+1794077149.588  SET hwout/hwout1/dim = False AFTER=False
+1794077153.409  SET hwout/hwout1/sum = False AFTER=False
+1794077157.233  SET hwout/hwout2/analogRefLevel = 2 AFTER=2
+1794077161.055  SET hwout/hwout4/trim = -20.0 AFTER=-20.0
+1794077164.881  SET hwout/hwout2/trim = 0.0 AFTER=0.0
+1794077168.707  SET hwout/hwout0/mainOutputFormat = 2 AFTER=2
+1794077172.535  SET hwout/hwout0/activeSpeakerSet = 1 AFTER=1
+1794077176.357  SET mixers/mixer0/channels/channel0/pan = 0.5 AFTER=0.5
+1794077180.182  SET mixers/mixer0/channels/channel0/solo = False AFTER=False
+1794077184.011  SET mixers/mixer0/channels/channel0/volume = 0.0 AFTER=0.0
+1794077187.839  SET mixers/mixer0/channels/channel0/mute = False AFTER=False
+1794077191.668  SET mixers/mixer0/channels/master/volume = 0.0 AFTER=0.0
+1794077195.492  SET mixers/mixer0/channels/master/mute = 0.0 AFTER=0.0
+1794077199.319  SET appState/actionButtons/Touchpad_A/actionButton = 131076 AFTER=131076
+1794077203.145  SET appState/actionButtons/Encoder_Push/actionButton = 327691 AFTER=327691
+1794077203.146  RESTORE-DONE
+1794077203.146  SWEEP-DONE
