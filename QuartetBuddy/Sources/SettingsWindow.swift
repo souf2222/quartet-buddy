@@ -1443,19 +1443,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         QBLog.log("settings: routing slot \(slot) → \(Self.routingSources[v])")
     }
 
+    private var lastRoutingValues: [Int?] = []
+
     private func refreshRouting() {
         guard !routingPopups.isEmpty else { return }
         routingSuppress = true
         defer { routingSuppress = false }
         let read = readHwoutRouting?() ?? []
         for (slot, popup) in routingPopups.enumerated() {
-            if slot < read.count, let v = read[slot], (0..<Self.routingSources.count).contains(v) {
+            let v = slot < read.count ? read[slot] : nil
+            let last = slot < lastRoutingValues.count ? lastRoutingValues[slot] : nil
+            guard v != last else { continue }   // stable value — don't touch the popup
+            if let v, (0..<Self.routingSources.count).contains(v) {
                 popup.isEnabled = true
                 popup.selectItem(at: v)
             } else {
                 popup.isEnabled = false
             }
         }
+        lastRoutingValues = read
     }
 
     /// Page-level hardware refresh: status line, availability notice and
@@ -1463,6 +1469,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// when the tree is gone, keeping the last read values as labels).
     private func refreshQuartet() {
         guard hardwareNotice != nil else { return }
+        // 11.7: the reconnect loop fires refreshes every ~5 s — the sections
+        // must not churn while the window is hidden (or mid-interaction!)
+        guard window?.isVisible == true else { return }
         let connected = readDeviceProps?() != nil
         quartetStatusField.stringValue = connected
             ? "Apogee Quartet · Connected" : "Apogee Quartet · Not connected"
