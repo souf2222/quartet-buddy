@@ -1299,22 +1299,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
     /// own writes): the tree code (actionType<<16)|param → the device byte
     /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
-    // THE TRUE ENUM — SEQUENTIAL FROM 0x03, = Apogee Control 2's own bytes.
-    // The user's live test (assigning Mute Speaker under the map "02=MuteSpk"
-    // muted the HEADPHONE) proves the device's 02 = MuteHP ⇒ MuteSpk = 03.
-    // The captured payloads ([02, 03, …]) were shifted down by one because
-    // the shim dumps the request buffer at method ENTRY while the daemon's
-    // write queue reuses the same stack buffer — every captured payload was
-    // the PREVIOUS write's value. Control 2's pipeline = the UI → the
-    // daemon (the persistent XML model on the Mac + the continuous
-    // re-assert to the device) — the device's pad registers = the passive
-    // runtime view; there was never a device-side pad store.
+    // THE TRUE ENUM — THE 1-BASED SEQUENTIAL (01 = Mute Speaker). BOTH of
+    // the user's live tests confirm it independently:
+    //   • assigning "Mute Speaker" under the 02-map muted the HEADPHONE
+    //     ⇒ the device's 02 = Mute Headphone ✓ (the 1-based's 02!)
+    //   • assigning "Mute Headphone" under the 03-map (the byte 04) did
+    //     DIM SPEAKER ⇒ the device's 04 = Dim Speaker ✓ (the 1-based's 04!)
+    // The enum = the menu order starting at 1; 0x00 = inert (the encoder's
+    // out-of-menu note); 0x11+ = unassigned. The captured payloads read one
+    // lower because the shim dumps the request buffer at method ENTRY while
+    // the daemon's write queue reuses the same stack buffer.
     static let padCodeToByte: [Int: UInt8] = [
-        0x20002: 0x03, 0x20003: 0x04, 0x20004: 0x05,          // Mute Spk/HP/All
-        0x30002: 0x06, 0x30003: 0x07, 0x30004: 0x08,          // Dim Spk/HP/All
-        0x40002: 0x09, 0x40003: 0x0a, 0x40004: 0x0b,          // Sum Spk/HP/All
-        0x5000B: 0x0c, 0x5000C: 0x0d, 0x60001: 0x0e,          // Toggle Mute/Set, Clear
-        0x70005: 0x0f, 0x70006: 0x10, 0x70007: 0x11,          // Engage Set 1/2/3
+        0x20002: 0x01, 0x20003: 0x02, 0x20004: 0x03,          // Mute Spk/HP/All
+        0x30002: 0x04, 0x30003: 0x05, 0x30004: 0x06,          // Dim Spk/HP/All
+        0x40002: 0x07, 0x40003: 0x08, 0x40004: 0x09,          // Sum Spk/HP/All
+        0x5000B: 0x0a, 0x5000C: 0x0b, 0x60001: 0x0c,          // Toggle Mute/Set, Clear
+        0x70005: 0x0d, 0x70006: 0x0e, 0x70007: 0x0f,          // Engage Set 1/2/3
     ]
     static let padByteToCode: [UInt8: Int] =
         Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
