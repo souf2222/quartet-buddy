@@ -309,7 +309,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ensureDirectUSB() -> Bool {
         if directUSB.opened { return true }
         let ok = directUSB.open()
-        if ok { QBLog.log("transport: direct-USB session opened") }
+        if ok {
+            QBLog.log("transport: direct-USB session opened")
+            pushSavedRouting()
+        }
         return ok
     }
 
@@ -431,6 +434,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log("trim: saved hardware trims synced to the unit" +
                       pushedHardwareTrims.keys.sorted().map { String(format: " pair%d %.1f", $0, pushedHardwareTrims[$0] ?? 0) }.joined())
         }
+    }
+
+    /// Re-push the saved hardware routing (the HP = PB 7-8 by default) to
+    /// the unit — the same pattern as the saved trims. Runs at the direct
+    /// session open (boot + device arrival).
+    private func pushSavedRouting() {
+        for slot in 0..<4 {
+            let def: Int = slot == 0 ? 3 : slot - 1
+            let source = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int ?? def
+            let indexes: [UInt16] = slot == 0 ? [3]
+                : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)]
+            for wI in indexes {
+                _ = directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+            }
+        }
+        QBLog.log("routing: the saved sources re-pushed to the unit (the HP = PB 7-8 by default)")
     }
 
     /// The macOS mute changed (F10, Control Center): apply it to the
@@ -1813,7 +1832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return [] }
             return (0..<4).map { slot in
                 let v = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int
-                return v ?? (slot == 0 ? nil : slot - 1)   // the analog pairs' default = their own PB pair
+                return v ?? (slot == 0 ? 3 : slot - 1)   // the HP's default = PB 7-8 (the user's spec)
             }
         }
         settingsWindow.writeHwoutRouting = { [weak self] slot, source in
@@ -1826,6 +1845,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             UserDefaults.standard.set(source, forKey: "hwout.route.\(slot)")
         }
+        // (the routing's boot push lives in pushSavedRouting() — called
+        // from the direct-session open)
         settingsWindow.writePadAssignment = { [weak self] slot, value in
             guard let self else { return }
             let names = ["Touchpad_A", "Touchpad_B", "Touchpad_C", "Encoder_Push"]
