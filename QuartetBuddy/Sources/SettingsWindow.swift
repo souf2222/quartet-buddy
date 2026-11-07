@@ -1000,19 +1000,32 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Copy the tree's pad assignments into the popups (bound to the
     /// actionButtons children's `actionButton` values, latest tree state
     /// is picked up by our tree polling).
+    private var lastPadValues: [Int?] = []
+
     private func refreshPads() {
         guard !padPopups.isEmpty else { return }
         padSyncing = true
         defer { padSyncing = false }
-        let values = readPadAssignments?() ?? []
-        let connected = values.count == padPopups.count && values[0] != nil
+        var values = readPadAssignments?() ?? []
+        if values.count != padPopups.count { values = lastPadValues }
+        // 11.7 anti-flicker: a failed read keeps the LAST good value (no
+        // disable/re-enable churn — the device answers ~always but a busy
+        // instant must not blink the whole section); the popups are touched
+        // only when the value actually changed.
         for (i, popup) in padPopups.enumerated() {
-            popup.isEnabled = connected
-            if connected, let v = values[i],
-               let item = deepItem(in: popup.menu, value: v) {
-                popup.select(item)
+            let v = i < values.count ? values[i] : nil
+            let last = i < lastPadValues.count ? lastPadValues[i] : nil
+            if v == nil, last != nil {
+                continue   // one failed read — keep showing the last state
+            }
+            if v != last {
+                popup.isEnabled = v != nil
+                if let v, let item = deepItem(in: popup.menu, value: v) {
+                    popup.select(item)
+                }
             }
         }
+        lastPadValues = values
     }
 
     /// Hierarchical menu lookup — the pad popups are NSMenus with

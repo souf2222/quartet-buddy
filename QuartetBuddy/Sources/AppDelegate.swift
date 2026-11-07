@@ -1317,15 +1317,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The pad-action enum — COMPLETE, sweep-verified 11/7 (the daemon's
     /// own writes): the tree code (actionType<<16)|param → the device byte
     /// at 0x49 (wIndex = the pad 0-2) / 0x4b (wIndex 0 = the encoder push).
-    // CORRECTED per the user's dropdown order (the device enum = SEQUENTIAL,
-    // matching Control 2's menu): the earlier capture's tail values were the
-    // flush-queue reordering — the user's scramble proved it.
+    // THE DAEMON'S TRUE TABLE (reproduced identically in two independent
+    // sweeps — the tail's non-sequential bytes are the firmware's real enum,
+    // NOT flush-queue reordering; the "sequential" reinterpretation scrambled
+    // the pads live). The user's list = the MENU order, not the byte order.
     static let padCodeToByte: [Int: UInt8] = [
         0x20002: 0x02, 0x20003: 0x03, 0x20004: 0x04,          // Mute Spk/HP/All
         0x30002: 0x05, 0x30003: 0x06, 0x30004: 0x07,          // Dim Spk/HP/All
-        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0a,          // Sum Spk/HP/All
-        0x5000B: 0x0b, 0x5000C: 0x0c, 0x60001: 0x0d,          // Toggle Mute, Toggle Set, Clear
-        0x70005: 0x0e, 0x70006: 0x0f, 0x70007: 0x10,          // Engage Set 1/2/3
+        0x40002: 0x08, 0x40003: 0x09, 0x40004: 0x0e,          // Sum Spk/HP, Sum All
+        0x5000C: 0x0a, 0x60001: 0x0b,                          // Toggle Set, Clear Meters
+        0x70005: 0x0c, 0x70006: 0x0d,                          // Engage Set 1/2
+        0x5000B: 0x0f,                                          // Toggle Mute Spk/HP
     ]
     static let padByteToCode: [UInt8: Int] =
         Dictionary(uniqueKeysWithValues: padCodeToByte.map { ($1, $0) })
