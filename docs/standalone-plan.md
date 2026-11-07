@@ -574,6 +574,19 @@ but the device translation only covers some. The HP's own code
 0x18000026 (live) vs 0x18000020 (the backup) = the user changed the HP
 source once; 0x18000026 → 00 in one probe, 05 in another — the queue lag
 (dedupe + ~9 s flush) corrupts single-sample attribution.
+**THE VALUE TABLE SETTLED (the ear test + R4 combined):** the 0x53 byte =
+the 0-BASED source-pair index: **00=Playback 1-2, 01=PB 3-4, 02=PB 5-6,
+03=PB 7-8**. Proof: the ear test's PB1-2 anchor = SILENCE (Quartet Buddy
+was quit ⇒ its insert engine wasn't feeding ch1-2 ⇒ PB1-2 silent) while
+the PB7-8 anchor = music ✓. The earlier 01/02/03 readings = the write-queue
+lag (each write belongs to the NEXT set). The pad test also proved the
+firmware MIRRORS the 0x49 slot 0 ↔ slot 3 on writes (write wI=0 changes
+both) — harmless for the 3 real pads. The mixer-source byte values
+(presumably 04/05) = pending the user's semantics list; the mixer-source
+TREE codes remain unknown (0x11-0x1A families all translate to one byte).
+The mixer-differentiation trick failed: the daemon REJECTS master-volume
+writes beyond −48 dB (the −60 test produced no USB write at all).
+
 **STATUS: the playback sources for the analog outs = shippable; the mixer
 source codes + the HP monitor space = need ONE more session with a
 write→read-back protocol (the shim's POLL lines carry the device's true
