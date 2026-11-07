@@ -669,11 +669,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applyTree(tree)
             self.saveTreeSnapshot(tree)
         }
-        // 11.6 offline boot: the last-known tree, so the UI comes up
-        // populated even with ApogeeGlue gone
-        if let saved = Self.loadTreeSnapshot() {
+        // 11.6 offline boot: the last-known tree so the UI comes up
+        // populated — ONLY when no device session exists. 11.7: with the
+        // direct session live the DEVICE is the truth (the registers answer
+        // reads) and a stale snapshot just repaints old values over fresh
+        // writes (the trim/ref-level snap-back bug).
+        if let saved = Self.loadTreeSnapshot(), !directUSB.hasSession {
             QBLog.log("boot: applying the saved tree snapshot (glue offline mode)")
             self.applyTree(saved)
+        } else if directUSB.hasSession {
+            QBLog.log("boot: direct session owns the device — skipping the stale tree snapshot")
         }
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
@@ -1617,6 +1622,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
         settingsWindow.readLineOutLevels = { [weak self] in
             guard let self else { return [] }
+            // 11.7: with the glue down the tree is a STALE snapshot — the
+            // device registers are the truth
+            if self.glue.state != .connected {
+                return (0..<6).map { i -> (name: String, refLevel: Int?) in
+                    let v = self.directUSB.readInput(input: UInt16(i), bRequest: 0xb6)
+                    return ("Analog Out \(i + 1)", v.map { $0 == 0 ? 2 : 3 })
+                }
+            }
             if let dev = self.deviceNode() {
                 return (0..<6).map { i -> (name: String, refLevel: Int?) in
                     guard let node = GlueClient.findNode(in: dev, type: "hwout\(i + 2)") else {
@@ -1655,6 +1668,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // apart on the touchscreen shows the left one until touched.
         settingsWindow.readHwoutTrims = { [weak self] in
             guard let self else { return [] }
+            // 11.7: the glue down ⇒ the registers, never the stale snapshot
+            if self.glue.state != .connected {
+                return (1...3).map { pair -> (name: String, trim: Double?) in
+                    let idx = 2 * pair - 2   // hwout2, hwout4, hwout6 → 0, 2, 4
+                    let v = self.directUSB.readInput(input: UInt16(idx), bRequest: 0x18)
+                    return ("Analog Out \(2 * pair - 1) / \(2 * pair)",
+                            v.map { -Double(Int($0)) / 10.0 })
+                }
+            }
             guard let dev = self.deviceNode() else {
                 // 11.7 offline: the trim registers (0x18, |dB|×10); the pair's
                 // value = the LEFT strip's byte
