@@ -5980,12 +5980,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let on = !(inputs[b1].group ?? false)        // toggle intent
         // 11.7: the group register = 0x44 (sweep-verified; the daemon wrote
         // BOTH pair members) — the direct path needs no captured ids
+        // 11.7: the DIRECT branch FIRST — isGlueConnected counts the app's
+        // own USB session as "glue" (the circular gate that sent these
+        // writes into the dead TCP socket)
         let id1 = inputGroupIds[b1], id2 = inputGroupIds[b2]
-        if !id1.isEmpty, !id2.isEmpty, isGlueConnected?() == true {
-            QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off") (glue)")
-            onWriteBool?(id1, on)
-            onWriteBool?(id2, on)
-        } else if isDirectMode?() == true {
+        if isDirectMode?() == true {
             QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off") (directUSB 0x44)")
             onDirectInputFlag?(0x44, b1, on)
             onDirectInputFlag?(0x44, b2, on)
@@ -5996,6 +5995,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 _ = onDirectInputGain?(b2, g)
                 if inputs[b2].refLevel == 4 { inputs[b2].instGain = g } else { inputs[b2].micGain = g }
             }
+        } else if !id1.isEmpty, !id2.isEmpty, isGlueConnected?() == true {
+            QBLog.log("control: link pair \(b1 + 1)+\(b2 + 1) → \(on ? "on" : "off") (glue)")
+            onWriteBool?(id1, on)
+            onWriteBool?(id2, on)
         } else { return }
         inputs[b1].group = on
         inputs[b2].group = on
