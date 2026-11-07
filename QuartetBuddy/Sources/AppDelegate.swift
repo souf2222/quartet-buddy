@@ -906,7 +906,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setTalkback(_ on: Bool) {
         guard on != talkbackOn else { return }
         if directUSB.opened {
-            let ch = UInt16(max(0, min(3, talkbackSourceInput)))
+            // the mixer channels 0-11 = the 12 inputs (4 analog + 8 optical)
+            let ch = UInt16(max(0, min(11, talkbackSourceInput)))
             let unmute = directUSB.setMixerMute(channel: ch, mute: !on)   // on = open the mic
             let dim = directUSB.setOutputFlag(0x40, output: 0, on: on)    // the mains' dim
             QBLog.log("talkback: \(on ? "on" : "off") — mic channel \(ch + 1) \(on ? "opened" : "muted") (\(unmute ? "ok" : "FAILED")), mains dim \(on ? "on" : "off") (\(dim ? "ok" : "FAILED"))")
@@ -1433,7 +1434,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // tree's Talkback node = the daemon's/helpers' — gone offline.)
         if lastTree == nil {
             let saved = talkbackSourceInput
-            return TalkbackSourceDescription(sources: [("Quartet", 4)],
+            // 12 inputs total: 4 analog + 8 optical (the mixer channels
+            // 0-11 = exactly these — the talkback source = any of them)
+            return TalkbackSourceDescription(sources: [("Quartet", 12)],
                                              selectedDevice: "Quartet",
                                              selectedChannel: saved)
         }
@@ -1470,7 +1473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func selectTalkbackSource(device: String, channel: Int) {
         // 11.7 offline: the app's engine stores the source INPUT directly
         if lastTree == nil {
-            talkbackSourceInput = max(0, min(3, channel))
+            talkbackSourceInput = max(0, min(11, channel))
             QBLog.log("talkback: source '\(device)' channel \(channel) stored (the engine's input \(talkbackSourceInput + 1))")
             return
         }
