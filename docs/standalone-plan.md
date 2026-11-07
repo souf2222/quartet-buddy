@@ -382,9 +382,69 @@ onto bRequest values (the tree-write → vendor-request correlation: fire each
 probe mid-capture and diff), then implement `.directUSB` in Quartet Buddy:
 IOServiceOpen + the three selector calls above — ~100 lines of Swift.
 
+### ✅ 11.5 MILESTONE: standalone identify blink works (public API only!)
+`tools/direct_test2.swift` (the public **IOUSBHost framework**, ~60 lines):
+1. `IOServiceMatching("IOUSBHostDevice")` → iterate → the name = "Quartet"
+   (no USB Serial Number property on the device — the serial comes via the
+   vendor protocol!),
+2. `IOUSBHostDevice(ioService:options:queue:) throws` (the Obj-C framework;
+   the error when the daemon holds the device: **"Another client likely has
+   exclusive access"**),
+3. `dev.__send(request:data:bytesTransferred:completionTimeout:)` — the
+   `NS_REFINED_FOR_SWIFT` methods = the `__`-prefixed variants in Swift,
+4. **identify = vendor request 0xB6, 1-byte payload 1/0 — THE FRONT PANEL
+   BLINKED** with zero Apogee software in the loop.
+
+Gotchas recorded the hard way:
+* `IOServiceMatching` returns CFMutableDictionary directly (ARC-managed);
+  the CFDictionarySetValue needs the passUnretained pointers,
+* the IOUSBHostDevice's init = throwing, refined to
+  `__ioService:options:queue:` (the `__` prefix!),
+* the sendDeviceRequest = `__send(request:data:bytesTransferred:completionTimeout:)`,
+* the request's `data` = NSMutableData with **length ≥ wLength** (the
+  capacity alone isn't enough — "Data buffer is smaller than request
+  wLength"),
+* the legacy `IOUSBDevice` nub = created ONLY by the kext's merge-nub
+  personalities — the daemon DIES without the kext; Quartet Buddy doesn't
+  need it (the modern path is entitlement-free),
+* **the device firmware holds session state across daemon restarts** —
+  vendor requests return kIOReturnNotResponding until a USB re-enumeration
+  (unplug/replug). A graceful (SIGTERM) daemon shutdown avoids this.
+
+**⇒ 11.6 is green-lit: `.directUSB` in-app = this client + the decoded
+command table (0x33 gain / 0x35 mute / 0xB6 identify / 0x29 poll).**
+
 ### THE COMPLETE COMMAND TABLE (worker15: graceful stop, no replug needed!)
 **Graceful bootout (SIGTERM) = no device wedging** — the next session's
 vendor requests work immediately. With the probes fired mid-capture:
+
+| bRequest | Dir (bmReq) | Meaning | wIndex | Payload |
+|---|---|---|---|---|
+| **0x10** | OUT 0x40 | gain block | block# (0-3) | 28 B: 12×(gain,0xA1) + u32 |
+| **0x33** | OUT 0x40 / IN 0xC0 | **hwout gain** | **channel (0-3)** | 1 B = \|dB\| (20, 26, 30 verified) |
+| **0x35** | OUT 0x40 / IN 0xC0 | **mute** | 0 | 1 B (1=on, 0=off) |
+| **0xB6** | OUT 0x40 | **identify** | 0 | 1 B (1=on, 0=off) |
+| **0x29** | IN 0xC0 | state poll | 0 | 7 B response |
+
+* Every write = followed by an immediate read-back with the SAME bRequest
+  (the sendWithRetry verify step). Reads = bmReq 0xC0; writes = 0x40.
+* Verified by payload bytes: gain −20 → `0x14`, −26 → `0x1a`, −30 (hwout1,
+  wIndex=1) → the same bRequest with the channel in wIndex ✓.
+* **analogRefLevel does NOT use vendor requests** — it is applied via
+  CoreAudio properties (`AudioObjectSetPropertyData`, the USBDeviceMacOS
+  vtable slots 10/11 wrap kAudioDeviceProperty AVPs) — host-side audio-path
+  config, like preferredBufferSize.
+* The 7-byte poll response = the device state block; the 8-byte variant =
+  the serial (`fa47e5ce…` = quartet1528B15CEE547FA).
+
+**⇒ .directUSB implementation (11.6) needs exactly:**
+    IOServiceOpen(device, kIOMainPortDefault, 0, &connect)   // AppleUSBHostDeviceUserClient
+    IOConnectCallScalarMethod(connect, 0, {0}, 1, …)          // session
+    IOConnectCallScalarMethod(connect, 6, {0,0x40,0x10|0x33|0x35|0xB6, …}, 8, …)  // commands
+    IOConnectCallScalarMethod(connect, 7, {0,0xC0,0x29|…, …}, 8, …)               // polls/reads
+~100 lines of Swift. No Apogee code, no kext, no daemon.
+
+### Interposer status: infrastructure proven; the blocker was a race
 
 | bRequest | Dir (bmReq) | Meaning | wIndex | Payload |
 |---|---|---|---|---|
