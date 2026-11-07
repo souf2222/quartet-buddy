@@ -439,17 +439,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Re-push the saved hardware routing (the HP = PB 7-8 by default) to
     /// the unit — the same pattern as the saved trims. Runs at the direct
     /// session open (boot + device arrival).
+    /// 11.7 AUDIO-KILLER FIX: the immediate push at boot = a DAC-source
+    /// reconfig WHILE CoreAudio is bringing the stream up — macOS clients
+    /// lose the device (the "dead audio until the output re-pick" bug).
+    /// Now: the writes happen 3 s later (the stream settles), and the
+    /// values equal to each pair's own playback default are SKIPPED (the
+    /// device already boots that way — only the HP's PB 7-8 is a real
+    /// deviation and only it gets written).
     private func pushSavedRouting() {
-        for slot in 0..<4 {
-            let def: Int = slot == 3 ? 3 : slot   // the HP = PB 7-8; the pairs = their own PB
-            let source = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int ?? def
-            let indexes: [UInt16] = slot == 0 ? [3]
-                : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)]
-            for wI in indexes {
-                _ = directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self else { return }
+            guard self.directUSB.opened else { return }
+            for slot in 0..<4 {
+                let def: Int = slot == 3 ? 3 : slot   // the HP = PB 7-8; the pairs = their own PB
+                let source = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int ?? def
+                guard source != def else { continue }   // the device boots there anyway
+                let indexes: [UInt16] = slot == 0 ? [3]
+                    : [UInt16(2 * slot - 2), UInt16(2 * slot - 1)]
+                for wI in indexes {
+                    _ = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+                }
+                QBLog.log("routing: slot \(slot) → \(source) pushed (non-default)")
             }
         }
-        QBLog.log("routing: the saved sources re-pushed to the unit (the HP = PB 7-8 by default)")
     }
 
     /// The macOS mute changed (F10, Control Center): apply it to the
