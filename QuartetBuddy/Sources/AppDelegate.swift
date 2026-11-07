@@ -668,19 +668,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         glue.onTree = { [weak self] tree in
             guard let self else { return }
             self.applyTree(tree)
-            self.saveTreeSnapshot(tree)
         }
-        // 11.6 offline boot: the last-known tree so the UI comes up
-        // populated — ONLY when no device session exists. 11.7: with the
-        // direct session live the DEVICE is the truth (the registers answer
-        // reads) and a stale snapshot just repaints old values over fresh
-        // writes (the trim/ref-level snap-back bug).
-        if let saved = Self.loadTreeSnapshot(), !directUSB.hasSession {
-            QBLog.log("boot: applying the saved tree snapshot (glue offline mode)")
-            self.applyTree(saved)
-        } else if directUSB.hasSession {
-            QBLog.log("boot: direct session owns the device — skipping the stale tree snapshot")
-        }
+        // 11.7 FINAL: the tree snapshot is RETIRED. The device's flash is
+        // the settings store (the power-cycle + other-computer tests), the
+        // registers answer reads, and a stale snapshot poisoned lastTree so
+        // the offline branches never fired (the talkback picker's grey +
+        // the dropped writes). lastTree = the LIVE glue tree only (the
+        // connected-era path); offline = nil = the offline branches own it.
+        try? FileManager.default.removeItem(at: Self.treeSnapshotURL)
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
             // the setup wizard listens to the same stream (capture steps)
