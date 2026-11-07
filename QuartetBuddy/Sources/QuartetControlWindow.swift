@@ -3180,13 +3180,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             reads.append((o + 100, 0x33)); reads.append((o + 100, 0x35))
             reads.append((o + 100, 0x40)); reads.append((o + 100, 0x46))
         }
+        // 11.7 CRASH FIX: the concurrent __send calls on one IOUSBHostDevice
+        // race the device object (EXC_BAD_ACCESS on a hardware gain change).
+        // Sequential reads: each SUCCESSFUL read = ~10 ms, so 28 registers
+        // ≈ 0.3 s — the same speed, safely serialized.
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var values = [(Int, UInt8, UInt8)]()
-            let lock = NSLock()
-            DispatchQueue.concurrentPerform(iterations: reads.count) { k in
-                let (idx, bReq) = reads[k]
+            for (idx, bReq) in reads {
                 if let v = self?.readInputDirect?(idx, bReq) {
-                    lock.lock(); values.append((idx, bReq, v)); lock.unlock()
+                    values.append((idx, bReq, v))
                 }
             }
             DispatchQueue.main.async { [weak self] in
