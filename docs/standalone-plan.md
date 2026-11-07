@@ -370,6 +370,25 @@ The user-verified audible sequence (the daemon stopped, our client only):
 **⇒ The device applies our vendor commands. The protocol is proven end-to-end
 for gain, mute, and identify. 11.5 = COMPLETE.**
 
+### ✅ HARDWARE ROUTING (the monitor mixer) — controlled and verified
+The monitor mixer = **14 inputs × 6 outputs**, addressed as
+`wValue = input`, `wIndex = output`, values in the clamp(dB+48, 0…54) byte:
+
+* **gain**: bRequest 0x4C OUT / read-back 0x4C IN — write 0x14 (−28 dB) →
+  the read-back 20 ✓; restore 0x30 (0 dB) → 48 ✓
+* **mute**: 0x4E OUT / IN — 1 = on, 0 = off ✓ (read-backs verified)
+* the sibling cmdIds: 0x4D (the second gain set?)/0x4F (the second bool set?)
+  — the mixer's two planes (per the setter pairs)
+
+All inputs read back 0x30 (0 dB unity) on every output = the default
+direct-monitoring matrix. **This IS the "hardware routing of the outputs"
+feature**: the monitor mixer = the input→output matrix, fully controllable
+from Quartet Buddy's own USB session.
+
+**⇒ The Settings UI (the next step): the routing matrix — the inputs as the
+rows, the outputs as the columns, the gain sliders + the mute checkboxes,
+backed by the monitor commands via DirectUSBClient.**
+
 ### PROTOCOL DECODED (worker13 + replug + 30 s settle): 16332 frames
 With the device re-enumerated (unplug/replug) and the settle time extended,
 the shim captured the **complete control protocol** (16332 frames,
