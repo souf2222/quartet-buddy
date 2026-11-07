@@ -1471,8 +1471,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // offline: the captured refLevel ids translate to the 0x36 writes
             if self.glue.state != .connected {
                 for (input, ids) in PathIds.active.hwinRefLevel where ids == id {
-                    _ = self.directUSB.setInputType(input: UInt16(input),
-                                                    raw: DirectUSBClient.deviceByte(forAppMode: Int(value)))
+                    if let raw = DirectUSBClient.deviceByte(forAppMode: Int(value)) {
+                        _ = self.directUSB.setInputType(input: UInt16(input), raw: raw)
+                    }
                     return
                 }
             }
@@ -1517,7 +1518,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control.onDirectInputType = { [weak self] i, v in
             guard let self else { return false }
-            let raw = DirectUSBClient.deviceByte(forAppMode: Int(v))
+            // Line modes (+4/−10): the device register is untouched (pending decode)
+            guard let raw = DirectUSBClient.deviceByte(forAppMode: Int(v)) else {
+                QBLog.log("transport: input \(i + 1) mode \(v) = Line — 0x36 not involved (pending)")
+                return true
+            }
             let ok = self.directUSB.setInputType(input: UInt16(i), raw: raw)
             QBLog.log("transport: directUSB input \(i + 1) mode \(v) → 0x36=\(raw) \(ok ? "ok" : "FAILED")")
             return ok

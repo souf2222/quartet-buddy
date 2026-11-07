@@ -583,6 +583,38 @@ silently failed; reads returned nil → the UI stayed empty).
   0x34,0x3e,0x44} ×4, per-out {0xb6,0x18} ×6, {0x33,0x35} ×2, the mixer
   matrix {0x4c,0x4d,0x4e,0x4f} scan, then 0x51/0x45/0x47/0x46/0x40/0x53×4.
 
+**0x36 = the MIC/INSTRUMENT preamp selector (11/7, setter decode + live):**
+the setter at 0x100009b08 compares the incoming property value against
+TWO runtime globals (two tree property-ids) and emits ONLY 0 or 1 —
+anything else BAILS (no write). That's why the app's "mode 4 → 0x36=2"
+did nothing. 0=Mic (all inputs read 0), 1=Instrument (write sticks,
+read-back verified on in4). The Line modes (+4/−10) don't touch 0x36 —
+the daemon's line path is a different setter, still pending. The app's
+enum map now: 1→0, 4→1, 2/3→no write.
+
+**The setter-table decodes (0x100009a00–0x100009b80, 11/7):**
+* TWO 0x10 1-byte setters: (A) w1∈{0,1}, (B) w1+2 → wValue = the input
+  0…3, value = clamp(dB, −50…+6) + 48 — the mixer-range encoding on FOUR
+  per-channel 0x10 sub-registers (semantic TBD — NOT the preamp: the
+  preamp is 0x34 = |dB| 0…75). The 28-byte block writes (wValue=0,
+  wIndex=block) are a separate bulk path over the same register space.
+* The helper 0x100188918(transport, bRequest, &byte, wValue) → the
+  transport's vtable+0x18(bRequest, pData, len=1, wValue, wIndex=0) —
+  the per-INPUT channel index lives INSIDE the per-input transport
+  object (each input object holds its transport at +0x428).
+* A 0x0F/0x10 toggle setter via the SHADOW-QUEUE helper 0x100005f0c
+  (self, bRequest, value, channel 0-2, flag) — the queue holds
+  (bRequest, |value|, channel, flag) records and per-bRequest shadow
+  fields exist for bRequests 0x0A…0x1E. 0x0F ignores direct writes at
+  the wIndex addressing — its addressing differs (pending).
+* The property NAME REGISTRY (the std::string init at 0x1001c8xxx):
+  analogRefLevel, softLimit, polarityInvert, phantom, hpf, pad,
+  impedance, gainLink, mixerChannel, channelType … (full list dumped —
+  grep "softLimit" in this file's history). These are TREE names, not
+  USB registers.
+* The capture write surface (both sniff sessions): ONLY 0x10 blocks,
+  0x33, 0x35, 0xb6 — the daemon sessions never wrote type/SL/Ø.
+
 **0x15 = +48V phantom — VERIFIED by touchscreen diff (11/7):** the user
 toggled 48V on input 1 on the DEVICE's touchscreen and probe7 caught the
 only change: in0's 0x15 0x00→0x01. The touchscreen exposes 48V — SL/Ø are

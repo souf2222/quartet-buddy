@@ -175,13 +175,18 @@ final class DirectUSBClient {
     }
 
     /// The app's input-mode enum (1=Mic 2=+4dBu 3=−10dBV 4=Instrument) →
-    /// the device's 0x36 byte (hypothesis 11/7: 0=Mic 1=Line 2=Instrument —
-    /// all-Mic inputs read 0; +4/−10 collapse to Line, the ref lives elsewhere).
-    static func deviceByte(forAppMode app: Int) -> UInt8 {
-        switch app { case 1: return 0; case 2, 3: return 1; case 4: return 2; default: return 0 }
+    /// the device's 0x36 byte. DECODED 11/7 from the setter at 0x100009b08:
+    /// the register serves TWO tree properties (two runtime path-ids) —
+    /// one writes 0, the other writes 1, EVERYTHING ELSE IS IGNORED (the
+    /// setter bails) — that's why "mode 4 → 0x36=2" did nothing. All-Mic
+    /// inputs read 0 ⇒ 0=Mic, 1=Instrument. The Line modes (+4/−10) don't
+    /// touch 0x36 at all (the daemon's line path is a different setter —
+    /// pending). For Line we leave the register alone and return true.
+    static func deviceByte(forAppMode app: Int) -> UInt8? {
+        switch app { case 1: return 0; case 4: return 1; default: return nil } // nil = don't write
     }
     static func appMode(forDeviceByte b: UInt8) -> Int {
-        switch b { case 0: return 1; case 1: return 2; case 2: return 4; default: return 1 }
+        switch b { case 0: return 1; case 1: return 4; default: return 1 }
     }
 
     /// +48V phantom power per input (bRequest 0x15, wIndex = the input) —
