@@ -1481,6 +1481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return 0 }
             return self.selectedOutput == .headphones ? 1 : 0
         }
+        control.readInputDirect = { [weak self] i, bReq in
+            self?.directUSB.readInput(input: UInt16(i), bRequest: bReq)
+        }
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             if self.glue.state == .connected, self.quartetPresence.isConnected { return true }

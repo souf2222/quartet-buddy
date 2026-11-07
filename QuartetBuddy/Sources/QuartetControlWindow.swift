@@ -3084,6 +3084,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onWriteString: (([UInt8], String) -> Void)?
     var onRequestTree: (() -> Void)?
     var isGlueConnected: (() -> Bool)?
+    /// 11.6 offline state: a direct device read for an input —
+    /// (input index, bRequest) → the 1-byte value (nil = the read failed).
+    var readInputDirect: ((Int, UInt8) -> UInt8?)?
+    /// Whether a read-back refresh is in flight (prevents the recursion).
+    private var deviceRefreshInFlight = false
     /// The last tree the app received (seeds the window with real values).
     var onSeedTree: (() -> [String: Any]?)?
     /// Toolbar settings button → Settings window.
@@ -3140,6 +3145,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var interfaceName: String = "Apogee Quartet"
 
     // MARK: state
+
+    /// 11.6: apply the device's read-back values to the input states
+    /// (the offline UI's truth = the device itself).
+    private func applyInputReadBacks(_ values: [(Int, UInt8, UInt8)]) {
+        for (i, bReq, v) in values {
+            inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
+            switch bReq {
+            case 0x10: inputs[i].micGain = Double(Int(v) - 48)   // clamp(dB+48) → dB
+            case 0x36: inputs[i].refLevel = Int(v)               // the type/level's raw
+            default: break
+            }
+        }
+    }
 
     struct InputState {
         var name: String?
@@ -3336,6 +3354,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // (rebuilds only when the advertised list changes)
         refreshSampleRatePopup()
         let connected = isGlueConnected?() ?? false
+        // 11.6 offline: the input state comes from the device's read-backs
+        if !connected && !deviceRefreshInFlight, readInputDirect != nil {
+            deviceRefreshInFlight = true
+            let reads: [(Int, UInt8)] = (0..<4).flatMap { i in [(i, 0x10), (i, 0x36)] }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                var values: [(Int, UInt8, UInt8)] = []
+                for (i, bReq) in reads {
+                    if let v = self?.readInputDirect?(i, bReq) { values.append((i, bReq, v)) }
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.deviceRefreshInFlight = false
+                    self?.applyInputReadBacks(values)
+                    self?.refreshNow()
+                }
+            }
+        }
         let learning = isLearning
         let autoRunning = AutoGainEngine.shared.runningInputs
 
