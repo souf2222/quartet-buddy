@@ -346,6 +346,42 @@ USB this run** — the identify "did not apply" transient + the tree-only echo
 path; next session: retry the probes mid-capture after the transient clears,
 and add the OUT-request payload dumps at write time.
 
+### PROTOCOL DECODED (worker13 + replug + 30 s settle): 16332 frames
+With the device re-enumerated (unplug/replug) and the settle time extended,
+the shim captured the **complete control protocol** (16332 frames,
+`captures/usb_vendor_frames.log`):
+
+**1. Session** (AppleUSBHostDeviceUserClient, IOServiceOpen):
+    sel=2 → kr=0 out0=2579        (open/session)
+    sel=8 → kr=0 out0=70659       (get info; scalars 255,255,65535,65535)
+    sel=0 → kr=0                  (1 scalar, 0)
+
+**2. State poll** — `IOConnectCallScalarMethod(conn, 7, {0, 0xC0, 0x29, 0, 0, 7, buf, 500}, 8)`
+* bmRequestType 0xC0 (IN|vendor|device), **bRequest 0x29**, wLength 7,
+* the 7-byte response = the device state block; the daemon also does
+  **single-byte property reads** (the same sel=7, wLength=1 — responses seen:
+  01, 21, 00, 02, 2b, 11, c8 — the individual property state!),
+* an 8-byte response = `fa47e5ce 158b5201` = the serial-number block
+  (matches the serial quartet1528B15CEE547FA).
+
+**3. Gain writes** (4× at startup, the analog outputs 0–3):
+    IOConnectCallScalarMethod(conn, 6, {0, 0x40, 0x10, 0, channel, 28, payload, 500}, 8)
+* bmRequestType 0x40 (OUT|vendor|device), **bRequest 0x10**, wIndex = the
+  channel, wLength 28,
+* payload = 12 × (`0x16`, `0xA1`) + u32 `0x20` — 12 gain slots × 2 bytes; the
+  gain byte = the clamp(dB+48, 0…54) encoding (0x16 = 22 → −26 dB default?);
+  the trailing u32 0x20 = 32.
+
+**4. IDENTIFY — fully decoded and verified twice:**
+    IOConnectCallScalarMethod(conn, 6, {0, 0x40, 0xB6, 0, 0, 1, &b, 500}, 8)
+* **bRequest 0xB6**, wLength 1, payload **0x01 = identify on**, **0x00 = off**
+  — the daemon pairs them (the front-panel blink).
+
+**Remaining for 11.6:** map the other commands (mute/dim/refLevel/bufferSize)
+onto bRequest values (the tree-write → vendor-request correlation: fire each
+probe mid-capture and diff), then implement `.directUSB` in Quartet Buddy:
+IOServiceOpen + the three selector calls above — ~100 lines of Swift.
+
 ### Interposer status: infrastructure proven; the blocker was a race
 **The in-process shim works** (`tools/usbsniff.c` → `usbsniff.dylib`):
 * learns the static IOUSBLib vtables by QI-ing its own objects (two-level

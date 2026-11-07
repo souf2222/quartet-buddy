@@ -69,6 +69,8 @@ static WritePipeAsyncTO_t real_WritePipeAsyncTO;
 static ReadPipeAsyncTO_t  real_ReadPipeAsyncTO;
 static Open_t   real_DeviceOpen;
 static Open_t   real_InterfaceOpen;
+static unsigned char g_last_poll[64];
+static uint32_t g_last_poll_len = 0;
 static void *g_iface_vtable;
 static void *g_device_vtable;
 static volatile int g_found_both = 0;
@@ -546,6 +548,20 @@ extern "C" kern_return_t usbsniff_CCSCM(mach_port_t conn, uint32_t sel, const ui
     if (outcnt && *outcnt) {
         fprintf(g_log, "Mdone %ld sel=%u kr=%d outcnt=%u out0=%llu\n", (long)time(NULL), sel, r, *outcnt,
                 *outcnt > 0 ? (unsigned long long)out[0] : 0);
+    }
+    // sel=7 = the state poll (IN vendor request): dump the response AFTER the
+    // call, deduped to changes only
+    if (sel == 7 && incnt >= 6 && r == 0) {
+        uint32_t len = (uint32_t)in[5];
+        unsigned char *buf = (unsigned char *)(uintptr_t)in[6];
+        if (buf && len && len <= 64) {
+            if (memcmp(buf, g_last_poll, len) != 0) {
+                memcpy(g_last_poll, buf, len);
+                g_last_poll_len = len;
+                fprintf(g_log, "POLL %ld kr=%d len=%u data=", (long)time(NULL), r, len);
+                hexlog("poll", buf, len);
+            }
+        }
     }
     return r;
 }

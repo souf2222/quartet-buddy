@@ -29,7 +29,10 @@ chmod 644 /tmp/usbsniff.log /tmp/apogee_child.log 2>/dev/null
 echo "--- vendor request results (kr=0 = working!):"
 grep -E "Mdone" /tmp/usbsniff.log | tail -3
 cd /Users/soufiane/GitHub/quartet-buddy
+echo "--- settling 30s for the identify transient to clear..."
+sleep 30
 python3 tools/prop_probe.py flag identify 1 >/tmp/probe1.txt 2>&1; sleep 2
+python3 tools/prop_probe.py flag identify 1 >>/tmp/probe1.txt 2>&1; sleep 2
 python3 tools/prop_probe.py buffer 256 >/tmp/probe2.txt 2>&1; sleep 2
 python3 tools/prop_probe.py buffer 128 >/tmp/probe3.txt 2>&1; sleep 2
 python3 tools/prop_probe.py reflevel 2 3 >/tmp/probe4.txt 2>&1; sleep 2
