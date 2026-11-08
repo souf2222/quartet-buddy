@@ -6125,7 +6125,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     func applyAutoGain(_ i: Int, _ v: Double) {
         let t = PathIds.active
         let clamped = min(max(v, AutoGainEngine.minGainDB), AutoGainEngine.maxGainDB)
-        if inputs[i].refLevel == 4, let id = t.hwinInstGain[i] {
+        let rl = inputs[i].refLevel
+        // 11.7 DIRECT FIRST: the captured ids are empty arrays offline —
+        // the onWriteDouble translation has no entry and DROPS the write
+        // (the engine's gains never reached the hardware). The index-based
+        // direct write (0x34/0x3e) always works.
+        if isDirectMode?() == true {
+            if onDirectInputGain?(i, clamped) == true {
+                if rl == 4 { inputs[i].instGain = clamped } else { inputs[i].micGain = clamped }
+            }
+            refresh()
+            return
+        }
+        if rl == 4, let id = t.hwinInstGain[i] {
             onWriteDouble?(id, clamped)
             inputs[i].instGain = clamped
         } else if let id = t.hwinMicGain[i] {
