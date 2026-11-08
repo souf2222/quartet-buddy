@@ -1250,6 +1250,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var mixerWindow: NSWindow?
     private var mixerBank: MixerBankView?
     private var mixerWindowSegmented: NSSegmentedControl?
+    private var mixerSoloLabels: [NSTextField] = []
+    private var mixerHintLabel: NSTextField?
 
     // MARK: mixer mute/solo (APP-LEVEL — the hardware has no mute register;
     // a muted row's both side slots sit at −48 while the fader/pan stay on
@@ -1297,12 +1299,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !mixerSuppress else { return }
         setMixFlag("mute", mixerPlane, row, on)
         applyMixState(mixerPlane)
+        updateSoloIndicators()
     }
 
     private func mixerSoloChanged(row: Int, on: Bool) {
         guard !mixerSuppress else { return }
         setMixFlag("solo", mixerPlane, row, on)
         applyMixState(mixerPlane)
+        updateSoloIndicators()
     }
 
     /// The row model: label + the register channels the row drives (the
@@ -1324,32 +1328,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     private func buildQuartetMixers(_ stack: NSStackView) {
-        SettingsSection.add(to: stack, "Hardware Mixers")
-        // the header: the mixer selector + the info + the window button
-        let header = NSStackView()
-        header.orientation = .horizontal
-        header.spacing = 8
-        header.alignment = .centerY
-        header.translatesAutoresizingMaskIntoConstraints = false
-        let seg = NSSegmentedControl(labels: ["Mixer 1", "Mixer 2"],
-                                     trackingMode: .selectOne, target: self,
-                                     action: #selector(mixerPlaneChanged(_:)))
-        seg.selectedSegment = 0
-        mixerSegmented = seg
-        header.addArrangedSubview(seg)
-        let info = NSButton(title: "ⓘ", target: self,
-                            action: #selector(mixerInfoClicked(_:)))
-        info.bezelStyle = .circular
-        info.font = .systemFont(ofSize: 11)
-        info.translatesAutoresizingMaskIntoConstraints = false
-        info.widthAnchor.constraint(equalToConstant: 22).isActive = true
-        info.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        header.addArrangedSubview(info)
-        let open = NSButton(title: "Open Mixer Window", target: self,
-                            action: #selector(mixerWindowClicked(_:)))
-        mixerOpenButton = open
-        header.addArrangedSubview(open)
-        stack.addArrangedSubview(header)
+        // (no section heading — the tab above already says Hardware Mixers)
+        let toolbar = makeMixerToolbar(popOut: true)
+        stack.addArrangedSubview(toolbar)
 
         // the bank in a horizontal scroll (the strips never shrink)
         let bank = MixerBankView(rowTitles: Self.mixerRows.map { $0.label })
@@ -1369,24 +1350,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         scroll.drawsBackground = false
         scroll.documentView = bank
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        // the width = the PANE's body, not this sub-stack (the sub-stack
-        // hugs its subviews — pinning to it is a mutually-exclusive cycle
-        // that crashed the settings build). The pin must run AFTER the
-        // caller adds this stack to the body — hence the deferred tick.
-        DispatchQueue.main.async { [weak self, weak stack, weak scroll] in
-            guard let self, let stack, let scroll, let body = stack.superview else { return }
-            stack.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
-            scroll.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
-        }
         scroll.heightAnchor.constraint(equalToConstant: MixerBankView.height + 4).isActive = true
         mixerBankScroll = scroll
         stack.addArrangedSubview(scroll)
-        stack.addArrangedSubview(gap(2))
+        stack.addArrangedSubview(gap(4))
 
-        // the one visible hint; the long note lives behind the info button
-        stack.addArrangedSubview(SettingsHelpText.label(
-            "Select an output's source as Mixer 1 or Mixer 2 (Output Levels ▸\n" +
-            "Hardware output routing) to hear that mix."))
+        // the short routing hint (the mixer number follows the selection)
+        let hintRow = NSStackView()
+        hintRow.orientation = .horizontal
+        hintRow.spacing = 8
+        hintRow.alignment = .centerY
+        hintRow.translatesAutoresizingMaskIntoConstraints = false
+        let hint = NSTextField(labelWithString: "")
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = .secondaryLabelColor
+        mixerHintLabel = hint
+        hintRow.addArrangedSubview(hint)
+        let routing = NSButton(title: "Output Routing…", target: self,
+                               action: #selector(mixerRoutingClicked(_:)))
+        routing.bezelStyle = .rounded
+        routing.font = .systemFont(ofSize: 11)
+        routing.setContentHuggingPriority(.required, for: .horizontal)
+        hintRow.addArrangedSubview(routing)
+        stack.addArrangedSubview(hintRow)
 
         // the placeholder while the strips live in the mixer window
         let away = NSTextField(labelWithString:
@@ -1398,9 +1384,76 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         stack.addArrangedSubview(away)
     }
 
+    /// The mixer toolbar: the selector on the left; the solo indicator
+    /// after it; the info + the pop-out action on the right (the window's
+    /// toolbar = the same minus the pop-out). The width = the hosting
+    /// stack's (pinned to the pane's body like the bank's scroll).
+    private func makeMixerToolbar(popOut: Bool) -> NSView {
+        let bar = NSView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.heightAnchor.constraint(equalToConstant: 30).isActive = true
+
+        let seg = NSSegmentedControl(labels: ["Mixer 1", "Mixer 2"],
+                                     trackingMode: .selectOne, target: self,
+                                     action: #selector(mixerPlaneChanged(_:)))
+        seg.selectedSegment = mixerPlane
+        seg.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(seg)
+        if popOut { mixerSegmented = seg } else { mixerWindowSegmented = seg }
+
+        let soloLabel = NSTextField(labelWithString: "")
+        soloLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        soloLabel.textColor = NSColor(red: 0.85, green: 0.66, blue: 0.26, alpha: 1)
+        soloLabel.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(soloLabel)
+        mixerSoloLabels.append(soloLabel)
+
+        let info = NSButton(title: "ⓘ", target: self,
+                            action: #selector(mixerInfoClicked(_:)))
+        info.bezelStyle = .circular
+        info.font = .systemFont(ofSize: 11)
+        info.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(info)
+
+        NSLayoutConstraint.activate([
+            seg.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            seg.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            soloLabel.leadingAnchor.constraint(equalTo: seg.trailingAnchor, constant: 10),
+            soloLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            info.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -4),
+            info.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+        ])
+        if popOut {
+            let open = NSButton(title: "Open Mixer Window ↗", target: self,
+                                action: #selector(mixerWindowClicked(_:)))
+            open.font = .systemFont(ofSize: 11)
+            open.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(open)
+            NSLayoutConstraint.activate([
+                open.trailingAnchor.constraint(equalTo: info.leadingAnchor, constant: -8),
+                open.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            ])
+            mixerOpenButton = open
+        }
+        return bar
+    }
+
+    private func updateSoloIndicators() {
+        let any = (0..<Self.mixerRows.count).contains { mixFlag("solo", mixerPlane, $0) }
+        for lb in mixerSoloLabels { lb.stringValue = any ? "Solo active" : "" }
+    }
+
+    /// The routing link: to the Output Levels section (the routing popups).
+    @objc private func mixerRoutingClicked(_ sender: NSButton) {
+        selectPane(.quartet)
+        quartetSegment?.selectedSegment = 2
+        if let seg = quartetSegment { quartetSectionChanged(seg) }
+    }
+
     @objc private func mixerPlaneChanged(_ sender: NSSegmentedControl) {
         setMixerPlane(sender.selectedSegment)
     }
+
 
     /// The implementation notes behind the info button.
     @objc private func mixerInfoClicked(_ sender: NSButton) {
@@ -1450,7 +1503,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         mixerSegmented?.selectedSegment = plane
         mixerWindowSegmented?.selectedSegment = plane
         mixerWindow?.title = "Hardware Mixers — Mixer \(plane + 1)"
+        mixerHintLabel?.stringValue =
+            "To hear this mix, select Mixer \(plane + 1) as an output source."
         refreshMixers()
+        updateSoloIndicators()
     }
 
 
@@ -1587,6 +1643,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             strip.setFader(Double(max(l, rr) - 48))
             strip.setPan(max(0, min(128, 64 + (rr - l))))
         }
+        updateSoloIndicators()
     }
 
     // --- Hardware output routing (11.7): the 0x53 register — the APOGEE
