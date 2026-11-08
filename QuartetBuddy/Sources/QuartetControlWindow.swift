@@ -868,11 +868,9 @@ final class GainKnob: NSControl {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         focusRingType = .exterior   // thin accent outline, keyboard focus only
-        // layer-backed so the Auto Gain accent layers can composite above
-        // the drawn dial — and they ride OUTSIDE the frame (a dark gap
-        // past the track), so clipping stays off
+        // layer-backed so the Auto Gain activity layer (the blue wash on
+        // the center disk) can composite above the drawn dial
         wantsLayer = true
-        layer?.masksToBounds = false
         valueField.isHidden = true
         valueField.isBordered = false
         valueField.drawsBackground = false
@@ -913,17 +911,17 @@ final class GainKnob: NSControl {
     @discardableResult
     private func send() -> Bool { sendAction(action, to: target) }
 
-    // MARK: - the Auto Gain activity — one softly breathing ring
+    // MARK: - the Auto Gain activity — the center disk breathes blue
     //
     // The dial KEEPS its idle geometry while Auto Gain calibrates: the
     // green value arc is the drawn one at all times (real gain writes
     // glide it through a short display interpolation) and represents
-    // ONLY the gain. The activity is a separate thin cyan ring just
-    // OUTSIDE the track — one dark gap away — and it is the ONLY
-    // animated element: it gently breathes in opacity while listening,
-    // briefly brightens when the gain locks, then fades away. Nothing
-    // travels, nothing spins; the movement lives only in the green arc
-    // catching up to a real write.
+    // ONLY the gain. There is NO outer accent ring — the activity lives
+    // IN the center disk: a soft blue wash over the number's circle
+    // that gently breathes in opacity while listening, briefly
+    // brightens when the gain locks, then fades away. Nothing is added
+    // to the dial's silhouette; the ring, the track and the number all
+    // keep their exact idle shapes.
 
     enum AutoPhase: Equatable {
         /// The normal dial.
@@ -932,33 +930,28 @@ final class GainKnob: NSControl {
         case listening
         /// The final settle — verify + the last correction.
         case settling
-        /// Success — one soft brighten, then the ring fades away.
+        /// Success — one soft brighten, then the wash fades away.
         case locked
     }
 
     private(set) var autoPhase: AutoPhase = .idle
 
-    /// The thin accent ring — a quiet cyan line hugging OUTSIDE the
-    /// track, one dark gap away from it.
-    private let accentRing = CAShapeLayer()
+    /// The blue wash over the center disk — an oval layer exactly on
+    /// the disk's bounds, breathing in opacity.
+    private let diskWash = CAShapeLayer()
     private var autoLayersInstalled = false
-    /// The bounds the ring was last built for (a resize rebuilds it).
+    /// The bounds the wash was last built for (a resize rebuilds it).
     private var accentBuiltForSize: CGSize = .zero
 
     /// The glide between two real gain updates, in seconds (the engine
     /// nudges about once a second, so each glide completes in time).
     private static let glideSeconds: Double = 0.4
-    /// The cancel-fade of the ring, in seconds.
+    /// The cancel-fade of the wash, in seconds.
     private static let fadeSeconds: CFTimeInterval = 0.45
     /// One breath cycle (out + in), in seconds — slow on purpose.
     private static let breathSeconds: CFTimeInterval = 1.9
     /// The lock beat — brighten, release, gone — in seconds.
     private static let lockSeconds: CFTimeInterval = 1.0
-    /// The dark gap between the track's outer edge and the ring, and
-    /// the ring's own width — "current gain" and "activity" separated
-    /// by visible panel.
-    private static let accentGap: CGFloat = 2.2
-    private static let accentLineWidth: CGFloat = 1.2
 
     // the glide (draw()-level, no layers): an interpolated fraction the
     // arc renders while catching up to a real gain write
@@ -967,14 +960,6 @@ final class GainKnob: NSControl {
     private var glideTarget: CGFloat = 0
     private var glideStart = Date()
     private var glideTimer: Timer?
-
-    /// The ring's radius — OUTSIDE the track, across the dark gap.
-    /// Deliberately beyond the knob's frame (the 60-pt dial fills its
-    /// bounds with the track); nothing between here and the window
-    /// clips, and the strips have padding to spare.
-    private var accentRadius: CGFloat {
-        trackRadius + stroke / 2 + Self.accentGap + Self.accentLineWidth / 2
-    }
 
     /// The window's refresh syncs the phase each pass; transitions drive
     /// the layer, same-phase calls are free.
@@ -986,7 +971,7 @@ final class GainKnob: NSControl {
         case .listening, .settling:
             showAutoOverlay()
         case .locked:
-            if wasActive { lockRing() } else { hideAutoOverlayNow() }
+            if wasActive { lockWash() } else { hideAutoOverlayNow() }
         case .idle:
             // a cancel/fail while active: the quiet fade
             if wasActive { fadeAutoOverlay() } else { hideAutoOverlayNow() }
@@ -997,18 +982,7 @@ final class GainKnob: NSControl {
     private func installAutoLayer() {
         guard !autoLayersInstalled, let l = layer else { return }
         autoLayersInstalled = true
-        l.addSublayer(accentRing)
-    }
-
-    /// A 270° arc path at the given radius — the knob's own sweep.
-    private func sweepPath(radius r: CGFloat) -> CGPath {
-        let p = CGMutablePath()
-        p.addArc(center: CGPoint(x: bounds.midX, y: bounds.midY),
-                 radius: r,
-                 startAngle: Self.startAngle * .pi / 180,
-                 endAngle: (Self.startAngle - Self.sweepAngle) * .pi / 180,
-                 clockwise: true)
-        return p
+        l.addSublayer(diskWash)
     }
 
     private func showAutoOverlay() {
@@ -1016,31 +990,33 @@ final class GainKnob: NSControl {
         guard bounds.width > 8 else { return }
         // already breathing at this size (a listening↔settling switch or
         // a routine refresh): leave the running breath alone
-        guard accentRing.isHidden
+        guard diskWash.isHidden
                   || accentBuiltForSize != bounds.size
-                  || accentRing.animation(forKey: "breathe") == nil
+                  || diskWash.animation(forKey: "breathe") == nil
         else { return }
         accentBuiltForSize = bounds.size
-        accentRing.lineWidth = Self.accentLineWidth
-        accentRing.strokeColor = GGTheme.cyan.withAlphaComponent(0.85).cgColor
-        accentRing.lineCap = .round
-        accentRing.fillColor = nil
-        accentRing.path = sweepPath(radius: accentRadius)
-        accentRing.removeAllAnimations()
-        accentRing.isHidden = false
+        let d = diskRadius
+        diskWash.path = CGPath(ellipseIn: CGRect(x: bounds.midX - d, y: bounds.midY - d,
+                                                 width: d * 2, height: d * 2),
+                               transform: nil)
+        diskWash.fillColor = GGTheme.cyan.cgColor
+        diskWash.strokeColor = nil
+        diskWash.removeAllAnimations()
+        diskWash.isHidden = false
 
-        // THE BREATH — opacity only, slow and shallow: the whole ring
-        // swells and settles as one. No travel, no dash, no glow.
+        // THE BREATH — opacity only, slow and shallow: the blue wash
+        // over the disk swells and settles as one. The number beneath
+        // stays crisp; the wash reads as the disk itself coming alive.
         let breathe = CABasicAnimation(keyPath: "opacity")
-        breathe.fromValue = 0.55
-        breathe.toValue = 0.22
+        breathe.fromValue = 0.22
+        breathe.toValue = 0.06
         breathe.duration = Self.breathSeconds
         breathe.autoreverses = true
         breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         breathe.repeatCount = .infinity
         breathe.isRemovedOnCompletion = false
-        accentRing.opacity = 0.55
-        accentRing.add(breathe, forKey: "breathe")
+        diskWash.opacity = 0.22
+        diskWash.add(breathe, forKey: "breathe")
     }
 
     /// The gain arc GLIDES between actual gain updates — a tiny display
@@ -1074,47 +1050,47 @@ final class GainKnob: NSControl {
         needsDisplay = true
     }
 
-    /// THE LOCK — the ring's clear ending: one soft brighten (the
-    /// breath's last swell), then it releases and fades away while the
-    /// green arc — already glided to the final gain — remains.
-    private func lockRing() {
-        accentRing.removeAnimation(forKey: "breathe")
+    /// THE LOCK — the wash's clear ending: one soft brighten (the
+    /// breath's last swell), then it releases and fades away, leaving
+    /// the dial exactly as it was — the green arc at the final gain.
+    private func lockWash() {
+        diskWash.removeAnimation(forKey: "breathe")
         let kf = CAKeyframeAnimation(keyPath: "opacity")
-        kf.values = [accentRing.presentation()?.opacity ?? 0.4, 1.0, 0.0]
+        kf.values = [diskWash.presentation()?.opacity ?? 0.15, 0.5, 0.0]
         kf.keyTimes = [0, 0.28, 1]
         kf.duration = Self.lockSeconds
         kf.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         kf.fillMode = .forwards
         kf.isRemovedOnCompletion = false
-        accentRing.add(kf, forKey: "lock")
+        diskWash.add(kf, forKey: "lock")
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.lockSeconds) {
             [weak self] in
             guard let self,
                   self.autoPhase == .locked || self.autoPhase == .idle
-            else { return }   // re-engaged — keep the ring
+            else { return }   // re-engaged — keep the wash
             self.hideAutoOverlayNow()
         }
     }
 
     /// A cancel/fail while active: stop the breath, fade quietly.
     private func fadeAutoOverlay() {
-        accentRing.removeAnimation(forKey: "breathe")
+        diskWash.removeAnimation(forKey: "breathe")
         CATransaction.begin()
         CATransaction.setAnimationDuration(Self.fadeSeconds)
-        accentRing.opacity = 0
+        diskWash.opacity = 0
         CATransaction.setCompletionBlock { [weak self] in
             guard let self,
                   self.autoPhase == .idle || self.autoPhase == .locked
-            else { return }   // re-engaged mid-fade — keep the ring
+            else { return }   // re-engaged mid-fade — keep the wash
             self.hideAutoOverlayNow()
         }
         CATransaction.commit()
     }
 
     private func hideAutoOverlayNow() {
-        accentRing.removeAllAnimations()
-        accentRing.opacity = 1
-        accentRing.isHidden = true
+        diskWash.removeAllAnimations()
+        diskWash.opacity = 1
+        diskWash.isHidden = true
     }
 
     // MARK: geometry — the layered dial scales with bounds
