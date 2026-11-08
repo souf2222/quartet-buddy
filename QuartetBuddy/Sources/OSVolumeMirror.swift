@@ -186,7 +186,11 @@ final class OSVolumeMirror {
 
     private func sliderChanged() {
         guard let dev = device(),
-              let db = Self.readDecibels(from: dev) else { return }
+              let db = Self.readDecibels(from: dev) else {
+            QBLog.log("mirror: sliderChanged — device/read failed")
+            return
+        }
+        QBLog.log(String(format: "mirror: slider changed → %.1f dB", db))
         onSliderMoved?(db)
     }
 

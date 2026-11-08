@@ -309,8 +309,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ensureDirectUSB() -> Bool {
         if directUSB.opened { return true }
         let ok = directUSB.open()
-        if ok { QBLog.log("transport: direct-USB session opened") }
+        if ok {
+            QBLog.log("transport: direct-USB session opened")
+            armMirrorFromDevice()
+        }
         return ok
+    }
+
+    /// 11.7 THE OFFLINE-BOOT KEY FIX: the mirror's property listener is
+    /// armed only inside enforce(), which was only reached via syncMacSlider
+    /// gated on gainKnown — and gainKnown came from the daemon's tree, gone
+    /// offline. Result: the macOS volume/mute listeners were NEVER armed and
+    /// the volume keys did nothing. Now the session open reads the device's
+    /// own faders (0x33) into the app's state, sets gainKnown, and enforces
+    /// — which arms the listener. The keys work from the first second.
+    private func armMirrorFromDevice() {
+        for (target, ch) in [(OutputTarget.mainOut, 0), (.headphones, 1)] {
+            if let v = directUSB.readInput(input: UInt16(ch), bRequest: 0x33) {
+                gain[target] = -Double(v)
+            }
+        }
+        gainKnown = true
+        syncMacSlider(force: true)
     }
 
     /// The gain write with the transport selection. Returns the dB applied
@@ -362,6 +382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let target = selectedOutput
         let current = gain[target] ?? 0
+        if abs(db - current) <= 0.5 {
+            QBLog.log(String(format: "mirror: osSliderMoved %.1f dB == target's current (%@) — own echo, skipped", db, target.rawValue))
+        } else {
+            QBLog.log(String(format: "mirror: osSliderMoved %.1f dB → target %@ (was %.1f)", db, target.rawValue, current))
+        }
         guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding
         QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
                          db, target.rawValue, current))
