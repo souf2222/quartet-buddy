@@ -151,6 +151,13 @@ final class AutoGainEngine {
     private(set) var runningInputs: [Int] = []
     var isRunning: Bool { !runningInputs.isEmpty }
 
+    /// One input's live phase (nil = not running) — the window's knob
+    /// animation keys off it: listening → the cyan breath, verifying →
+    /// the "Setting gain…" settle. Main thread only (sessions is).
+    func phase(for input: Int) -> Phase? {
+        sessions[input]?.phase
+    }
+
     // MARK: - state (main thread only)
 
     private let cfg = Config()
