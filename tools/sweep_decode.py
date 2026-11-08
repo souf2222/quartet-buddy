@@ -17,8 +17,8 @@ for i, l in enumerate(lines):
 
 sets_ = []
 for l in open("/tmp/sweep_timeline.txt"):
-    m = re.match(r"([\d.]+)\s+SET (\S+) = (.+?) AFTER=(.+)$", l)
-    if m: sets_.append((float(m.group(1)), m.group(2), m.group(3).strip(), m.group(4).strip()))
+    m = re.match(r"([\d.]+)\s+(?:SET|R3B) (\S+) = (.+?)(?: AFTER=(.+))?$", l)
+    if m: sets_.append((float(m.group(1)), m.group(2), m.group(3).strip(), (m.group(4) or "").strip()))
 
 # dedupe: keep the LAST occurrence of each (rel, value) — later runs are the
 # correctly-tagged ones
@@ -28,7 +28,7 @@ for ts, rel, val, after in sets_:
 
 by_prop = defaultdict(list)
 for (rel, val), (ts, after) in best.items():
-    win = [w for w in writes if ts - 1.0 <= w[0] <= ts + 2.5]
+    win = [w for w in writes if ts - 1.0 <= w[0] <= ts + 8.5]
     by_prop[rel.split("/", 1)[1] if rel.startswith(("hwin", "hwout", "mixers", "appState")) else rel].append(
         (val, after, win))
 
