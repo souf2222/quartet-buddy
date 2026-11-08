@@ -416,9 +416,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///     pair 1 → hwout2 + hwout3 · pair 2 → hwout4 + hwout5 ·
     ///     pair 3 → hwout6 + hwout7
     ///
-    /// (LABEL TRAP, live-mapped Oct 26 2026: the touchscreen calls these
-    /// strips "Analog Out 5/6" where macOS cards say "Out 7‑8" — one pair
-    /// up, because the main bus consumes macOS channels 1‑2.)
+    /// (MAPPING, corrected Nov 8 2026 against the live unit — the Oct 26
+    /// "one pair up" note was wrong: the jack numbers ARE the macOS pair
+    /// numbers. pair 1 = jack Out 3-4, pair 2 = jack Out 5-6, pair 3 =
+    /// jack Out 7-8 = the HEADPHONE pair — the touchscreen's "Analog Out
+    /// 1..6" numbering starts after Main Out consumes channels 1-2.)
     private static let hwoutTrimNodes: [Int: [String]] = [
         1: ["hwout2", "hwout3"],
         2: ["hwout4", "hwout5"],
@@ -432,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let hwoutTrimMax = 0.0
 
     /// The saved settings-side hardware trims (`hwout.trim.<pair>`, set in
-    /// Settings ▸ Quartet ▸ Output Levels) → the unit. Called on every
+    /// Settings ▸ Quartet ▸ Outputs) → the unit. Called on every
     /// tree arrival; each value writes exactly once per value. A pair with
     /// NO saved key is skipped — the first run after an upgrade must not
     /// stomp trims the unit already carries. Out-of-range saved values are
@@ -1943,7 +1945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // (The routing cards' trim knobs are SOFTWARE trim, applied inside
         // InsertServer's chain. The firmware's line-out trim lives in
-        // Settings ▸ Quartet ▸ Output Levels, wired in setupSettingsWindow.)
+        // Settings ▸ Quartet ▸ Outputs, wired in setupSettingsWindow.)
         control.onWriteBool = { [weak self] id, value in
             guard let self else { return }
             if self.glue.state == .connected { self.glue.setBool(id: id, value); return }
@@ -2163,7 +2165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("mixer \(plane) \(ch == 12 ? "playback" : "in \(ch + 1)") \(side) slot \(slot / 2) ← \(byte) (\(Int(byte) - 48) dB) \(ok ? "ok" : "FAILED") rb \(rb)")
             }
         }
-        // Line-out hardware levels (Settings ▸ Quartet ▸ Output Levels):
+        // Line-out hardware levels (Settings ▸ Quartet ▸ Outputs):
         // read the tree's hwout2..7 analogRefLevel, write int32 via glue.
         settingsWindow.readLineOutLevels = { [weak self] in
             guard let self else { return [] }
@@ -2203,7 +2205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ok = self.directUSB.setOutputFlag(0xb6, output: UInt16(i), on: v == 3)
             QBLog.log("settings: hwout\(i + 2).analogRefLevel = \(v) via directUSB (\(ok ? "ok" : "FAILED"))")
         }
-        // Line-out firmware TRIM (Settings ▸ Quartet ▸ Output Levels).
+        // Line-out firmware TRIM (Settings ▸ Quartet ▸ Outputs).
         // The strips' `trim` is a dB double applied by the firmware at the
         // DAC — downstream of everything macOS sends — so it listens to
         // ALL apps, not just this one's chain. Rows are PAIRS of the mono

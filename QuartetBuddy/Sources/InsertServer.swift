@@ -45,7 +45,7 @@ final class InsertServer: NSObject {
     /// own per-line-out trim — `/dev/<serial>/hwout/hwout2…7/trim`, a dB
     /// double applied at the DAC (live-verified 2026‑10‑26,
     /// docs/protocol-notes.md) — but that is DEVICE state, owned by
-    /// Settings ▸ Quartet ▸ Output Levels, not chain state.
+    /// Settings ▸ Quartet ▸ Outputs, not chain state.
     ///
     /// Label map (live-mapped Oct 26 2026): hwout2…7 are MONO strips named
     /// "Analog Out 1..6"; pairs are  Out 3‑4 → hwout2+3, Out 5‑6 → hwout4
@@ -1093,7 +1093,7 @@ final class InsertServer: NSObject {
     /// Input trim (Level) for pair i, dB in −64…+6 — SOFTWARE, applied in
     /// the capture chain via `trimFactors` (routing-level: unaffected by
     /// Bypass All Plug-ins). The firmware's own line-out trim is separate
-    /// device state, owned by Settings ▸ Quartet ▸ Output Levels (its
+    /// device state, owned by Settings ▸ Quartet ▸ Outputs (its
     /// saved values live under `hwout.trim.*` and are pushed to the unit
     /// by the AppDelegate's sync-on-reconnect).
     func setTrim(_ i: Int, _ db: Double, notify: Bool = true) {

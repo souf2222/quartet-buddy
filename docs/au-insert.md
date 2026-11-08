@@ -77,9 +77,13 @@ row to 0 dB. Live-mapped card ↔ strip ↔ jack labels (Oct 26 2026):
 | Out 5‑6 | "Analog Out 3/4" = `hwout4`+`hwout5` | line pair 2 |
 | Out 7‑8 | "Analog Out 5/6" = `hwout6`+`hwout7` | line pair 3 |
 
-(LABEL TRAP: the strips are named "Analog Out 1…6", offset from the macOS
-card numbers by one pair. User-verified: monitoring there starts on
-Out 7‑8 and never hears "Out 5‑6".)
+(MAPPING: the strips are NAMED "Analog Out 1…6" — the touchscreen
+numbers them from the first line pair because Main Out consumes channels
+1‑2, so strip "Analog Out 1/2" = jack Out 3‑4, "Analog Out 5/6" = jack
+Out 7‑8. Corrected Nov 8 2026: the jack numbers are direct; an earlier
+note here claimed a one-pair offset between strips and macOS cards.
+User-verified separately: AU-insert monitoring there starts on Out 7‑8
+and never hears "Out 5‑6".)
 
 Consequences:
 

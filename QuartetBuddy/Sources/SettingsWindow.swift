@@ -8,8 +8,9 @@ import ServiceManagement
 ///
 /// General holds the application's own preferences (launch at login, knob
 /// interaction). Quartet holds everything that is written to the hardware
-/// (touchscreen flags, front-panel pads, channel names, line-output
-/// levels) with Controls / Channel Names / Output Levels sub-sections.
+/// (touchscreen flags, front-panel pads, channel names, output routing /
+/// trim / reference levels) with Controls / Channel Names / Outputs
+/// sub-sections.
 /// Processing combines the audio-engine config with Auto Gain and plug-in
 /// configuration. Hotkey registration and MIDI learning stay owned by
 /// AppDelegate — this window calls back through the closures it wires up.
@@ -138,6 +139,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     func show() {
         if window == nil { build() }
         selectPane(currentPane)
+        // visible BEFORE the refresh — refreshQuartet skips its hardware
+        // sections while the window is hidden, and the first open must not
+        // show build defaults until the reconnect loop's next tick
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         refresh()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -868,7 +874,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var hardwareNotice: HardwareAvailabilityNotice!
     private var quartetSegment: NSSegmentedControl!
     /// The three sub-sections of the Quartet page (Controls / Channel
-    /// Names / Output Levels) — one visible at a time.
+    /// Names / Outputs) — one visible at a time.
     private var quartetSectionStacks: [NSStackView] = []
 
     private func buildQuartet(into body: NSStackView) {
@@ -878,12 +884,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         quartetStatusField.textColor = .secondaryLabelColor
         body.addArrangedSubview(quartetStatusField)
         hardwareNotice = HardwareAvailabilityNotice(
-            text: "Quartet is disconnected. Hardware settings are unavailable; shown values are the last known state.")
+            text: "Quartet disconnected. Showing last-known settings. Connect the device to make changes.")
         hardwareNotice.isHidden = true
         body.addArrangedSubview(hardwareNotice)
 
         quartetSegment = NSSegmentedControl(
-            labels: ["Controls", "Channel Names", "Output Levels", "Hardware Mixers"],
+            labels: ["Controls", "Channel Names", "Outputs", "Hardware Mixers"],
             trackingMode: .selectOne, target: self,
             action: #selector(quartetSectionChanged(_:)))
         quartetSegment.selectedSegment = 0
@@ -1221,14 +1227,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         return true
     }
 
-    // --- Output Levels (moved from the old Audio page)
+    // --- Outputs (routing + hardware trim + reference levels; formerly
+    //     the "Output Levels" sub-page)
 
     var readLineOutLevels: (() -> [(name: String, refLevel: Int?)])?
     var writeLineOutLevel: ((Int, Int) -> Void)?
 
     /// Line-output firmware trim (pairs 1…3 = Analog Out 1/2…5/6). Expects
-    /// `(name, trim?)` triples — name is the left strip's hardware name
-    /// joined with the right, trim nil = unknown/disconnected.
+    /// `(name, trim?)` triples — trim nil = unknown/unreadable (the row
+    /// shows a dash and NO slider handle, so an unknown setting never
+    /// looks like a chosen position).
     var readHwoutTrims: (() -> [(name: String, trim: Double?)])?
     var writeHwoutTrim: ((Int, Double) -> Void)?
 
@@ -1385,8 +1393,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
         // the one visible hint; the long note lives behind the info button
         stack.addArrangedSubview(SettingsHelpText.label(
-            "Select an output's source as Mixer 1 or Mixer 2 (Output Levels ▸\n" +
-            "Hardware output routing) to hear that mix."))
+            "Select an output's source as Mixer 1 or Mixer 2 (Outputs ▸\n" +
+            "Routing & hardware trim) to hear that mix."))
 
         // the placeholder while the strips live in the mixer window
         let away = NSTextField(labelWithString:
@@ -1404,29 +1412,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     /// The implementation notes behind the info button.
     @objc private func mixerInfoClicked(_ sender: NSButton) {
-        let pop = NSPopover()
-        pop.behavior = .transient
-        let vc = NSViewController()
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 240))
-        text.isEditable = false
-        text.drawsBackground = false
-        text.textContainerInset = NSSize(width: 12, height: 12)
-        text.string = Self.mixerTechNote
-        text.font = .systemFont(ofSize: 11)
-        text.textColor = .labelColor
-        let sv = NSScrollView()
-        sv.documentView = text
-        sv.hasVerticalScroller = true
-        sv.frame = NSRect(x: 0, y: 0, width: 380, height: 240)
-        vc.view = sv
-        pop.contentViewController = vc
-        pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        showInfoPopover(Self.mixerTechNote, from: sender)
     }
 
     private static let mixerTechNote = """
         Each mixer mixes all inputs + the stereo playback bus. Route an output
-        pair's source to “Mixer 1”/“Mixer 2” (Output Levels ▸ Hardware output
-        routing) to hear that mix.
+        pair's source to “Mixer 1”/“Mixer 2” (Outputs ▸ Routing & hardware
+        trim) to hear that mix.
 
         Verified on the registers (11/8): the channel gains live in the unit's
         mixer blocks — one per stereo side (Mixer 1 = blocks 0/1, Mixer 2 =
@@ -1598,139 +1590,270 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                                  "Playback 7-8", "Mixer 1", "Mixer 2"]
     var readHwoutRouting: (() -> [Int?])?
     var writeHwoutRouting: ((Int, Int) -> Void)?
+    // --- Routing & hardware trim — ONE table, one row per destination.
+    // MAPPING (corrected Nov 8 2026 against the live unit; the Oct 26
+    // "one pair up" note was wrong): the jack numbers ARE the macOS pair
+    // numbers — Main Out = Out 1-2, and the touchscreen numbers the
+    // remaining strips "Analog Out 1…6" (= hwout2…7), which ARE the jack
+    // pairs Out 3-4 / 5-6 / 7-8. The headphone jack plays the Out 7-8
+    // pair, so ALL FOUR destinations have a 0x53 routing slot (0…3) and
+    // a hardware trim — Main Out is the only destination without a trim.
+    private static let outputRows: [(label: String, secondary: String,
+                                     slot: Int?, pair: Int?)] = [
+        ("Main Out", "Out 1–2", 0, nil),
+        ("Out 3–4", "", 1, 1),
+        ("Out 5–6", "", 2, 2),
+        ("Headphones", "Out 7–8", 3, 3),
+    ]
+
+    /// Fixed row geometry so every destination's controls share columns.
+    private static let outputNameWidth: CGFloat = 140
+    private static let outputJackWidth: CGFloat = 56
+    private static let outputSourceWidth: CGFloat = 150
+
     private var routingPopups: [NSPopUpButton] = []
+    /// The 0x53 slot each popup drives, parallel to `routingPopups` —
+    /// one per destination row (Main, Out 3-4, Out 5-6, Headphones).
+    private var routingPopupSlots: [Int] = []
     private var routingSuppress = false
+    private var lastRoutingValues: [Int?] = []
 
     private var lineOutPopups: [NSPopUpButton] = []
-    private var lineOutLabels: [NSTextField] = []
     private var lineOutSuppress = false
 
-    /// The reference-level popup for one hardware line output (the same
-    /// analogRefLevel enum as the inputs: 2 = +4 dBu, 3 = −10 dBV).
+    private var hwoutTrimSliders: [NSSlider] = []
+    private var hwoutTrimDashes: [NSTextField] = []
+    private var hwoutTrimReadouts: [NSTextField] = []
+    private var hwoutTrimSuppress = false
+
+    /// The Outputs page: ONE destination table — the routing source and
+    /// the hardware trim share each row where the destination has them —
+    /// then the six independent reference levels in a 2 × 3 grid. The
+    /// register / connector-map / persistence notes live behind the ⓘ
+    /// buttons; only one short task line per section stays visible.
     private func buildQuartetLevels(_ stack: NSStackView) {
-        SettingsSection.add(to: stack, "Line-output reference levels")
+        // --- Routing & hardware trim
+        stack.addArrangedSubview(sectionHeader(
+            "Routing & hardware trim", info: #selector(outputsInfoClicked(_:))))
+
+        var pinned: [NSView] = []
+
+        // the shared column captions (the widths mirror the row cells)
+        let head = NSStackView()
+        head.orientation = .horizontal
+        head.spacing = 12
+        head.alignment = .centerY
+        head.translatesAutoresizingMaskIntoConstraints = false
+        let outputCaption = columnCaption("Output")
+        let sourceCaption = columnCaption("Source")
+        let trimCaption = columnCaption("Hardware trim")
+        head.addArrangedSubview(outputCaption)
+        head.addArrangedSubview(sourceCaption)
+        head.addArrangedSubview(trimCaption)
+        pinned.append(head)
+        stack.addArrangedSubview(head)
+        NSLayoutConstraint.activate([
+            outputCaption.widthAnchor.constraint(equalToConstant:
+                Self.outputNameWidth + 6 + Self.outputJackWidth),
+            sourceCaption.widthAnchor.constraint(
+                equalToConstant: Self.outputSourceWidth),
+        ])
+
+        // one subtle rule under the captions — a table, not cards
+        let rule = NSBox()
+        rule.boxType = .separator
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        pinned.append(rule)
+        stack.addArrangedSubview(rule)
+
+        for row in Self.outputRows {
+            // the destination: the jack identity leads; the gray secondary
+            // only carries the jack pair where the label doesn't already
+            // say it (Main Out, Headphones)
+            let primary = NSTextField(labelWithString: row.label)
+            primary.font = .systemFont(ofSize: 13)
+            primary.lineBreakMode = .byTruncatingTail
+            primary.setContentCompressionResistancePriority(
+                NSLayoutConstraint.Priority(751), for: .horizontal)
+            primary.translatesAutoresizingMaskIntoConstraints = false
+            let secondary = NSTextField(labelWithString: row.secondary)
+            secondary.font = .systemFont(ofSize: 11)
+            secondary.textColor = .secondaryLabelColor
+            secondary.lineBreakMode = .byTruncatingTail
+            secondary.setContentCompressionResistancePriority(
+                NSLayoutConstraint.Priority(751), for: .horizontal)
+            secondary.translatesAutoresizingMaskIntoConstraints = false
+            let nameCell = NSStackView(views: [primary, secondary])
+            nameCell.orientation = .horizontal
+            nameCell.spacing = 6
+            nameCell.alignment = .firstBaseline
+            nameCell.translatesAutoresizingMaskIntoConstraints = false
+
+            // the source popup (or a dash where no routing slot exists)
+            let source: NSView
+            if let slot = row.slot {
+                let p = NSPopUpButton()
+                p.translatesAutoresizingMaskIntoConstraints = false
+                for (v, name) in Self.routingSources.enumerated() {
+                    p.addItem(withTitle: name)
+                    p.lastItem?.representedObject = v
+                }
+                p.action = #selector(routingChanged(_:))
+                p.target = self
+                routingPopups.append(p)
+                routingPopupSlots.append(slot)
+                source = p
+            } else {
+                let dash = NSTextField(labelWithString: "—")
+                dash.font = .systemFont(ofSize: 13)
+                dash.textColor = .tertiaryLabelColor
+                dash.translatesAutoresizingMaskIntoConstraints = false
+                source = dash
+            }
+
+            // the trim cell: slider + readout while a value is known, a
+            // dash while it isn't (never a handle at a made-up position)
+            let trimCell: NSView
+            if row.pair != nil {
+                let slider = HwoutTrimSlider(value: 0, minValue: -24, maxValue: 0,
+                                             target: self,
+                                             action: #selector(hwoutTrimChanged(_:)))
+                slider.tag = 3700 + row.pair!
+                slider.translatesAutoresizingMaskIntoConstraints = false
+                slider.isHidden = true   // unknown until the first read
+                slider.setContentHuggingPriority(
+                    NSLayoutConstraint.Priority(1), for: .horizontal)
+                slider.widthAnchor.constraint(
+                    greaterThanOrEqualToConstant: 140).isActive = true
+                let dash = NSTextField(labelWithString: "—")
+                dash.font = .systemFont(ofSize: 13)
+                dash.textColor = .tertiaryLabelColor
+                dash.translatesAutoresizingMaskIntoConstraints = false
+                let readout = NSTextField(labelWithString: "—")
+                readout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+                readout.alignment = .right
+                readout.translatesAutoresizingMaskIntoConstraints = false
+                readout.widthAnchor.constraint(equalToConstant: 60).isActive = true
+                let cell = NSStackView(views: [slider, dash, readout])
+                cell.orientation = .horizontal
+                cell.spacing = 8
+                cell.alignment = .centerY
+                cell.translatesAutoresizingMaskIntoConstraints = false
+                cell.setContentHuggingPriority(
+                    NSLayoutConstraint.Priority(1), for: .horizontal)
+                hwoutTrimSliders.append(slider)
+                hwoutTrimDashes.append(dash)
+                hwoutTrimReadouts.append(readout)
+                trimCell = cell
+            } else {
+                let dash = NSTextField(labelWithString: "—")
+                dash.font = .systemFont(ofSize: 13)
+                dash.textColor = .tertiaryLabelColor
+                dash.translatesAutoresizingMaskIntoConstraints = false
+                trimCell = dash
+            }
+
+            let wrap = NSStackView(views: [nameCell, source, trimCell])
+            wrap.orientation = .horizontal
+            wrap.spacing = 12
+            wrap.alignment = .centerY
+            wrap.translatesAutoresizingMaskIntoConstraints = false
+            // every destination row carries a 24 pt control, so the row
+            // pitch stays even even where a column reads "—"
+            wrap.heightAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
+            pinned.append(wrap)
+            stack.addArrangedSubview(wrap)
+
+            NSLayoutConstraint.activate([
+                primary.widthAnchor.constraint(
+                    equalToConstant: Self.outputNameWidth),
+                secondary.widthAnchor.constraint(
+                    equalToConstant: Self.outputJackWidth),
+                nameCell.widthAnchor.constraint(equalToConstant:
+                    Self.outputNameWidth + 6 + Self.outputJackWidth),
+                source.widthAnchor.constraint(
+                    equalToConstant: Self.outputSourceWidth),
+            ])
+        }
+
+        // the one visible task line; the long notes live behind the ⓘ
+        stack.addArrangedSubview(SettingsHelpText.label(
+            "Source chooses what each output plays; trim attenuates the pair in hardware — it affects every app."))
+
+        // --- Reference levels: six independent line outputs, 2 × 3 grid
+        if let last = stack.arrangedSubviews.last {
+            stack.setCustomSpacing(SettingsLayout.sectionSpacing, after: last)
+        }
+        stack.addArrangedSubview(sectionHeader(
+            "Reference levels", info: #selector(refLevelInfoClicked(_:))))
+        var leftCells: [NSView] = []
+        var rightCells: [NSView] = []
         for i in 0..<6 {
-            let label = NSTextField(labelWithString: "Analog output \(i + 1)")
+            // the reference-level popup for one hardware line output (the
+            // same analogRefLevel enum as the inputs: 2 = +4 dBu, 3 = −10 dBV).
+            // Out 3…8 = the hwout2…7 strips; Out 7/8 are the headphone pair.
+            let label = NSTextField(labelWithString: "Out \(3 + i)")
             label.font = .systemFont(ofSize: 13)
             label.setContentCompressionResistancePriority(
                 NSLayoutConstraint.Priority(751), for: .horizontal)
             label.translatesAutoresizingMaskIntoConstraints = false
-            let wrap = NSStackView()
-            wrap.orientation = .horizontal
-            wrap.spacing = 8
-            wrap.addArrangedSubview(label)
+            if i >= 4 { label.toolTip = "Headphones — the Out 7–8 pair" }
             let p = NSPopUpButton()
             p.translatesAutoresizingMaskIntoConstraints = false
             p.addItem(withTitle: "+4 dBu")
             p.addItem(withTitle: "−10 dBV")
-            p.lastItem?.representedObject = 3
             p.item(at: 0)?.representedObject = 2
+            p.lastItem?.representedObject = 3
             p.action = #selector(lineOutLevelChanged(_:))
             p.target = self
             p.tag = 3600 + i
-            wrap.addArrangedSubview(p)
-            lineOutLabels.append(label)
             lineOutPopups.append(p)
-            stack.addArrangedSubview(wrap)
+            let cell = NSStackView(views: [label, p])
+            cell.orientation = .horizontal
+            cell.spacing = 8
+            cell.alignment = .centerY
+            cell.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                label.widthAnchor.constraint(equalToConstant: SettingsLayout.labelColumn),
+                label.widthAnchor.constraint(equalToConstant: 56),
                 p.widthAnchor.constraint(equalToConstant: 110),
             ])
-        }
-        stack.addArrangedSubview(SettingsHelpText.label(
-            "Each ¼\" line output's reference level — the same setting the\ntouchscreen's output page drives. Channels stay independent; pairs\nare not linked."))
-
-        // --- Line-output trim (firmware) — settings-side hardware trim
-
-        buildHwoutTrims(stack)
-
-        // --- Hardware output routing — the DAC's source per output pair
-        SettingsSection.add(to: stack, "Hardware output routing")
-        // the PAIR slots (the user's live mapping, 11/7): wI 0 = Out 1-2
-        // (Main), 1 = Out 3-4, 2 = Out 5-6, 3 = the Headphones
-        let rows = [("Out 1-2 (Main)", 0), ("Out 3-4 (Analog 1/2)", 1),
-                    ("Out 5-6 (Analog 3/4)", 2), ("Headphones", 3)]
-        for (title, slot) in rows {
-            let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: 13)
-            label.setContentCompressionResistancePriority(
-                NSLayoutConstraint.Priority(751), for: .horizontal)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            let wrap = NSStackView()
-            wrap.orientation = .horizontal
-            wrap.spacing = 8
-            wrap.addArrangedSubview(label)
-            let p = NSPopUpButton()
-            p.translatesAutoresizingMaskIntoConstraints = false
-            for (i, name) in Self.routingSources.enumerated() {
-                p.addItem(withTitle: name)
-                p.lastItem?.representedObject = i
+            if i % 2 == 0 {
+                leftCells.append(cell)
+            } else {
+                rightCells.append(cell)
             }
-            p.action = #selector(routingChanged(_:))
-            p.target = self
-            p.tag = 3800 + slot
-            wrap.addArrangedSubview(p)
-            routingPopups.append(p)
-            stack.addArrangedSubview(wrap)
-            NSLayoutConstraint.activate([
-                label.widthAnchor.constraint(equalToConstant: SettingsLayout.labelColumn),
-                p.widthAnchor.constraint(equalToConstant: 150),
-            ])
         }
+        let left = NSStackView(views: leftCells)
+        left.orientation = .vertical
+        left.spacing = 10
+        left.alignment = .leading
+        left.translatesAutoresizingMaskIntoConstraints = false
+        let right = NSStackView(views: rightCells)
+        right.orientation = .vertical
+        right.spacing = 10
+        right.alignment = .leading
+        right.translatesAutoresizingMaskIntoConstraints = false
+        let refGrid = NSStackView(views: [left, right])
+        refGrid.orientation = .horizontal
+        refGrid.distribution = .fillEqually
+        refGrid.spacing = 16
+        refGrid.translatesAutoresizingMaskIntoConstraints = false
+        pinned.append(refGrid)
+        stack.addArrangedSubview(refGrid)
+
         stack.addArrangedSubview(SettingsHelpText.label(
-            "What each hardware output pair plays: the USB playback pairs\n" +
-            "(pure playback, no inputs) or the monitor mix (music + the raw\n" +
-            "inputs — the talkback source). Written straight to the unit\n" +
-            "(register 0x53); ear-verified 11/8. Keep the headphones on a\n" +
-            "Playback pair for normal listening — the monitor mix carries\n" +
-            "the inputs OPEN and nothing gates them."))
-    }
+            "Set each line output's reference level independently — pairs are not linked."))
 
-    /// Line-output TRIM (firmware): the hardware strips' `trim` property,
-    /// applied by the Quartet at the DAC — downstream of everything macOS
-    /// sends, so it listens to ALL apps, not just this one's insert chain.
-    /// Rows are PAIRS of the mono strips, labeled with the strips' own
-    /// hardware names. Range −64…+6 dB; values survive power cycles and
-    /// re-push from these saved keys on every reconnect.
-    private var hwoutTrimSliders: [NSSlider] = []
-    private var hwoutTrimNameLabels: [NSTextField] = []
-    private var hwoutTrimReadouts: [NSTextField] = []
-    private var hwoutTrimSuppress = false
-
-    private func buildHwoutTrims(_ stack: NSStackView) {
-        SettingsSection.add(to: stack, "Line-output trim (hardware)")
-        for pair in 1...3 {
-            let label = NSTextField(labelWithString: "Analog Out \(2 * pair - 1) / \(2 * pair)")
-            label.font = .systemFont(ofSize: 13)
-            label.setContentCompressionResistancePriority(
-                NSLayoutConstraint.Priority(751), for: .horizontal)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            let slider = HwoutTrimSlider(value: 0, minValue: -24, maxValue: 0,
-                                         target: self, action: #selector(hwoutTrimChanged(_:)))
-            slider.tag = 3700 + pair
-            slider.translatesAutoresizingMaskIntoConstraints = false
-            let readout = NSTextField(labelWithString: "0.0 dB")
-            readout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-            readout.translatesAutoresizingMaskIntoConstraints = false
-            readout.alignment = .right
-            let wrap = NSStackView()
-            wrap.orientation = .horizontal
-            wrap.spacing = 8
-            wrap.addArrangedSubview(label)
-            wrap.addArrangedSubview(slider)
-            wrap.addArrangedSubview(readout)
-            hwoutTrimNameLabels.append(label)
-            hwoutTrimSliders.append(slider)
-            hwoutTrimReadouts.append(readout)
-            stack.addArrangedSubview(wrap)
-            NSLayoutConstraint.activate([
-                label.widthAnchor.constraint(equalToConstant: SettingsLayout.labelColumn),
-                slider.widthAnchor.constraint(equalToConstant: 180),
-                readout.widthAnchor.constraint(equalToConstant: 64),
-            ])
+        // The table + grid pin to the PANE body (not this hugging
+        // sub-stack — pinning to it is a mutually-exclusive cycle that
+        // crashed the settings build). The pin must run AFTER the caller
+        // adds this stack to the body — hence the deferred tick.
+        DispatchQueue.main.async { [weak stack] in
+            guard let stack, let body = stack.superview else { return }
+            for v in pinned {
+                v.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            }
         }
-        stack.addArrangedSubview(SettingsHelpText.label(
-            "The Quartet's own output trim, applied by the firmware at the\nDAC — downstream of everything macOS sends, so it affects every\napp. Rows carry the strips' hardware names; the routing window's\ncards are one pair number up (Out 3‑4 card ⟶ Analog Out 1/2 …\nOut 7‑8 card ⟶ Analog Out 5/6). Range −24…0 dB (attenuation\nonly); ⌘+click a slider to reset it to 0 dB. Saved values re-push\nto the unit after every reconnect or power cycle."))
     }
 
     /// Slider that ⌘+click snaps to 0 dB (unity) instead of jumping to the
@@ -1759,54 +1882,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
     }
 
-    private func refreshHwoutTrims() {
-        guard !hwoutTrimSliders.isEmpty else { return }
-        hwoutTrimSuppress = true
-        defer { hwoutTrimSuppress = false }
-        let read = readHwoutTrims?() ?? []
-        for pair in 1...3 {
-            let row = pair - 1
-            guard pair <= read.count else {
-                hwoutTrimSliders[row].isEnabled = false
-                continue
-            }
-            let entry = read[row]
-            hwoutTrimNameLabels[row].stringValue = entry.name
-            if let db = entry.trim {
-                // tree values outside the hard range can't be shown — the
-                // slider clamps them (the next change writes the clamp back)
-                let shown = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
-                hwoutTrimSliders[row].isEnabled = true
-                hwoutTrimSliders[row].doubleValue = shown
-                hwoutTrimReadouts[row].stringValue = String(format: "%.1f dB", shown)
-            } else {
-                hwoutTrimSliders[row].isEnabled = false
-                hwoutTrimReadouts[row].stringValue = "—"
-            }
-        }
-    }
-
-    private func refreshLineOuts() {
-        guard !lineOutPopups.isEmpty else { return }
-        lineOutSuppress = true
-        defer { lineOutSuppress = false }
-        let read = readLineOutLevels?() ?? []
-        for i in 0..<6 {
-            let popup = lineOutPopups[i]
-            if i < read.count {
-                lineOutLabels[i].stringValue = read[i].name
-                if let v = read[i].refLevel {
-                    popup.isEnabled = true
-                    popup.selectItem(at: v == 3 ? 1 : 0)
-                } else {
-                    popup.isEnabled = false
-                }
-            } else {
-                popup.isEnabled = false
-            }
-        }
-    }
-
     @objc private func lineOutLevelChanged(_ sender: NSPopUpButton) {
         guard !lineOutSuppress,
               let i = lineOutPopups.firstIndex(of: sender),
@@ -1816,38 +1891,207 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// A routing source picked — both strips of the pair (the HP = one).
+    /// The popup's row maps to its 0x53 slot through `routingPopupSlots`
+    /// (the analog-5/6 row has no popup at all).
     @objc private func routingChanged(_ sender: NSPopUpButton) {
         guard !routingSuppress,
-              let slot = routingPopups.firstIndex(of: sender),
+              let i = routingPopups.firstIndex(of: sender),
+              routingPopupSlots.indices.contains(i),
               let v = sender.selectedItem?.representedObject as? Int else { return }
-        writeHwoutRouting?(slot, v)
-        QBLog.log("settings: routing slot \(slot) → \(Self.routingSources[v])")
+        writeHwoutRouting?(routingPopupSlots[i], v)
+        QBLog.log("settings: routing slot \(routingPopupSlots[i]) → \(Self.routingSources[v])")
     }
 
-    private var lastRoutingValues: [Int?] = []
+    /// One refresh for the whole Outputs page: the routing selections,
+    /// the trim values and the reference levels. `connected` gates EVERY
+    /// control uniformly — when the device is out of reach the page keeps
+    /// showing (disabled) last-known values, and a trim with no readable
+    /// value shows a dash with NO slider handle, so an unknown setting
+    /// never looks like a chosen position.
+    private func refreshOutputs(connected: Bool) {
+        guard !lineOutPopups.isEmpty, !hwoutTrimSliders.isEmpty,
+              !routingPopups.isEmpty else { return }
 
-    private func refreshRouting() {
-        guard !routingPopups.isEmpty else { return }
+        // routing selections (slots 0-3; the popup list skips the rows
+        // without a verified slot)
         routingSuppress = true
-        defer { routingSuppress = false }
-        let read = readHwoutRouting?() ?? []
-        for (slot, popup) in routingPopups.enumerated() {
-            let v = slot < read.count ? read[slot] : nil
+        let routingRead = readHwoutRouting?() ?? []
+        for (i, popup) in routingPopups.enumerated() {
+            let slot = routingPopupSlots[i]
+            let v = slot < routingRead.count ? routingRead[slot] : nil
             let last = slot < lastRoutingValues.count ? lastRoutingValues[slot] : nil
-            guard v != last else { continue }   // stable value — don't touch the popup
-            if let v, (0..<Self.routingSources.count).contains(v) {
-                popup.isEnabled = true
-                popup.selectItem(at: v)
-            } else {
-                popup.isEnabled = false
+            popup.isEnabled = connected && v != nil
+            if v != last, let v, (0..<Self.routingSources.count).contains(v) {
+                popup.selectItem(at: v)   // stable values — don't touch the popup
             }
         }
-        lastRoutingValues = read
+        lastRoutingValues = routingRead
+        routingSuppress = false
+
+        // hardware trims (pairs 1…3 = table rows 1…3)
+        hwoutTrimSuppress = true
+        let trims = readHwoutTrims?() ?? []
+        for pair in 1...3 {
+            let i = pair - 1
+            let slider = hwoutTrimSliders[i]
+            let dash = hwoutTrimDashes[i]
+            let readout = hwoutTrimReadouts[i]
+            let db = i < trims.count ? trims[i].trim : nil
+            guard let db else {
+                slider.isEnabled = false
+                slider.isHidden = true
+                dash.isHidden = false
+                readout.isHidden = true
+                continue
+            }
+            // tree values outside the hard range can't be shown — the
+            // slider clamps them (the next change writes the clamp back)
+            let shown = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin, db))
+            dash.isHidden = true
+            slider.isHidden = false
+            slider.isEnabled = connected
+            slider.doubleValue = shown
+            readout.isHidden = false
+            readout.stringValue = String(format: "%.1f dB", shown)
+        }
+        hwoutTrimSuppress = false
+
+        // reference levels (six independent line outputs)
+        lineOutSuppress = true
+        let levels = readLineOutLevels?() ?? []
+        for i in 0..<6 {
+            let popup = lineOutPopups[i]
+            if connected, i < levels.count, let v = levels[i].refLevel {
+                popup.isEnabled = true
+                popup.selectItem(at: v == 3 ? 1 : 0)
+            } else {
+                popup.isEnabled = false   // the selection stays last-known
+            }
+        }
+        lineOutSuppress = false
     }
 
+    // MARK: Outputs page help
+
+    /// A section heading with an ⓘ button (the long notes live behind it).
+    private func sectionHeader(_ title: String, info: Selector) -> NSStackView {
+        let h = NSStackView()
+        h.orientation = .horizontal
+        h.spacing = 6
+        h.alignment = .centerY
+        h.translatesAutoresizingMaskIntoConstraints = false
+        h.addArrangedSubview(SettingsSection.label(title))
+        let b = NSButton(title: "ⓘ", target: self, action: info)
+        b.bezelStyle = .circular
+        b.font = .systemFont(ofSize: 11)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        h.addArrangedSubview(b)
+        return h
+    }
+
+    /// A small secondary column caption for the outputs table.
+    private func columnCaption(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = .systemFont(ofSize: 11, weight: .medium)
+        l.textColor = .secondaryLabelColor
+        l.translatesAutoresizingMaskIntoConstraints = false
+        return l
+    }
+
+    /// The ⓘ popover: a read-only scrolling text view with the note.
+    private func showInfoPopover(_ note: String, from sender: NSButton) {
+        let pop = NSPopover()
+        pop.behavior = .transient
+        let vc = NSViewController()
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 260))
+        text.isEditable = false
+        text.drawsBackground = false
+        text.textContainerInset = NSSize(width: 12, height: 12)
+        text.string = note
+        text.font = .systemFont(ofSize: 11)
+        text.textColor = .labelColor
+        let sv = NSScrollView()
+        sv.documentView = text
+        sv.hasVerticalScroller = true
+        sv.frame = NSRect(x: 0, y: 0, width: 400, height: 260)
+        vc.view = sv
+        pop.contentViewController = vc
+        pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+
+    @objc private func outputsInfoClicked(_ sender: NSButton) {
+        showInfoPopover(Self.outputsTechNote, from: sender)
+    }
+
+    @objc private func refLevelInfoClicked(_ sender: NSButton) {
+        showInfoPopover(Self.refLevelTechNote, from: sender)
+    }
+
+    /// The implementation notes behind the routing/trim ⓘ button.
+    private static let outputsTechNote = """
+        WHAT THE CONTROLS WRITE
+
+        Source — the DAC's per-pair source register (0x53), one byte per
+        pair slot: 0 = Main Out (Out 1-2), 1 = Out 3-4, 2 = Out 5-6,
+        3 = Headphones. Values 0-3 = the USB playback pairs, 4/5 = the
+        hardware mixers. Written straight to the unit (its flash keeps
+        it); ear-verified 11/8 (byte 5 audible with music + inputs;
+        byte 4 read silent in one test — under re-verification with the
+        fader-gating). The app remembers the choice and re-pushes it
+        whenever the direct session opens. Keep the headphones on a
+        Playback pair for normal listening — the monitor mix carries the
+        inputs OPEN and nothing gates them.
+
+        Hardware trim — the firmware strips' trim register (0x18,
+        |dB|×10), applied at the DAC, downstream of everything macOS
+        sends, so it affects every app. A write goes to BOTH strips of
+        the pair so they track together; a read shows the left strip's
+        value (a pair trimmed apart on the touchscreen shows the left
+        one until touched). Range −24…0 dB, attenuation only.
+        ⌘+click a slider to reset it to 0 dB. Values survive power
+        cycles and are re-pushed from the saved settings on every
+        reconnect.
+
+        CONNECTOR MAP (corrected Nov 8 against the live unit — the Oct 26
+        "one pair up" note was wrong)
+
+        The jack numbers ARE the macOS pair numbers; Main Out consumes
+        Out 1-2, and the touchscreen numbers the remaining strips
+        "Analog Out 1…6" from hwout2…7:
+
+            Main Out             = jack Out 1-2 (macOS 1-2, hwout0)
+            Out 3-4              = touchscreen "Analog Out 1/2" (hwout2/3)
+            Out 5-6              = touchscreen "Analog Out 3/4" (hwout4/5)
+            Headphones (Out 7-8) = touchscreen "Analog Out 5/6" (hwout6/7)
+
+        The headphone jack plays the Out 7-8 pair, so all FOUR
+        destinations have a routing slot (0-3) — the headphone slot's
+        default source = Playback 7-8. Main Out is the only destination
+        without a hardware trim. This page uses the jack identities
+        throughout; the unit's own strip names ("Analog Out 1…6",
+        renamable in Settings ▸ Quartet ▸ Channel Names) are what the
+        touchscreen shows.
+        """
+
+    /// The implementation notes behind the reference-level ⓘ button.
+    private static let refLevelTechNote = """
+        Each ¼" line output carries its own reference level — the same
+        analogRefLevel setting the touchscreen's output page drives
+        (hwout2…7: 2 = +4 dBu, 3 = −10 dBV, the same enum as the input
+        levels). The six channels stay independent: pairs are NOT
+        linked, so the two halves of a jack pair may differ.
+
+        Reads come from the glue tree while Apogee's daemon is up,
+        otherwise straight from the registers; the values live in the
+        unit itself.
+        """
+
     /// Page-level hardware refresh: status line, availability notice and
-    /// the four hardware-backed sections (each disables its own controls
-    /// when the tree is gone, keeping the last read values as labels).
+    /// the four hardware-backed sections (one consistent rule: hardware
+    /// editing is enabled only while the device is reachable — the
+    /// disconnected page keeps the last-known values readable).
     private func refreshQuartet() {
         guard hardwareNotice != nil else { return }
         // 11.7: the reconnect loop fires refreshes every ~5 s — the sections
@@ -1859,10 +2103,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         hardwareNotice.isHidden = connected
         refreshTouchscreen()
         refreshPads()
-        refreshRouting()
         rebuildNames()
-        refreshLineOuts()
-        refreshHwoutTrims()
+        refreshOutputs(connected: connected)
     }
 
     // MARK: - Processing (audio engine + Auto Gain + plug-ins)
