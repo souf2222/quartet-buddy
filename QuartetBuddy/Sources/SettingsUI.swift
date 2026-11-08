@@ -20,7 +20,7 @@ enum SettingsLayout {
     static let sectionSpacing: CGFloat = 24
     static let titleTopInset: CGFloat = 20
     static let titleBodyGap: CGFloat = 14
-    static let pageSize = NSSize(width: 900, height: 620)
+    static let pageSize = NSSize(width: 900, height: 680)
     static let minPageSize = NSSize(width: 680, height: 520)
     /// Bottom padding so the last row never sits against the window edge.
     static let bottomPadding: CGFloat = 20

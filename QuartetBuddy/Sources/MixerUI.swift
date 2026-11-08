@@ -22,7 +22,7 @@ final class VFaderControl: NSView {
     /// fired on every user change (drag ticks, ⌘-reset, the wheel)
     var onValue: ((Double) -> Void)?
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 54, height: 180) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 40, height: 128) }
 
     private var dragging = false
 
@@ -56,13 +56,13 @@ final class VFaderControl: NSView {
         let hy = y(forDB: dB)
         let handle = NSRect(x: (bounds.width - 26) / 2, y: hy - 6, width: 26, height: 12)
         let hp = NSBezierPath(roundedRect: handle, xRadius: 3, yRadius: 3)
-        NSColor(white: faderEnabled ? 0.45 : 0.24, alpha: 1).setFill()
+        NSColor(white: faderEnabled ? 0.33 : 0.24, alpha: 1).setFill()
         hp.fill()
-        NSColor(white: faderEnabled ? 0.62 : 0.36, alpha: 1).setStroke()
+        NSColor(white: faderEnabled ? 0.52 : 0.36, alpha: 1).setStroke()
         hp.lineWidth = 1
         hp.stroke()
-        NSColor(white: 0.92, alpha: faderEnabled ? 1 : 0.35).setFill()
-        NSRect(x: handle.midX - 9, y: hy - 0.75, width: 18, height: 1.5).fill()
+        NSColor(white: 0.88, alpha: faderEnabled ? 1 : 0.35).setFill()
+        NSRect(x: handle.midX - 9, y: hy - 0.5, width: 18, height: 1).fill()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -165,7 +165,6 @@ final class MSButton: NSView {
     var isOn = false { didSet { needsDisplay = true } }
     var faderEnabled = true { didSet { needsDisplay = true } }
     var onToggle: ((Bool) -> Void)?
-    private var hover = false { didSet { needsDisplay = true } }
 
     override var intrinsicContentSize: NSSize { NSSize(width: 20, height: 18) }
     private var label: String { kind == .mute ? "M" : "S" }
@@ -177,8 +176,7 @@ final class MSButton: NSView {
             ? NSColor(red: 0.75, green: 0.30, blue: 0.24, alpha: 1)
             : NSColor(red: 0.80, green: 0.60, blue: 0.20, alpha: 1)
         let lit = isOn && faderEnabled
-        let idle = NSColor(white: hover ? 0.27 : 0.2, alpha: 1)
-        (lit ? active : idle).setFill()
+        (lit ? active : NSColor(white: 0.2, alpha: 1)).setFill()
         r.fill()
         NSColor(white: lit ? 0.55 : 0.3, alpha: 1).setStroke()
         r.lineWidth = 1
@@ -199,22 +197,13 @@ final class MSButton: NSView {
         isOn.toggle()
         onToggle?(isOn)
     }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
-        addTrackingArea(NSTrackingArea(rect: bounds,
-                                       options: [.mouseEnteredAndExited, .activeInKeyWindow],
-                                       owner: self))
-    }
-    override func mouseEntered(with event: NSEvent) { hover = true }
-    override func mouseExited(with event: NSEvent) { hover = false }
 }
 
 /// One channel strip: the label, the pan (with its position readout), the
 /// vertical fader, the numeric level and the M/S buttons — fixed frames,
 /// no cards, on the pane's continuous charcoal.
 final class MixerStrip: NSView {
-    static let height: CGFloat = 284
+    static let height: CGFloat = 232
     /// the Playback strip is wider so its label fits
     let stripWidth: CGFloat
 
@@ -238,30 +227,29 @@ final class MixerStrip: NSView {
         }
     }
 
-    init(title: String, width: CGFloat = 56) {
+    init(title: String, width: CGFloat = 46) {
         stripWidth = width
         nameLabel = NSTextField(labelWithString: title)
         panReadout = NSTextField(labelWithString: "C")
         levelReadout = NSTextField(labelWithString: "−48")
         super.init(frame: NSRect(x: 0, y: 0, width: stripWidth, height: Self.height))
 
-        nameLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        nameLabel.font = .systemFont(ofSize: 10, weight: .medium)
         nameLabel.alignment = .center
-        panReadout.font = .systemFont(ofSize: 10, weight: .regular)
+        panReadout.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         panReadout.alignment = .center
-        panReadout.textColor = .secondaryLabelColor
-        levelReadout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        levelReadout.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         levelReadout.alignment = .center
         levelReadout.textColor = .labelColor
 
-        // fixed frames — top-down → AppKit bottom-up (h = 284)
-        nameLabel.frame = NSRect(x: 0, y: Self.height - 18, width: stripWidth, height: 16)
-        panReadout.frame = NSRect(x: 0, y: Self.height - 34, width: stripWidth, height: 13)
-        pan.frame = NSRect(x: 4, y: Self.height - 52, width: stripWidth - 8, height: 16)
-        fader.frame = NSRect(x: 2, y: 62, width: stripWidth - 4, height: 180)
-        levelReadout.frame = NSRect(x: 0, y: 38, width: stripWidth, height: 16)
-        muteButton.frame = NSRect(x: (stripWidth - 52) / 2, y: 10, width: 24, height: 22)
-        soloButton.frame = NSRect(x: (stripWidth - 52) / 2 + 26, y: 10, width: 24, height: 22)
+        // fixed frames — top-down → AppKit bottom-up (h = 232)
+        nameLabel.frame = NSRect(x: 0, y: Self.height - 16, width: stripWidth, height: 14)
+        panReadout.frame = NSRect(x: 0, y: Self.height - 31, width: stripWidth, height: 12)
+        pan.frame = NSRect(x: 2, y: Self.height - 49, width: stripWidth - 4, height: 16)
+        fader.frame = NSRect(x: 2, y: 54, width: stripWidth - 4, height: 128)
+        levelReadout.frame = NSRect(x: 0, y: 34, width: stripWidth, height: 14)
+        muteButton.frame = NSRect(x: 0, y: 8, width: 22, height: 18)
+        soloButton.frame = NSRect(x: stripWidth - 22, y: 8, width: 22, height: 18)
         soloButton.kind = .solo          // (the default = .mute — the missing
                                          // kind made both buttons read "M")
 
@@ -288,9 +276,9 @@ final class MixerStrip: NSView {
     func setSolo(_ on: Bool) { soloButton.isOn = on }
 
     static func levelText(_ db: Double) -> String {
-        let v = db.rounded()
-        let s = String(format: "%.1f", abs(v))
-        return v < 0 ? "\u{2212}\(s)" : s
+        let v = Int(db.rounded())
+        if v == 0 { return "0" }
+        return v > 0 ? "+\(v)" : "\u{2212}\(-v)"
     }
     static func panText(_ byte: Int) -> String {
         byte == 64 ? "C" : (byte < 64 ? "L \(64 - byte)" : "R \(byte - 64)")
@@ -306,12 +294,9 @@ final class MixerScaleColumn: NSView {
         (6, "+6", false), (0, "0", true), (-12, "\u{2212}12", false),
         (-24, "\u{2212}24", false), (-48, "\u{2212}48", false),
     ]
-    private var labeledFlag: Bool
 
-    init(columnFrame: NSRect, labeled: Bool) {
-        labeledFlag = labeled
-        super.init(frame: columnFrame)
-        guard labeled else { return }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
         let lb = NSTextField(labelWithString: "dB")
         lb.font = .systemFont(ofSize: 9, weight: .medium)
         lb.textColor = .secondaryLabelColor
@@ -323,28 +308,27 @@ final class MixerScaleColumn: NSView {
     required init?(coder: NSCoder) { fatalError("no nib") }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard labeledFlag else {
-            // the bare reference column (Playback): the ticks only
-            let h = bounds.height
-            for (db, _, unity) in Self.ticks {
-                let y = (db - VFaderControl.minDB) / (VFaderControl.maxDB - VFaderControl.minDB) * h
-                NSColor(white: 1, alpha: unity ? 0.5 : 0.22).setFill()
-                NSRect(x: bounds.width - 8, y: y - 0.5, width: 8, height: 1).fill()
-            }
-            return
-        }
         let h = bounds.height
         for (db, text, unity) in Self.ticks {
             let y = (db - VFaderControl.minDB) / (VFaderControl.maxDB - VFaderControl.minDB) * h
-            NSColor(white: 1, alpha: unity ? 0.55 : 0.22).setFill()
+            let alpha: CGFloat = unity ? 0.5 : 0.22
+            NSColor(white: 1, alpha: alpha).setFill()
             NSRect(x: bounds.width - 8, y: y - 0.5, width: unity ? 8 : 5, height: 1).fill()
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: unity ? .medium : .regular),
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 8, weight: unity ? .medium : .regular),
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]
             let s = NSAttributedString(string: text, attributes: attrs)
             let sz = s.size()
-            s.draw(at: NSPoint(x: bounds.width - 11 - sz.width, y: y - sz.height / 2 + 0.5))
+            s.draw(at: NSPoint(x: bounds.width - 10 - sz.width, y: y - sz.height / 2 + 0.5))
+            if unity {
+                let u = NSAttributedString(string: "unity", attributes: [
+                    .font: NSFont.systemFont(ofSize: 6.5),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ])
+                let usz = u.size()
+                u.draw(at: NSPoint(x: bounds.width - 10 - usz.width, y: y - sz.height / 2 - usz.height - 1))
+            }
         }
     }
 }
@@ -361,10 +345,11 @@ final class MixerBankView: NSView {
 
     init(rowTitles: [String]) {
         let n = rowTitles.count
-        let widthFor: (Int) -> CGFloat = { _ in 56 }
-        let stripGap: CGFloat = 8
-        let groupGap: CGFloat = 18
-        let scaleW: CGFloat = 34
+        // the strip widths: the Playback gets extra room for its label
+        let widthFor: (Int) -> CGFloat = { i in rowTitles[i] == "Playback" ? 66 : 46 }
+        let stripGap: CGFloat = 6
+        let groupGap: CGFloat = 16
+        let scaleW: CGFloat = 30
 
         var frames = [NSRect](repeating: .zero, count: n)
         var scaleFrames: [NSRect] = []
@@ -372,7 +357,7 @@ final class MixerBankView: NSView {
         var x: CGFloat = 0
         let groups = [(0, 3), (4, 11), (12, n - 1)]
         for (gi, group) in groups.enumerated() {
-            scaleFrames.append(NSRect(x: x, y: 72, width: scaleW, height: 180))
+            scaleFrames.append(NSRect(x: x, y: 64, width: scaleW, height: 108))
             x += scaleW + 3
             for i in group.0...group.1 {
                 frames[i] = NSRect(x: x, y: 0, width: widthFor(i), height: MixerStrip.height)
@@ -409,10 +394,9 @@ final class MixerBankView: NSView {
             v.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
             addSubview(v)
         }
-        // the scale columns: labelled for Analog/Digital, the bare
-        // reference for Playback
-        for (gi, sf) in scaleFrames.enumerated() {
-            let col = MixerScaleColumn(columnFrame: sf, labeled: gi < 2)
+        // the scale columns
+        for sf in scaleFrames {
+            let col = MixerScaleColumn(frame: sf)
             addSubview(col)
         }
         // the strips
