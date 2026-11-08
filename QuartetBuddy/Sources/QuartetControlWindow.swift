@@ -911,48 +911,66 @@ final class GainKnob: NSControl {
     @discardableResult
     private func send() -> Bool { sendAction(action, to: target) }
 
-    // MARK: - the Auto Gain activity — the knob IS the animation
+    // MARK: - the Auto Gain activity — one fine light scanning the rim
     //
-    // While Auto Gain calibrates this input, the knob's own arc becomes
-    // the activity display: cyan, breathing softly, GLIDING between the
-    // engine's real gain updates (the nudge writes land ~1 s apart; each
-    // one eases the arc to its new position — the movement represents
-    // the operation, never elapsed time). The number stays a crisp
-    // whole-dB readout: it changes when the engine writes, it never
-    // rolls. On success the arc gives ONE short pulse and fades over
-    // the app's green arc, which draw() restores underneath. Everything
-    // runs on CORE ANIMATION (GPU-composited) — no timer, no per-frame
-    // redraw.
+    // While Auto Gain calibrates this input the dial KEEPS its idle
+    // geometry: the green value arc stays exactly what it is at rest
+    // (rendered as a layer only so it can glide when the engine writes
+    // a real gain) and the activity is a separate, THIN cyan accent just
+    // outside the track — a short, softly tapered highlight traveling
+    // back and forth within the existing 270° sweep. No broad glow: the
+    // highlight carries only a tight, low halo. The number changes only
+    // when the gain actually changes. At the end the accent fades away
+    // quietly — no pulse.
 
     enum AutoPhase: Equatable {
         /// The normal dial.
         case idle
-        /// Calibrating — tracking the input's level (the cyan breath).
+        /// Calibrating — tracking the input's level.
         case listening
         /// The final settle — verify + the last correction.
         case settling
-        /// Success — one short pulse, then the green arc returns.
+        /// Success — the accent fades, the green arc + number remain.
         case locked
     }
 
     private(set) var autoPhase: AutoPhase = .idle
 
-    /// The cyan arc riding the track — owns the value arc while active.
-    private let autoArc = CAShapeLayer()
-    /// The soft halo UNDER the arc — carries the breath + the lock beat.
-    private let autoHalo = CAShapeLayer()
+    /// The gain arc as a layer while active — same geometry and green as
+    /// the drawn one (draw() steps aside while this is up), animatable.
+    private let autoValueArc = CAShapeLayer()
+    /// The thin accent track — a dim cyan hairline hugging the track's
+    /// outer edge, spanning the full 270° sweep.
+    private let accentTrack = CAShapeLayer()
+    /// The traveling highlight: a tapered core over a tight low halo.
+    private let accentCore = CAShapeLayer()
+    private let accentHalo = CAShapeLayer()
     private var autoLayersInstalled = false
-    /// One breath cycle while listening, in seconds — slow on purpose:
-    /// an instrument finding its level, not a spinner.
-    private static let breathSeconds: CFTimeInterval = 1.8
-    /// The glide between two real gain updates, in seconds (the engine
-    /// nudges about once a second, so each glide completes in time).
-    private static let glideSeconds: CFTimeInterval = 0.45
-    /// The lock pulse (bloom → release), in seconds.
-    private static let lockSeconds: CFTimeInterval = 0.8
+
+    /// The glide between two real gain updates, in seconds.
+    private static let glideSeconds: CFTimeInterval = 0.4
+    /// The end fade of the whole accent, in seconds.
+    private static let fadeSeconds: CFTimeInterval = 0.45
+    /// One one-way traverse of the highlight, in seconds.
+    private static let scanSeconds: CFTimeInterval = 1.4
+    /// The highlight's angular length (of the 270° sweep).
+    private static let scanDegrees: CGFloat = 26
+
+    /// The accent's radius — just outside the track's outer edge, kept
+    /// inside the bounds (the track leaves only ~0.75 pt of margin, so
+    /// the hairline kisses the charcoal band rather than floating).
+    private var accentRadius: CGFloat {
+        min(trackRadius + stroke / 2 + 0.65, bounds.width / 2 - 0.55)
+    }
+    private var accentPerimeter: CGFloat {
+        Self.sweepAngle * .pi / 180 * accentRadius
+    }
+    private var accentHighlightLength: CGFloat {
+        Self.scanDegrees * .pi / 180 * accentRadius
+    }
 
     /// The window's refresh syncs the phase each pass; transitions drive
-    /// the overlay, same-phase calls are free.
+    /// the layers, same-phase calls are free.
     func setAutoPhase(_ p: AutoPhase) {
         guard p != autoPhase else { return }
         let wasActive = autoPhase == .listening || autoPhase == .settling
@@ -960,11 +978,9 @@ final class GainKnob: NSControl {
         switch p {
         case .listening, .settling:
             showAutoOverlay()
-        case .locked:
-            if wasActive { lockPulse() } else { hideAutoOverlayNow() }
-        case .idle:
-            // straight from active (cancel/fail): a short fade; from the
-            // lock beat: the pulse already faded it — just clean up
+        case .locked, .idle:
+            // success and cancel take the same quiet road: stop the
+            // highlight, fade everything over the drawn arc beneath
             if wasActive { fadeAutoOverlay() } else { hideAutoOverlayNow() }
         }
         needsDisplay = true
@@ -973,16 +989,17 @@ final class GainKnob: NSControl {
     private func installAutoLayers() {
         guard !autoLayersInstalled, let l = layer else { return }
         autoLayersInstalled = true
-        l.addSublayer(autoHalo)   // halo first = under the arc
-        l.addSublayer(autoArc)
+        l.addSublayer(autoValueArc)
+        l.addSublayer(accentTrack)
+        l.addSublayer(accentHalo)   // halo under the core
+        l.addSublayer(accentCore)
     }
 
-    /// The dial's full 270° track path — the layers stroke it with
-    /// strokeEnd = the value fraction, matching draw()'s arc exactly.
-    private func autoTrackPath() -> CGPath {
+    /// A 270° arc path at the given radius — the knob's own sweep.
+    private func sweepPath(radius r: CGFloat) -> CGPath {
         let p = CGMutablePath()
         p.addArc(center: CGPoint(x: bounds.midX, y: bounds.midY),
-                 radius: trackRadius,
+                 radius: r,
                  startAngle: Self.startAngle * .pi / 180,
                  endAngle: (Self.startAngle - Self.sweepAngle) * .pi / 180,
                  clockwise: true)
@@ -992,99 +1009,94 @@ final class GainKnob: NSControl {
     private func showAutoOverlay() {
         installAutoLayers()
         guard bounds.width > 8 else { return }
-        let path = autoTrackPath()
-        autoHalo.lineWidth = stroke * 2.4
-        autoHalo.strokeColor = GGTheme.cyan.cgColor
-        autoHalo.shadowColor = GGTheme.cyan.cgColor
-        autoHalo.shadowOpacity = 0.5
-        autoHalo.shadowRadius = 4
-        autoHalo.shadowOffset = .zero
-        autoArc.lineWidth = stroke
-        autoArc.strokeColor = GGTheme.cyan.cgColor
-        autoArc.strokeEnd = CGFloat(fraction)
-        for l in [autoHalo, autoArc] {
-            l.path = path
+        // THE GAIN ARC — the idle control's own green arc, layer-rendered
+        autoValueArc.lineWidth = stroke
+        autoValueArc.strokeColor = GGTheme.knobArc.cgColor
+        autoValueArc.strokeEnd = CGFloat(fraction)
+        // THE ACCENT TRACK — a dim cyan hairline, the light's road
+        accentTrack.lineWidth = 1.1
+        accentTrack.strokeColor = GGTheme.cyan.withAlphaComponent(0.20).cgColor
+        accentTrack.strokeEnd = 1
+        // THE HIGHLIGHT — a short core (round caps soften the ends) over
+        // a slightly longer, dimmer under-stroke: a soft taper. The halo
+        // is tight — a few px of shadow, low opacity — nothing blooming.
+        let hl = accentHighlightLength
+        let per = accentPerimeter
+        accentCore.lineWidth = 1.3
+        accentCore.strokeColor = GGTheme.cyan.cgColor
+        accentCore.lineCap = .round
+        accentCore.lineDashPattern = [hl, per - hl].map { NSNumber(value: Double($0)) }
+        accentHalo.lineWidth = 3.2
+        accentHalo.strokeColor = GGTheme.cyan.withAlphaComponent(0.30).cgColor
+        accentHalo.lineCap = .round
+        accentHalo.lineDashPattern = [hl * 1.9, per - hl * 1.9].map { NSNumber(value: Double($0)) }
+        accentHalo.shadowColor = GGTheme.cyan.cgColor
+        accentHalo.shadowOpacity = 0.35
+        accentHalo.shadowRadius = 3
+        accentHalo.shadowOffset = .zero
+
+        for l in [autoValueArc, accentTrack, accentCore, accentHalo] {
             l.fillColor = nil
-            l.lineCap = .butt
             l.removeAllAnimations()
             l.opacity = 1
             l.isHidden = false
         }
-        // THE BREATH — soft and slow: the halo carries it, and the arc
-        // shimmers faintly with it (the charcoal track shows through).
-        let breath = CABasicAnimation(keyPath: "opacity")
-        breath.fromValue = 0.55
-        breath.toValue = 0.18
-        breath.duration = Self.breathSeconds
-        breath.autoreverses = true
-        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        breath.repeatCount = .infinity
-        breath.isRemovedOnCompletion = false
-        autoHalo.add(breath, forKey: "breath")
-        let shimmer = CABasicAnimation(keyPath: "opacity")
-        shimmer.fromValue = 1.0
-        shimmer.toValue = 0.82
-        shimmer.duration = Self.breathSeconds
-        shimmer.autoreverses = true
-        shimmer.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        shimmer.repeatCount = .infinity
-        shimmer.isRemovedOnCompletion = false
-        autoArc.add(shimmer, forKey: "breath")
+        autoValueArc.path = sweepPath(radius: trackRadius)
+        let accentPath = sweepPath(radius: accentRadius)
+        accentTrack.path = accentPath
+        accentCore.path = accentPath
+        accentHalo.path = accentPath
+
+        // THE SCAN — one-way traverse, easing in and out, reversing at
+        // each end; the dash stays inside the 270° sweep the whole time.
+        // The halo's dash is centered on the core's (offset half its
+        // extra length), so the taper leads AND trails symmetrically.
+        let travel = per - hl
+        let scan = CABasicAnimation(keyPath: "lineDashPhase")
+        scan.fromValue = 0
+        scan.toValue = -travel
+        scan.duration = Self.scanSeconds
+        scan.autoreverses = true
+        scan.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        scan.repeatCount = .infinity
+        scan.isRemovedOnCompletion = false
+        accentCore.add(scan, forKey: "scan")
+        let scanHalo = scan.copy() as! CABasicAnimation
+        scanHalo.fromValue = 0.45 * hl
+        scanHalo.toValue = 0.45 * hl - travel
+        accentHalo.add(scanHalo, forKey: "scan")
     }
 
-    /// The arc GLIDES between actual gain updates — from the PRESENTED
-    /// position, so a glide still in flight continues from where it is.
+    /// The gain arc GLIDES between actual gain updates — from the
+    /// PRESENTED position, so a glide still in flight continues from
+    /// where it is. At rest the drawn arc needs no glide.
     private func glideArcToCurrent() {
         guard autoPhase == .listening || autoPhase == .settling,
               bounds.width > 8 else { return }
         let to = CGFloat(fraction)
         let g = CABasicAnimation(keyPath: "strokeEnd")
-        g.fromValue = autoArc.presentation()?.strokeEnd ?? autoArc.strokeEnd
+        g.fromValue = autoValueArc.presentation()?.strokeEnd ?? autoValueArc.strokeEnd
         g.toValue = to
         g.duration = Self.glideSeconds
         g.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         g.fillMode = .forwards
         g.isRemovedOnCompletion = false
-        autoArc.strokeEnd = to
-        autoArc.add(g, forKey: "glide")
+        autoValueArc.strokeEnd = to
+        autoValueArc.add(g, forKey: "glide")
     }
 
-    /// THE LOCK — one precise beat: the arc holds its final position, the
-    /// halo blooms and releases, then everything fades over the app's
-    /// green arc (draw() draws it again the moment the phase turns
-    /// .locked — the cyan fades OUT of it). No bounce, no confetti.
-    private func lockPulse() {
-        autoArc.removeAnimation(forKey: "glide")
-        let arcFade = CAKeyframeAnimation(keyPath: "opacity")
-        arcFade.values = [1.0, 1.0, 0.0]
-        arcFade.keyTimes = [0, 0.35, 1]
-        arcFade.duration = Self.lockSeconds
-        arcFade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        arcFade.fillMode = .forwards
-        arcFade.isRemovedOnCompletion = false
-        autoArc.add(arcFade, forKey: "lock")
-        autoHalo.removeAllAnimations()   // the breath yields to the beat
-        let bloom = CAKeyframeAnimation(keyPath: "opacity")
-        bloom.values = [0.55, 0.95, 0.0]
-        bloom.keyTimes = [0, 0.25, 1]
-        bloom.duration = Self.lockSeconds
-        bloom.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        bloom.fillMode = .forwards
-        bloom.isRemovedOnCompletion = false
-        autoHalo.add(bloom, forKey: "lock")
-    }
-
-    /// Cancel/fail while active: a short fade of whatever is showing.
+    /// The quiet exit — stop the scan, fade the accent (and the layer
+    /// gain arc, which sits EXACTLY on the drawn one beneath) away.
     private func fadeAutoOverlay() {
-        guard !autoArc.isHidden else { return hideAutoOverlayNow() }
-        for key in ["breath", "glide", "lock"] {
-            autoArc.removeAnimation(forKey: key)
-            autoHalo.removeAnimation(forKey: key)
+        for l in [autoValueArc, accentTrack, accentCore, accentHalo] {
+            l.removeAnimation(forKey: "scan")
+            l.removeAnimation(forKey: "glide")
         }
         CATransaction.begin()
-        CATransaction.setAnimationDuration(0.25)
-        autoArc.opacity = 0
-        autoHalo.opacity = 0
+        CATransaction.setAnimationDuration(Self.fadeSeconds)
+        for l in [autoValueArc, accentTrack, accentCore, accentHalo] {
+            l.opacity = 0
+        }
         CATransaction.setCompletionBlock { [weak self] in
             guard let self,
                   self.autoPhase == .idle || self.autoPhase == .locked
@@ -1095,7 +1107,7 @@ final class GainKnob: NSControl {
     }
 
     private func hideAutoOverlayNow() {
-        for l in [autoArc, autoHalo] {
+        for l in [autoValueArc, accentTrack, accentCore, accentHalo] {
             l.removeAllAnimations()
             l.opacity = 1
             l.isHidden = true
@@ -1160,10 +1172,10 @@ final class GainKnob: NSControl {
         track.setStroke()
         arc(Self.sweepAngle).stroke()
         let f = hasValue ? fraction : 0
-        // while the activity overlay owns the arc (listening/settling)
-        // the drawn value arc steps aside — it would peek out beyond the
-        // gliding cyan stroke; at .locked it returns UNDER the fading
-        // pulse (the crossfade back to green)
+        // while Auto Gain is active the value arc is layer-rendered
+        // (identical green, so it can glide on real gain writes) — the
+        // drawn one steps aside; at .locked it returns UNDER the fading
+        // layer (same geometry, a seamless handback)
         let overlayOwnsArc = autoPhase == .listening || autoPhase == .settling
         if f > 0.002, enabled, !overlayOwnsArc {
             // GREEN is the default for a LIVE, known value; a SAVED
@@ -3509,19 +3521,21 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons[i].isEnabled = preampActive && connected && !learning
                 && autoRunning.isEmpty
             // Auto Gain is an ACTION at rest. While THIS input calibrates
-            // the button becomes its phase readout — "Listening…" then
-            // "Setting gain…" — and the KNOB carries the animation: its
-            // arc turns cyan, breathes softly, and glides between the
-            // engine's real gain updates (the ONE Cancel lives in the
-            // feedback strip below). Success: "✓ Gain set" in green for
-            // a beat while the arc gives one short lock pulse.
+            // the button stops being a button — the fill comes OFF (it
+            // isn't clickable mid-run) and it becomes a status label:
+            // a breathing cyan dot + bright "Listening…" / "Setting
+            // gain…". The KNOB carries the activity: a fine cyan light
+            // scanning the rim while the green gain arc glides between
+            // the engine's real writes. Success: "✓ Gain set" in green
+            // for a beat (the ONE Cancel lives in the feedback strip).
             let done = !mineRunning && autoGainDoneInput == i
             let agTitle: String
             let agColor: NSColor
+            autoGainButtons[i].isBordered = !(mineRunning || done)
             if mineRunning {
                 let settling = AutoGainEngine.shared.phase(for: i) == .verifying
                 agTitle = settling ? "Setting gain…" : "Listening…"
-                agColor = GGTheme.softGray
+                agColor = GGTheme.primary
                 gainKnobs[i].setAutoPhase(settling ? .settling : .listening)
             } else if done {
                 agTitle = "✓ Gain set"
@@ -3536,6 +3550,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons[i].attributedTitle = NSAttributedString(
                 string: agTitle,
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: agColor])
+            syncAutoStatusDot(i, title: mineRunning ? agTitle : nil,
+                              breathing: mineRunning
+                                  && AutoGainEngine.shared.phase(for: i) != .verifying)
 
             let micId = t.hwinMicGain[i], instId = t.hwinInstGain[i]
             gainKnobs[i].isEnabled = preampActive && connected && !learning
@@ -4079,6 +4096,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// The input whose run just SUCCEEDED — its button holds a beat of
     /// green ("✓ Gain set") before returning to normal.
     private var autoGainDoneInput: Int?
+    /// The breathing status dot per Auto Gain button (nil until used) —
+    /// a small cyan CALayer beside the "Listening…" label.
+    private var autoStatusDots: [CALayer?] = Array(repeating: nil, count: 4)
     private var toggles48V: [NSButton] = []
     private var softLimitToggles: [NSButton] = []
     private var polarityToggles: [NSButton] = []
@@ -6098,6 +6118,54 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             inputs[i].micGain = clamped
         }
         refresh()
+    }
+
+    /// The breathing status dot beside the active Auto Gain label — a
+    /// small cyan CALayer placed just left of the centered title text
+    /// (the button is layer-backed on first use so the dot composites
+    /// above it). The dot breathes while the text stays still;
+    /// "Setting gain…" holds it steady; at rest and on "✓ Gain set" it
+    /// is removed (the ✓ reads on its own).
+    private func syncAutoStatusDot(_ i: Int, title: String?, breathing: Bool) {
+        let b = autoGainButtons[i]
+        if autoStatusDots[i] == nil {
+            b.wantsLayer = true
+            autoStatusDots[i] = CALayer()
+        }
+        guard let dot = autoStatusDots[i] else { return }
+        guard let title, let l = b.layer, b.bounds.width > 8 else {
+            if dot.superlayer !== nil { dot.removeFromSuperlayer() }
+            return
+        }
+        // align with the CENTERED title: measure the text, place the dot
+        // a fixed gap left of its start, vertically centered
+        let ts = NSAttributedString(string: title,
+                                    attributes: [.font: NSFont.systemFont(ofSize: 11)]).size()
+        let side: CGFloat = 4.4
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dot.frame = CGRect(x: max(2, (b.bounds.width - ts.width) / 2 - 9),
+                           y: (b.bounds.height - side) / 2,
+                           width: side, height: side)
+        dot.cornerRadius = side / 2
+        dot.backgroundColor = GGTheme.cyan.cgColor
+        if dot.superlayer == nil { l.addSublayer(dot) }
+        dot.removeAllAnimations()
+        dot.isHidden = false
+        if breathing {
+            let breathe = CABasicAnimation(keyPath: "opacity")
+            breathe.fromValue = 1.0
+            breathe.toValue = 0.35
+            breathe.duration = 1.5
+            breathe.autoreverses = true
+            breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            breathe.repeatCount = .infinity
+            breathe.isRemovedOnCompletion = false
+            dot.add(breathe, forKey: "breathe")
+        } else {
+            dot.opacity = 1
+        }
+        CATransaction.commit()
     }
 
     /// Show an Auto Gain line in the status area. `detail` carries the
