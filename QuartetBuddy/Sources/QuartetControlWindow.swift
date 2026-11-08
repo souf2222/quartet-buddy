@@ -3555,9 +3555,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                           && connected && !learning
                           && (directMode || t.hwinPhantom[i] != nil))
             setToggle(softLimitToggles[i], st.softLimit,
-                      enabled: connected && !learning && t.hwinSoftLimit[i] != nil)
+                      enabled: connected && !learning
+                          && (directMode || t.hwinSoftLimit[i] != nil))
             setToggle(polarityToggles[i], st.polarity,
-                      enabled: connected && !learning && t.hwinPolarity[i] != nil)
+                      enabled: connected && !learning
+                          && (directMode || t.hwinPolarity[i] != nil))
         }
 
         // Ganging link toggles — engaged when the pair's hwinN.group bits
@@ -3566,8 +3568,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         for (a, l) in linkToggles.enumerated() {
             let b1 = a * 2, b2 = b1 + 1
             setToggle(l, (inputs[b1].group ?? false) && (inputs[b2].group ?? false),
-                      enabled: connected && !learning
-                          && !inputGroupIds[b1].isEmpty && !inputGroupIds[b2].isEmpty)
+                      enabled: connected && !learning)
         }
 
         // INPUT BANK — Analog 1–4 / Digital 1–8: the segmented
@@ -6069,11 +6070,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             let t = PathIds.active
             let gainId = rl == 4 ? t.hwinInstGain[i] : t.hwinMicGain[i]
             let current = rl == 4 ? inputs[i].instGain : inputs[i].micGain
-            guard let gainId, let current else { continue }
+            // 11.7 direct mode: the gains write straight to 0x34/0x3e —
+            // no captured ids required, the engine routes through
+            // applyAutoGain either way
+            guard isDirectMode?() == true || (gainId != nil && current != nil),
+                  let current else { continue }
             params.append(AutoGainEngine.StartParams(
                 input: i,
-                activeGainId: gainId,
-                refLevelId: t.hwinRefLevel[i],
+                activeGainId: gainId ?? [],
+                refLevelId: t.hwinRefLevel[i] ?? [],
                 currentGain: current))
         }
         guard !params.isEmpty else {
