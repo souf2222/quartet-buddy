@@ -3226,7 +3226,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 }
             }
             DispatchQueue.main.async { [weak self] in
-                self?.applyInputReadBacks(values)
+                let changed = self?.applyInputReadBacks(values) ?? false
+                guard changed else { return }   // the idle sweeps don't repaint
                 self?.suppressActions = true
                 self?.refresh()
                 self?.suppressActions = false
@@ -3236,8 +3237,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// 11.6: apply the device's read-back values to the input states
-    /// (the offline UI's truth = the device itself).
-    private func applyInputReadBacks(_ values: [(Int, UInt8, UInt8)]) {
+    /// (the offline UI's truth = the device itself). Returns true when
+    /// anything actually changed — the caller refreshes only then, so the
+    /// idle sweeps don't repaint the whole window at 10 Hz.
+    @discardableResult
+    private func applyInputReadBacks(_ values: [(Int, UInt8, UInt8)]) -> Bool {
+        var anyChanged = false
         for (i, bReq, v) in values {
             if i >= 100 {
                 // 11.7: the OUTPUT registers (i-100 = the monitor slot 0/1)
@@ -3251,16 +3256,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 switch bReq {
                 case 0x33:
                     let db = -Double(v)
-                    if monitors[o].gain != db { monitors[o].gain = db }
+                    if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true }
                 case 0x35:
                     let m = (v != 0)
-                    if monitors[o].mute != m { monitors[o].mute = m }
+                    if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true }
                 case 0x40:
                     let d = (v != 0)
-                    if monitors[o].dim != d { monitors[o].dim = d }
+                    if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true }
                 case 0x46:
                     let s = (v != 0)
-                    if monitors[o].sum != s { monitors[o].sum = s }
+                    if monitors[o].sum != s { monitors[o].sum = s; anyChanged = true }
                 default: break
                 }
                 continue
@@ -3271,25 +3276,26 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             switch bReq {
             case 0x34:
                 let g = Double(v)
-                if inputs[i].micGain != g { inputs[i].micGain = g }
+                if inputs[i].micGain != g { inputs[i].micGain = g; anyChanged = true }
             case 0x16:
                 let rl = DirectUSBClient.appMode(forDeviceByte: v)
-                if inputs[i].refLevel != rl { inputs[i].refLevel = rl }
+                if inputs[i].refLevel != rl { inputs[i].refLevel = rl; anyChanged = true }
             case 0x15:
                 let p = (v != 0)
-                if inputs[i].phantom != p { inputs[i].phantom = p }
+                if inputs[i].phantom != p { inputs[i].phantom = p; anyChanged = true }
             case 0x11:
                 let s = (v != 0)
-                if inputs[i].softLimit != s { inputs[i].softLimit = s }
+                if inputs[i].softLimit != s { inputs[i].softLimit = s; anyChanged = true }
             case 0x13:
                 let p = (v != 0)
-                if inputs[i].polarity != p { inputs[i].polarity = p }
+                if inputs[i].polarity != p { inputs[i].polarity = p; anyChanged = true }
             case 0x44:
                 let g = (v != 0)
-                if inputs[i].group != g { inputs[i].group = g }
+                if inputs[i].group != g { inputs[i].group = g; anyChanged = true }
             default: break
             }
         }
+        return anyChanged
     }
 
     struct InputState {
