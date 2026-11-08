@@ -906,11 +906,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setTalkback(_ on: Bool) {
         guard on != talkbackOn else { return }
         if directUSB.opened {
-            // the mixer channels 0-11 = the 12 inputs (4 analog + 8 optical)
+            // 11.7 THE FULL PATH: the outputs are routed from the PLAYBACK
+            // pairs — the mic's channel lives in the MIXER, which is not in
+            // a PB-sourced output's path at all (the user's "nothing comes
+            // out"). The helper's real trick = the DESTINATION's routing
+            // switches to a mixer during talkback:
+            //   ON:  the mic's channel unmuted + the HP routed to Mixer 1
+            //        + the mains dimmed
+            //   OFF: the HP's routing restored + the mic muted + the dim off
             let ch = UInt16(max(0, min(11, talkbackSourceInput)))
-            let unmute = directUSB.setMixerMute(channel: ch, mute: !on)   // on = open the mic
-            let dim = directUSB.setOutputFlag(0x40, output: 0, on: on)    // the mains' dim
-            QBLog.log("talkback: \(on ? "on" : "off") — mic channel \(ch + 1) \(on ? "opened" : "muted") (\(unmute ? "ok" : "FAILED")), mains dim \(on ? "on" : "off") (\(dim ? "ok" : "FAILED"))")
+            let hpRestore = UserDefaults.standard.object(forKey: "hwout.route.3") as? Int ?? 3
+            if on {
+                _ = directUSB.setMixerMute(channel: ch, mute: false)        // the mic opens
+                _ = directUSB.setRawByte(0x53, index: 3, byte: 4)           // the HP → Mixer 1
+                _ = directUSB.setOutputFlag(0x40, output: 0, on: true)      // the mains' dim
+                QBLog.log("talkback: on — mic ch \(ch + 1) opened, HP → Mixer 1, mains dimmed")
+            } else {
+                _ = directUSB.setRawByte(0x53, index: 3, byte: UInt8(hpRestore)) // the restore
+                _ = directUSB.setMixerMute(channel: ch, mute: true)         // the mic closes
+                _ = directUSB.setOutputFlag(0x40, output: 0, on: false)     // the dim = off
+                QBLog.log("talkback: off — HP routing restored (\(hpRestore)), mic muted, dim off")
+            }
         } else {
             glue.setBool(id: PathIds.talkbackOn, on)
         }
