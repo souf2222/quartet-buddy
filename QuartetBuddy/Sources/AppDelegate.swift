@@ -562,6 +562,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QuartetControlController.shared.show()
             }
         }
+        if ProcessInfo.processInfo.environment["QB_AUTO_SETTINGS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                QBLog.log("settings: AUTO-OPEN debug trigger")
+                self?.settingsWindow.show()
+            }
+        }
         if ProcessInfo.processInfo.environment["QB_AUTO_ASSIST"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 QBLog.log("control: AUTO-ASSIST debug trigger (ADAT bank + overlay)")

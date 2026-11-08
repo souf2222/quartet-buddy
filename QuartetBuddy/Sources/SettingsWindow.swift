@@ -1240,13 +1240,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// (0-11 inputs, 12/13 = the stereo playback pair), and the FADER is
     /// the gate (the 0x4F byte does not mute — no mute checkbox here).
     /// Route an output to "Mixer 1"/"Mixer 2" (bytes 4/5) to play a mix.
-    private var mixerFaderSliders: [NSSlider] = []     // tag = plane*100+row
-    private var mixerFaderReadouts: [NSTextField] = []
-    private var mixerPanSliders: [NSSlider] = []       // tag = plane*100+row
-    private var mixerPanReadouts: [NSTextField] = []
-    private var mixerMuteChecks: [NSButton] = []
-    private var mixerSoloChecks: [NSButton] = []
+    private var mixerStrips: [MixerStrip] = []
+    private var mixerPlane = 0
     private var mixerSuppress = false
+    private var mixerSegmented: NSSegmentedControl?
+    private var mixerBankScroll: NSScrollView?
+    private var mixerAwayNote: NSTextField?
+    private var mixerOpenButton: NSButton?
+    private var mixerWindow: NSWindow?
+    private var mixerBank: MixerBankView?
+    private var mixerWindowSegmented: NSSegmentedControl?
 
     // MARK: mixer mute/solo (APP-LEVEL — the hardware has no mute register;
     // a muted row's both side slots sit at −48 while the fader/pan stay on
@@ -1270,12 +1273,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// Rewrite every row of one mixer per the mute/solo state: suppressed
-    /// rows = both sides at −48; live rows = their fader/pan sliders.
+    /// rows = both sides at −48; live rows = their fader/pan strips.
     private func applyMixState(_ plane: Int) {
         for (row, def) in Self.mixerRows.enumerated() {
-            let idx = plane * Self.mixerRows.count + row
-            let faderDB = mixerFaderSliders[idx].doubleValue
-            let panByte = Int(mixerPanSliders[idx].doubleValue)
+            guard row < mixerStrips.count else { continue }
+            let strip = mixerStrips[row]
+            let faderDB = strip.faderDB
+            let panByte = strip.panByte
             if mixerRowSuppressed(plane, row) {
                 for ch in def.channels {
                     writeMixerGains?(plane, Int(ch), 0, 0)
@@ -1289,20 +1293,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         }
     }
 
-    @objc private func mixerMuteToggled(_ sender: NSButton) {
+    private func mixerMuteChanged(row: Int, on: Bool) {
         guard !mixerSuppress else { return }
-        let plane = sender.tag / 100
-        let row = sender.tag % 100
-        setMixFlag("mute", plane, row, sender.state == .on)
-        applyMixState(plane)
+        setMixFlag("mute", mixerPlane, row, on)
+        applyMixState(mixerPlane)
     }
 
-    @objc private func mixerSoloToggled(_ sender: NSButton) {
+    private func mixerSoloChanged(row: Int, on: Bool) {
         guard !mixerSuppress else { return }
-        let plane = sender.tag / 100
-        let row = sender.tag % 100
-        setMixFlag("solo", plane, row, sender.state == .on)
-        applyMixState(plane)
+        setMixFlag("solo", mixerPlane, row, on)
+        applyMixState(mixerPlane)
     }
 
     /// The row model: label + the register channels the row drives (the
@@ -1324,88 +1324,204 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     private func buildQuartetMixers(_ stack: NSStackView) {
-        for plane in 0...1 {
-            SettingsSection.add(to: stack, "Mixer \(plane + 1)")
-            for (row, def) in Self.mixerRows.enumerated() {
-                let wrap = NSStackView()
-                wrap.orientation = .horizontal
-                wrap.spacing = 8
-                let label = NSTextField(labelWithString: def.label)
-                label.font = .systemFont(ofSize: 13)
-                label.setContentCompressionResistancePriority(
-                    NSLayoutConstraint.Priority(751), for: .horizontal)
-                label.translatesAutoresizingMaskIntoConstraints = false
-                let fader = MixerFaderSlider(value: 0, minValue: -48, maxValue: 6,
-                                             target: self,
-                                             action: #selector(mixerFaderChanged(_:)))
-                fader.tag = plane * 100 + row
-                fader.translatesAutoresizingMaskIntoConstraints = false
-                let faderReadout = NSTextField(labelWithString: "−48 dB")
-                faderReadout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-                faderReadout.alignment = .right
-                faderReadout.translatesAutoresizingMaskIntoConstraints = false
-                let pan = MixerPanSlider(value: 64, minValue: 0, maxValue: 128,
-                                         target: self,
-                                         action: #selector(mixerPanChanged(_:)))
-                pan.tag = plane * 100 + row
-                pan.translatesAutoresizingMaskIntoConstraints = false
-                let panReadout = NSTextField(labelWithString: "C")
-                panReadout.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-                panReadout.alignment = .center
-                panReadout.translatesAutoresizingMaskIntoConstraints = false
-                let mute = NSButton(checkboxWithTitle: "",
-                                    target: self,
-                                    action: #selector(mixerMuteToggled(_:)))
-                mute.tag = plane * 100 + row
-                mute.toolTip = "Mute the row in this mixer (app-level: the fader is remembered)"
-                mute.font = .systemFont(ofSize: 12)
-                mute.translatesAutoresizingMaskIntoConstraints = false
-                let solo = NSButton(checkboxWithTitle: "",
-                                    target: self,
-                                    action: #selector(mixerSoloToggled(_:)))
-                solo.tag = plane * 100 + row
-                solo.toolTip = "Solo the row in this mixer (the others duck to −48 dB)"
-                solo.font = .systemFont(ofSize: 12)
-                solo.translatesAutoresizingMaskIntoConstraints = false
-                wrap.addArrangedSubview(label)
-                wrap.addArrangedSubview(fader)
-                wrap.addArrangedSubview(faderReadout)
-                wrap.addArrangedSubview(pan)
-                wrap.addArrangedSubview(panReadout)
-                wrap.addArrangedSubview(mute)
-                wrap.addArrangedSubview(solo)
-                stack.addArrangedSubview(wrap)
-                NSLayoutConstraint.activate([
-                    label.widthAnchor.constraint(equalToConstant: 84),
-                    fader.widthAnchor.constraint(equalToConstant: 150),
-                    faderReadout.widthAnchor.constraint(equalToConstant: 52),
-                    pan.widthAnchor.constraint(equalToConstant: 90),
-                    panReadout.widthAnchor.constraint(equalToConstant: 44),
-                    mute.widthAnchor.constraint(equalToConstant: 24),
-                    solo.widthAnchor.constraint(equalToConstant: 24),
-                ])
-                mixerFaderSliders.append(fader)
-                mixerFaderReadouts.append(faderReadout)
-                mixerPanSliders.append(pan)
-                mixerPanReadouts.append(panReadout)
-                mixerMuteChecks.append(mute)
-                mixerSoloChecks.append(solo)
-            }
+        SettingsSection.add(to: stack, "Hardware Mixers")
+        // the header: the mixer selector + the info + the window button
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.spacing = 8
+        header.alignment = .centerY
+        header.translatesAutoresizingMaskIntoConstraints = false
+        let seg = NSSegmentedControl(labels: ["Mixer 1", "Mixer 2"],
+                                     trackingMode: .selectOne, target: self,
+                                     action: #selector(mixerPlaneChanged(_:)))
+        seg.selectedSegment = 0
+        mixerSegmented = seg
+        header.addArrangedSubview(seg)
+        let info = NSButton(title: "ⓘ", target: self,
+                            action: #selector(mixerInfoClicked(_:)))
+        info.bezelStyle = .circular
+        info.font = .systemFont(ofSize: 11)
+        info.translatesAutoresizingMaskIntoConstraints = false
+        info.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        info.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        header.addArrangedSubview(info)
+        let open = NSButton(title: "Open Mixer Window", target: self,
+                            action: #selector(mixerWindowClicked(_:)))
+        mixerOpenButton = open
+        header.addArrangedSubview(open)
+        stack.addArrangedSubview(header)
+
+        // the bank in a horizontal scroll (the strips never shrink)
+        let bank = MixerBankView(rowTitles: Self.mixerRows.map { $0.label })
+        mixerBank = bank
+        mixerStrips = bank.strips
+        for (row, _) in Self.mixerRows.enumerated() {
+            let strip = bank.strips[row]
+            strip.fader.onValue = { [weak self] db in self?.mixerFaderChanged(row: row, db: db) }
+            strip.pan.onValue = { [weak self] byte in self?.mixerPanChanged(row: row, byte: byte) }
+            strip.muteButton.onToggle = { [weak self] on in self?.mixerMuteChanged(row: row, on: on) }
+            strip.soloButton.onToggle = { [weak self] on in self?.mixerSoloChanged(row: row, on: on) }
         }
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.documentView = bank
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        // the width = the PANE's body, not this sub-stack (the sub-stack
+        // hugs its subviews — pinning to it is a mutually-exclusive cycle
+        // that crashed the settings build). The pin must run AFTER the
+        // caller adds this stack to the body — hence the deferred tick.
+        DispatchQueue.main.async { [weak self, weak stack, weak scroll] in
+            guard let self, let stack, let scroll, let body = stack.superview else { return }
+            stack.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            scroll.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        }
+        scroll.heightAnchor.constraint(equalToConstant: MixerBankView.height + 4).isActive = true
+        mixerBankScroll = scroll
+        stack.addArrangedSubview(scroll)
+        stack.addArrangedSubview(gap(2))
+
+        // the one visible hint; the long note lives behind the info button
         stack.addArrangedSubview(SettingsHelpText.label(
-            "The Quartet's two hardware mixers, as in Apogee Control 2: each\n" +
-            "mixes all inputs + the stereo playback bus; route any output to\n" +
-            "“Mixer 1”/“Mixer 2” in the routing popups above to play that\n" +
-            "mix. VERIFIED 11/8: the input gains live in the unit's mixer\n" +
-            "blocks — ONE PER STEREO SIDE — and the Pan slider is the L/R\n" +
-            "balance of those gains. The factory ships every input fader at\n" +
-            "−48 dB (silent) — raise the rows you want in the mix. The\n" +
-            "Playback row drives the stereo bus cells. M/S = mute and solo\n" +
-            "(app-level: the hardware has no mute register — a muted row's\n" +
-            "gains sit at −48 while the fader/pan remember the level; the\n" +
-            "flags survive relaunches). ⌘+click a fader = 0 dB and a pan =\n" +
-            "centered. Direct mode only (no Apogee daemon)."))
+            "Select an output's source as Mixer 1 or Mixer 2 (Output Levels ▸\n" +
+            "Hardware output routing) to hear that mix."))
+
+        // the placeholder while the strips live in the mixer window
+        let away = NSTextField(labelWithString:
+            "The mixer is open in its own window — close it to return the strips here.")
+        away.font = .systemFont(ofSize: 12)
+        away.textColor = .secondaryLabelColor
+        away.isHidden = true
+        mixerAwayNote = away
+        stack.addArrangedSubview(away)
     }
+
+    @objc private func mixerPlaneChanged(_ sender: NSSegmentedControl) {
+        setMixerPlane(sender.selectedSegment)
+    }
+
+    /// The implementation notes behind the info button.
+    @objc private func mixerInfoClicked(_ sender: NSButton) {
+        let pop = NSPopover()
+        pop.behavior = .transient
+        let vc = NSViewController()
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 240))
+        text.isEditable = false
+        text.drawsBackground = false
+        text.textContainerInset = NSSize(width: 12, height: 12)
+        text.string = Self.mixerTechNote
+        text.font = .systemFont(ofSize: 11)
+        text.textColor = .labelColor
+        let sv = NSScrollView()
+        sv.documentView = text
+        sv.hasVerticalScroller = true
+        sv.frame = NSRect(x: 0, y: 0, width: 380, height: 240)
+        vc.view = sv
+        pop.contentViewController = vc
+        pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+
+    private static let mixerTechNote = """
+        Each mixer mixes all inputs + the stereo playback bus. Route an output
+        pair's source to “Mixer 1”/“Mixer 2” (Output Levels ▸ Hardware output
+        routing) to hear that mix.
+
+        Verified on the registers (11/8): the channel gains live in the unit's
+        mixer blocks — one per stereo side (Mixer 1 = blocks 0/1, Mixer 2 =
+        blocks 2/3); slots 0-11 = the inputs, the stereo playback spans the
+        side blocks. Fader range −48…+6 dB. The factory ships Mixer 1's
+        inputs at −48 dB and Mixer 2's at −26 dB — which is why Mixer 2's
+        inputs “were always on”. Pan = the L/R gain balance. The hardware has
+        no mute/solo register: M and S are applied by the app (a muted row's
+        gains sit at −48 dB while the fader/pan remember the level; the flags
+        survive relaunches).
+
+        Gestures: drag a fader or a pan; ⌘+click = reset to 0 dB / center;
+        the scroll wheel nudges. Direct mode only (no Apogee daemon).
+        """
+
+    /// The shared mixer selection: both segmented controls (Settings + the
+    /// window) and the window's title reflect it; switching edits which mix
+    /// is shown — never the routing.
+    private func setMixerPlane(_ plane: Int) {
+        mixerPlane = plane
+        mixerSegmented?.selectedSegment = plane
+        mixerWindowSegmented?.selectedSegment = plane
+        mixerWindow?.title = "Hardware Mixers — Mixer \(plane + 1)"
+        refreshMixers()
+    }
+
+
+    /// The resizable mixer window: the SAME bank view re-parented here (one
+    /// live instance, no state to sync), with its own header carrying the
+    /// shared Mixer 1 / Mixer 2 selector and the info button.
+    @objc private func mixerWindowClicked(_ sender: NSButton) {
+        guard let scroll = mixerBankScroll, let bank = mixerBank else { return }
+        if mixerWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 320),
+                             styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                             backing: .buffered, defer: false)
+            w.isReleasedWhenClosed = false
+            w.minSize = NSSize(width: 560, height: 300)
+            w.delegate = self
+            mixerWindow = w
+
+            // the window's header: the shared selector + the info button
+            let header = NSStackView()
+            header.orientation = .horizontal
+            header.spacing = 8
+            header.alignment = .centerY
+            header.translatesAutoresizingMaskIntoConstraints = false
+            let seg = NSSegmentedControl(labels: ["Mixer 1", "Mixer 2"],
+                                         trackingMode: .selectOne, target: self,
+                                         action: #selector(mixerPlaneChanged(_:)))
+            seg.selectedSegment = mixerPlane
+            mixerWindowSegmented = seg
+            header.addArrangedSubview(seg)
+            let info = NSButton(title: "ⓘ", target: self,
+                                action: #selector(mixerInfoClicked(_:)))
+            info.bezelStyle = .circular
+            info.font = .systemFont(ofSize: 11)
+            header.addArrangedSubview(info)
+            let content = NSView()
+            content.addSubview(header)
+            let sv = NSScrollView()
+            sv.hasVerticalScroller = false
+            sv.hasHorizontalScroller = true
+            sv.autohidesScrollers = true
+            sv.drawsBackground = false
+            sv.documentView = bank
+            sv.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(sv)
+            NSLayoutConstraint.activate([
+                header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
+                header.topAnchor.constraint(equalTo: content.topAnchor, constant: 6),
+                sv.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                sv.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                sv.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+                sv.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+            w.contentView = content
+        }
+        guard let w = mixerWindow else { return }
+        if bank.window !== w {
+            // re-parent: the settings' scroll loses the bank, the window's
+            // scroll gains it (the documentView setter moves the view)
+            if let content = w.contentView,
+               let sv = content.subviews.first(where: { $0 is NSScrollView }) as? NSScrollView {
+                sv.documentView = bank
+            }
+            scroll.isHidden = true
+            mixerAwayNote?.isHidden = false
+            mixerOpenButton?.title = "Show Mixer Window"
+        }
+        setMixerPlane(mixerPlane)   // the selector + the title + a refresh
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
 
     /// The row's gains from its fader + pan: PAN = the L/R balance —
     /// the pan byte 0…128 (64 = center) attenuates the opposite side in
@@ -1419,102 +1535,57 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         return (l, r)
     }
 
-    @objc private func mixerFaderChanged(_ sender: NSSlider) {
+    private func mixerFaderChanged(row: Int, db: Double) {
         guard !mixerSuppress else { return }
-        let plane = sender.tag / 100
-        let row = sender.tag % 100
-        let db = sender.doubleValue.rounded()
-        sender.doubleValue = db
-        let idx = plane * Self.mixerRows.count + row
-        mixerFaderReadouts[idx].stringValue = Self.mixerFaderFormat(Int(db))
+        let plane = mixerPlane
         // a suppressed row's gains stay at −48 — the fader move just
         // updates the remembered level, applied on unmute/unsolo
         guard !mixerRowSuppressed(plane, row) else { return }
-        let panByte = Int(mixerPanSliders[idx].doubleValue)
+        let panByte = mixerStrips[row].panByte
         let gains = Self.mixerGains(faderDB: db, panByte: panByte)
         for ch in Self.mixerRows[row].channels {
             writeMixerGains?(plane, Int(ch), gains.l, gains.r)
         }
     }
 
-    @objc private func mixerPanChanged(_ sender: NSSlider) {
+    private func mixerPanChanged(row: Int, byte: Int) {
         guard !mixerSuppress else { return }
-        let plane = sender.tag / 100
-        let row = sender.tag % 100
-        let byte = Int(sender.doubleValue.rounded())
-        sender.doubleValue = Double(byte)
-        let idx = plane * Self.mixerRows.count + row
-        mixerPanReadouts[idx].stringValue = Self.mixerPanFormat(byte)
+        let plane = mixerPlane
         guard !mixerRowSuppressed(plane, row) else { return }
-        let db = mixerFaderSliders[idx].doubleValue
+        let db = mixerStrips[row].faderDB
         let gains = Self.mixerGains(faderDB: db, panByte: byte)
         for ch in Self.mixerRows[row].channels {
             writeMixerGains?(plane, Int(ch), gains.l, gains.r)
         }
     }
 
-    /// Copy the live read-backs into the rows; no device → everything
+    /// Copy the live read-backs into the strips; no device → everything
     /// disabled. Suppressed (muted/soloed-out) rows read −48 from the
-    /// hardware — the sliders keep the user's positions instead, with
-    /// the M/S checkboxes showing the state. The fader displays the
-    /// louder side; the pan derives from the L/R difference.
+    /// hardware — the strips keep the user's positions instead, with the
+    /// M/S buttons showing the state. The fader displays the louder side;
+    /// the pan derives from the L/R difference.
     private func refreshMixers() {
-        guard !mixerFaderSliders.isEmpty else { return }
+        guard !mixerStrips.isEmpty else { return }
         mixerSuppress = true
         defer { mixerSuppress = false }
-        for plane in 0...1 {
-            let cells = readMixer?(plane)
-            for (row, def) in Self.mixerRows.enumerated() {
-                let idx = plane * Self.mixerRows.count + row
-                let lead = Int(def.channels[0])
-                mixerMuteChecks[idx].state = mixFlag("mute", plane, row) ? .on : .off
-                mixerSoloChecks[idx].state = mixFlag("solo", plane, row) ? .on : .off
-                let suppressed = mixerRowSuppressed(plane, row)
-                guard let r = cells?.first(where: { $0.ch == lead }), r.present else {
-                    mixerFaderSliders[idx].isEnabled = false
-                    mixerPanSliders[idx].isEnabled = false
-                    mixerMuteChecks[idx].isEnabled = false
-                    mixerSoloChecks[idx].isEnabled = false
-                    continue
-                }
-                mixerFaderSliders[idx].isEnabled = true
-                mixerPanSliders[idx].isEnabled = true
-                mixerMuteChecks[idx].isEnabled = true
-                mixerSoloChecks[idx].isEnabled = true
-                if suppressed { continue }   // keep the remembered positions
-                let l = min(54, max(0, r.lFader))
-                let rr = min(54, max(0, r.rFader))
-                let faderDB = Double(max(l, rr) - 48)
-                let panByte = max(0, min(128, 64 + (rr - l)))
-                mixerFaderSliders[idx].doubleValue = faderDB
-                mixerFaderReadouts[idx].stringValue = Self.mixerFaderFormat(Int(faderDB.rounded()))
-                mixerPanSliders[idx].doubleValue = Double(panByte)
-                mixerPanReadouts[idx].stringValue = Self.mixerPanFormat(panByte)
+        let plane = mixerPlane
+        let cells = readMixer?(plane)
+        for (row, def) in Self.mixerRows.enumerated() {
+            let strip = mixerStrips[row]
+            strip.setMute(mixFlag("mute", plane, row))
+            strip.setSolo(mixFlag("solo", plane, row))
+            let suppressed = mixerRowSuppressed(plane, row)
+            guard let r = cells?.first(where: { $0.ch == Int(def.channels[0]) }),
+                  r.present else {
+                strip.faderEnabled = false
+                continue
             }
-        }
-    }
-
-    /// Faders that ⌘+click snap to 0 dB (unity) — the reset gesture.
-    final class MixerFaderSlider: NSSlider {
-        override func mouseDown(with event: NSEvent) {
-            if event.modifierFlags.contains(.command) {
-                doubleValue = 0
-                if let target, let action { NSApp.sendAction(action, to: target, from: self) }
-                return
-            }
-            super.mouseDown(with: event)
-        }
-    }
-
-    /// Pans that ⌘+click snap to center.
-    final class MixerPanSlider: NSSlider {
-        override func mouseDown(with event: NSEvent) {
-            if event.modifierFlags.contains(.command) {
-                doubleValue = 64
-                if let target, let action { NSApp.sendAction(action, to: target, from: self) }
-                return
-            }
-            super.mouseDown(with: event)
+            strip.faderEnabled = true
+            guard !suppressed else { continue }   // keep the remembered positions
+            let l = min(54, max(0, r.lFader))
+            let rr = min(54, max(0, r.rFader))
+            strip.setFader(Double(max(l, rr) - 48))
+            strip.setPan(max(0, min(128, 64 + (rr - l))))
         }
     }
 
@@ -2330,6 +2401,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     func windowWillClose(_ notification: Notification) {
-        // nothing persisted here — everything saves immediately on change
+        // the mixer window closed → the strips return to the Settings page
+        if let w = mixerWindow, notification.object as? NSWindow === w,
+           let bank = mixerBank, bank.window === w {
+            if let scroll = mixerBankScroll {
+                scroll.documentView = bank
+                scroll.isHidden = false
+            }
+            mixerAwayNote?.isHidden = true
+            mixerOpenButton?.title = "Open Mixer Window"
+        }
     }
 }

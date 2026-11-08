@@ -75,6 +75,7 @@ swiftc -O \
     "$SRC/QuickControlPanel.swift" \
     "$SRC/SettingsUI.swift" \
     "$SRC/SettingsWindow.swift" \
+    "$SRC/MixerUI.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \
     -o "$BUNDLE/Contents/MacOS/$APPNAME"
