@@ -828,14 +828,9 @@ final class GainKnob: NSControl {
     override var doubleValue: Double {
         get { _value }
         set {
-            let nv = (min(max(newValue, minValue), maxValue)).rounded()
-            guard nv != _value else { return }
-            _value = nv
+            _value = (min(max(newValue, minValue), maxValue)).rounded()
             needsDisplay = true
             updateAccessibility()
-            // during Auto Gain the arc GLIDES to the new position (Core
-            // Animation, ease-in-out); at rest the knob just redraws
-            glideArcToCurrent()
         }
     }
 
@@ -868,9 +863,6 @@ final class GainKnob: NSControl {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         focusRingType = .exterior   // thin accent outline, keyboard focus only
-        // layer-backed so the Auto Gain activity layer (the blue wash on
-        // the center disk) can composite above the drawn dial
-        wantsLayer = true
         valueField.isHidden = true
         valueField.isBordered = false
         valueField.drawsBackground = false
@@ -896,10 +888,6 @@ final class GainKnob: NSControl {
         if let fieldWidth {
             fieldWidth.constant = min(44, max(24, bounds.width - 4))
         }
-        // keep the activity overlay's path on the (scaled) track radius
-        if autoPhase == .listening || autoPhase == .settling {
-            showAutoOverlay()
-        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
@@ -910,188 +898,6 @@ final class GainKnob: NSControl {
 
     @discardableResult
     private func send() -> Bool { sendAction(action, to: target) }
-
-    // MARK: - the Auto Gain activity — the center disk breathes blue
-    //
-    // The dial KEEPS its idle geometry while Auto Gain calibrates: the
-    // green value arc is the drawn one at all times (real gain writes
-    // glide it through a short display interpolation) and represents
-    // ONLY the gain. There is NO outer accent ring — the activity lives
-    // IN the center disk: a soft blue wash over the number's circle
-    // that gently breathes in opacity while listening, briefly
-    // brightens when the gain locks, then fades away. Nothing is added
-    // to the dial's silhouette; the ring, the track and the number all
-    // keep their exact idle shapes.
-
-    enum AutoPhase: Equatable {
-        /// The normal dial.
-        case idle
-        /// Calibrating — tracking the input's level.
-        case listening
-        /// The final settle — verify + the last correction.
-        case settling
-        /// Success — one soft brighten, then the wash fades away.
-        case locked
-    }
-
-    private(set) var autoPhase: AutoPhase = .idle
-
-    /// The blue wash over the center disk — an oval layer exactly on
-    /// the disk's bounds, breathing in opacity.
-    private let diskWash = CAShapeLayer()
-    private var autoLayersInstalled = false
-    /// The bounds the wash was last built for (a resize rebuilds it).
-    private var accentBuiltForSize: CGSize = .zero
-
-    /// The glide between two real gain updates, in seconds (the engine
-    /// nudges about once a second, so each glide completes in time).
-    private static let glideSeconds: Double = 0.4
-    /// The cancel-fade of the wash, in seconds.
-    private static let fadeSeconds: CFTimeInterval = 0.45
-    /// One breath cycle (out + in), in seconds — slow on purpose.
-    private static let breathSeconds: CFTimeInterval = 1.9
-    /// The lock beat — brighten, release, gone — in seconds.
-    private static let lockSeconds: CFTimeInterval = 1.0
-
-    // the glide (draw()-level, no layers): an interpolated fraction the
-    // arc renders while catching up to a real gain write
-    private var glideFraction: CGFloat?     // nil = render the real fraction
-    private var glideFrom: CGFloat = 0
-    private var glideTarget: CGFloat = 0
-    private var glideStart = Date()
-    private var glideTimer: Timer?
-
-    /// The window's refresh syncs the phase each pass; transitions drive
-    /// the layer, same-phase calls are free.
-    func setAutoPhase(_ p: AutoPhase) {
-        guard p != autoPhase else { return }
-        let wasActive = autoPhase == .listening || autoPhase == .settling
-        autoPhase = p
-        switch p {
-        case .listening, .settling:
-            showAutoOverlay()
-        case .locked:
-            if wasActive { lockWash() } else { hideAutoOverlayNow() }
-        case .idle:
-            // a cancel/fail while active: the quiet fade
-            if wasActive { fadeAutoOverlay() } else { hideAutoOverlayNow() }
-        }
-        needsDisplay = true
-    }
-
-    private func installAutoLayer() {
-        guard !autoLayersInstalled, let l = layer else { return }
-        autoLayersInstalled = true
-        l.addSublayer(diskWash)
-    }
-
-    private func showAutoOverlay() {
-        installAutoLayer()   // retries while the view has no layer yet
-        guard bounds.width > 8 else { return }
-        // already breathing at this size (a listening↔settling switch or
-        // a routine refresh): leave the running breath alone
-        guard diskWash.isHidden
-                  || accentBuiltForSize != bounds.size
-                  || diskWash.animation(forKey: "breathe") == nil
-        else { return }
-        accentBuiltForSize = bounds.size
-        let d = diskRadius
-        diskWash.path = CGPath(ellipseIn: CGRect(x: bounds.midX - d, y: bounds.midY - d,
-                                                 width: d * 2, height: d * 2),
-                               transform: nil)
-        diskWash.fillColor = GGTheme.cyan.cgColor
-        diskWash.strokeColor = nil
-        diskWash.removeAllAnimations()
-        diskWash.isHidden = false
-
-        // THE BREATH — opacity only, slow and shallow: the blue wash
-        // over the disk swells and settles as one. The number beneath
-        // stays crisp; the wash reads as the disk itself coming alive.
-        let breathe = CABasicAnimation(keyPath: "opacity")
-        breathe.fromValue = 0.22
-        breathe.toValue = 0.06
-        breathe.duration = Self.breathSeconds
-        breathe.autoreverses = true
-        breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        breathe.repeatCount = .infinity
-        breathe.isRemovedOnCompletion = false
-        diskWash.opacity = 0.22
-        diskWash.add(breathe, forKey: "breathe")
-    }
-
-    /// The gain arc GLIDES between actual gain updates — a tiny display
-    /// interpolation of the DRAWN arc (the idle geometry, unchanged —
-    /// no layers over the track). Runs from wherever the arc currently
-    /// is, so a glide still in flight simply continues; the number
-    /// jumps crisp to the new value immediately.
-    private func glideArcToCurrent() {
-        guard autoPhase == .listening || autoPhase == .settling else { return }
-        glideFrom = glideFraction ?? CGFloat(fraction)
-        glideTarget = CGFloat(fraction)
-        glideStart = Date()
-        guard glideTimer == nil else { return }
-        glideTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0,
-                                          repeats: true) { [weak self] _ in
-            self?.glideTick()
-        }
-    }
-
-    private func glideTick() {
-        let t = min(1, Date().timeIntervalSince(glideStart) / Self.glideSeconds)
-        let e = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2   // ease-in-out
-        let f = glideFrom + (glideTarget - glideFrom) * CGFloat(e)
-        if t >= 1 {
-            glideTimer?.invalidate()
-            glideTimer = nil
-            glideFraction = nil          // the real fraction IS the target
-        } else {
-            glideFraction = f
-        }
-        needsDisplay = true
-    }
-
-    /// THE LOCK — the wash's clear ending: one soft brighten (the
-    /// breath's last swell), then it releases and fades away, leaving
-    /// the dial exactly as it was — the green arc at the final gain.
-    private func lockWash() {
-        diskWash.removeAnimation(forKey: "breathe")
-        let kf = CAKeyframeAnimation(keyPath: "opacity")
-        kf.values = [diskWash.presentation()?.opacity ?? 0.15, 0.5, 0.0]
-        kf.keyTimes = [0, 0.28, 1]
-        kf.duration = Self.lockSeconds
-        kf.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        kf.fillMode = .forwards
-        kf.isRemovedOnCompletion = false
-        diskWash.add(kf, forKey: "lock")
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.lockSeconds) {
-            [weak self] in
-            guard let self,
-                  self.autoPhase == .locked || self.autoPhase == .idle
-            else { return }   // re-engaged — keep the wash
-            self.hideAutoOverlayNow()
-        }
-    }
-
-    /// A cancel/fail while active: stop the breath, fade quietly.
-    private func fadeAutoOverlay() {
-        diskWash.removeAnimation(forKey: "breathe")
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Self.fadeSeconds)
-        diskWash.opacity = 0
-        CATransaction.setCompletionBlock { [weak self] in
-            guard let self,
-                  self.autoPhase == .idle || self.autoPhase == .locked
-            else { return }   // re-engaged mid-fade — keep the wash
-            self.hideAutoOverlayNow()
-        }
-        CATransaction.commit()
-    }
-
-    private func hideAutoOverlayNow() {
-        diskWash.removeAllAnimations()
-        diskWash.opacity = 1
-        diskWash.isHidden = true
-    }
 
     // MARK: geometry — the layered dial scales with bounds
     /// The track's radius — the CENTER line of the thick stroke,
@@ -1117,10 +923,7 @@ final class GainKnob: NSControl {
 
     // MARK: drawing — four flat layers, depth by contrast (no shading)
     override func draw(_ dirtyRect: NSRect) {
-        // While Auto Gain calibrates this input the knob is disabled (no
-        // dragging mid-run) but must read ALIVE, not grayed — the active
-        // phases keep the enabled look; the overlay owns the arc.
-        let enabled = isEnabled || autoPhase != .idle
+        let enabled = isEnabled
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
 
         // LAYER 1 — the CENTER DISK: a solid flat circle a clear step
@@ -1150,7 +953,7 @@ final class GainKnob: NSControl {
             : NSColor(white: 1, alpha: 0.09)
         track.setStroke()
         arc(Self.sweepAngle).stroke()
-        let f = hasValue ? (glideFraction ?? CGFloat(fraction)) : 0
+        let f = hasValue ? fraction : 0
         if f > 0.002, enabled {
             // GREEN is the default for a LIVE, known value; a SAVED
             // setting rides a neutral arc — unless the control's own
@@ -3497,12 +3300,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainButtons[i].isEnabled = preampActive && connected && !learning
             // Auto Gain is an ACTION at rest. While THIS input calibrates
             // the button stops being a button — the fill comes OFF (it
-            // isn't clickable mid-run) and it becomes a status label:
-            // a static cyan dot + bright "Listening…" / "Setting gain…".
-            // The KNOB carries ALL the animation: a thin cyan ring
-            // breathing outside the track while the green gain arc moves
-            // only on the engine's real writes. Success: "✓ Gain set" in
-            // green for a beat (the ONE Cancel lives in the feedback
+            // isn't clickable mid-run) and it becomes a STATIC status
+            // label: a cyan dot + bright "Listening…" / "Setting gain…".
+            // The knob stays a normal dial — no animation (the user's
+            // call, after three animated rounds). Success: "✓ Gain set"
+            // in green for a beat (the ONE Cancel lives in the feedback
             // strip).
             let done = !mineRunning && autoGainDoneInput == i
             let agTitle: String
@@ -3512,15 +3314,12 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 let settling = AutoGainEngine.shared.phase(for: i) == .verifying
                 agTitle = settling ? "Setting gain…" : "Listening…"
                 agColor = GGTheme.primary
-                gainKnobs[i].setAutoPhase(settling ? .settling : .listening)
             } else if done {
                 agTitle = "✓ Gain set"
                 agColor = GGTheme.green
-                gainKnobs[i].setAutoPhase(.locked)
             } else {
                 agTitle = "Auto Gain"
                 agColor = GGTheme.softGray
-                gainKnobs[i].setAutoPhase(.idle)
             }
             autoGainButtons[i].bezelColor = nil
             autoGainButtons[i].attributedTitle = NSAttributedString(
