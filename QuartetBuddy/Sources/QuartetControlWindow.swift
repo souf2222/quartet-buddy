@@ -3242,26 +3242,51 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             if i >= 100 {
                 // 11.7: the OUTPUT registers (i-100 = the monitor slot 0/1)
                 let o = i - 100
-                if o < monitors.count {
-                    switch bReq {
-                    case 0x33: monitors[o].gain = -Double(v)     // |dB|, the faders ≤ 0
-                    case 0x35: monitors[o].mute = (v != 0)
-                    case 0x40: monitors[o].dim = (v != 0)        // sweep-verified
-                    case 0x46: monitors[o].sum = (v != 0)        // sweep-verified
-                    default: break
-                    }
+                guard o < monitors.count else { continue }
+                // THE CHANGE-ONLY GUARD: apply only when the value DIFFERS
+                // from the app's known state (a hardware change). The stale
+                // sweep values (read 0.3 s ago, before the user's keys/drag)
+                // must never echo back — they were reverting the OS volume
+                // binding's changes mid-flight.
+                switch bReq {
+                case 0x33:
+                    let db = -Double(v)
+                    if monitors[o].gain != db { monitors[o].gain = db }
+                case 0x35:
+                    let m = (v != 0)
+                    if monitors[o].mute != m { monitors[o].mute = m }
+                case 0x40:
+                    let d = (v != 0)
+                    if monitors[o].dim != d { monitors[o].dim = d }
+                case 0x46:
+                    let s = (v != 0)
+                    if monitors[o].sum != s { monitors[o].sum = s }
+                default: break
                 }
                 continue
             }
             guard i < inputs.count else { continue }
             inputs[i].name = inputs[i].name ?? "Analog In \(i + 1)"
+            // the change-only guard (the same echo-protection)
             switch bReq {
-            case 0x34: inputs[i].micGain = Double(v)             // |dB| (0…75, live-verified)
-            case 0x16: inputs[i].refLevel = DirectUSBClient.appMode(forDeviceByte: v)
-            case 0x15: inputs[i].phantom = (v != 0)              // +48V (touchscreen-verified)
-            case 0x11: inputs[i].softLimit = (v != 0)            // softLimit (sweep-verified)
-            case 0x13: inputs[i].polarity = (v != 0)             // polarity Ø (sweep-verified)
-            case 0x44: inputs[i].group = (v != 0)                // the ganging bit
+            case 0x34:
+                let g = Double(v)
+                if inputs[i].micGain != g { inputs[i].micGain = g }
+            case 0x16:
+                let rl = DirectUSBClient.appMode(forDeviceByte: v)
+                if inputs[i].refLevel != rl { inputs[i].refLevel = rl }
+            case 0x15:
+                let p = (v != 0)
+                if inputs[i].phantom != p { inputs[i].phantom = p }
+            case 0x11:
+                let s = (v != 0)
+                if inputs[i].softLimit != s { inputs[i].softLimit = s }
+            case 0x13:
+                let p = (v != 0)
+                if inputs[i].polarity != p { inputs[i].polarity = p }
+            case 0x44:
+                let g = (v != 0)
+                if inputs[i].group != g { inputs[i].group = g }
             default: break
             }
         }

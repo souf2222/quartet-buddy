@@ -208,35 +208,14 @@ final class OSVolumeMirror {
     /// own echo — never a real F10 press, which can't get through the
     /// main-queue backlog ahead of them.
     func syncMuteAfterSwitch(to m: Bool) {
-        guard let dev = device() else {
-            noteTargetSwitch()
-            return
-        }
-        // Already matching (or unreadable): nothing to write, nothing to
-        // absorb — arming a latch here would eat the user's next real F10.
-        guard let current = Self.readMute(from: dev) else { return noteTargetSwitch() }
-        guard current != m else {
-            lastMute = m
-            return
-        }
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute,
-                                               mScope: kAudioDevicePropertyScopeOutput,
-                                               mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectHasProperty(dev, &addr) else { return noteTargetSwitch() }
-        // Absorb everything until the flag settles on the requested state.
-        absorbUntilMute = m
-        var v: UInt32 = m ? 1 : 0
-        let err = AudioObjectSetPropertyData(dev, &addr, 0, nil,
-                                             UInt32(MemoryLayout<UInt32>.size), &v)
-        if err == noErr {
-            lastMute = m
-            QBLog.log("mute sync: OS mute -> \(m ? "on" : "off") after target switch")
-        } else {
-            // Oct 18 wedge signature ('what!', 'who!') — say it loudly.
-            QBLog.log(String(format: "mute sync: OS mute write FAILED (HAL %d) — %#04x — falling back to absorb-only", err, err))
-            absorbUntilMute = nil
-            absorbNextMuteChange = true
-        }
+        // 11.7: THE OS MUTE WRITE IS GONE. It was cosmetic (syncing the
+        // macOS mute flag to the newly selected output) but it WEDGED the
+        // Apogee driver — the user's live incident: after a target switch
+        // the OS volume control died entirely (the keys, the Control
+        // Center slider, everything — until a USB power cycle). The
+        // cosmetic sync is not worth the wedge. Absorb-only: the mute
+        // notifications are absorbed until the user's next real F10.
+        noteTargetSwitch()
     }
 
     private func muteChanged() {
