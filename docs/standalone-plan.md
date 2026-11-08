@@ -581,9 +581,14 @@ was quit ⇒ its insert engine wasn't feeding ch1-2 ⇒ PB1-2 silent) while
 the PB7-8 anchor = music ✓. The earlier 01/02/03 readings = the write-queue
 lag (each write belongs to the NEXT set). The pad test also proved the
 firmware MIRRORS the 0x49 slot 0 ↔ slot 3 on writes (write wI=0 changes
-both) — harmless for the 3 real pads. The mixer-source byte values
-(presumably 04/05) = pending the user's semantics list; the mixer-source
-TREE codes remain unknown (0x11-0x1A families all translate to one byte).
+both) — harmless for the 3 real pads. The mixer-source byte verdict (the
+11/8 ear tests): **0x04 = Mixer 1, 0x05 = Mixer 2** — Apogee's original
+6-source list. Byte 4 read "silent" once = the mic's channels were closed
+in Mixer 1 then (the mic feeds several Digital channels — 5-7 — per the
+sealed-fader tests). **The FADER gates a mixer channel; the 0x4F byte
+does NOT mute** (the early "sealed" tests used 0x4F and the mic passed).
+The mixer-source TREE codes remain unknown (0x11-0x1A families all
+translate to 05).
 The mixer-differentiation trick failed: the daemon REJECTS master-volume
 writes beyond −48 dB (the −60 test produced no USB write at all).
 
@@ -637,7 +642,17 @@ wValue=0, wIndex=selector, 1 byte, unless noted.
 * `0x46` sum-to-mono flag (0/1)  ← NOT 0x4E as guessed
 * `0x45` mainOutputFormat bit; `0x47` activeSpeakerSet bit
 
-**MIXER (wIndex = channel 0…12, 14 = MASTER):**
+**MIXER (VERIFIED 11/8 — the mixer channels live in the 0x10 BLOCKS, ONE
+BLOCK PER STEREO SIDE, 14 slots of (gain, marker)): Mixer 1 = blocks 0 (L)
++ 1 (R), Mixer 2 = 2 (L) + 3 (R). Slots 0-11 = the inputs; SLOT 12 = THE
+PLAYBACK (the tree's playback.mixerChannel = 12) spanning the side
+blocks: L block s12 = playback L, R block s13 = playback R (factory
+0x20 = −16 dB). Gain = clamp(dB+48, 0…54); factory Mixer 1 inputs = 0x00
+(all −48), Mixer 2 = 0x16 (−26 dB). PAN = the L/R gain difference
+(verified: writing only block 2 moved the LEFT output). The 0x4C ch12/13
+cells gate NOTHING on the mixer routes (PBG2: the bus survived their
+rb-verified seals). Route bytes: 0x04 = Mixer 1, 0x05 = Mixer 2 (Apogee's
+original list). The 0x4F byte does NOT mute.**
 * `0x4C` fader volume, clamp(dB+48, 0…54)  (−10→0x26, −6→0x2a)
 * `0x4D` pan, round(pan×128)  (0.25→0x20, 0.5→0x40)  ← NOT the dim level
 * `0x4E` solo (0/1)   ← NOT the mute

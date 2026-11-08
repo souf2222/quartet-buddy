@@ -265,6 +265,28 @@ final class DirectUSBClient {
         } catch { return nil }
     }
 
+    /// A raw 1-byte register write with a non-zero wValue — the monitor
+    /// MATRIX's addressing (wValue = input, wIndex = output) needs it.
+    @discardableResult
+    func setRawByteValue(_ reg: UInt8, wValue: UInt16, index: UInt16, byte: UInt8) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = reg
+        req.wValue = wValue
+        req.wIndex = index
+        req.wLength = 1
+        let d = NSMutableData(bytes: [byte], length: 1)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "raw \(reg): \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// A raw 1-byte register write — the general form of every decoded
     /// register (bRequest, wIndex, one byte). Used by the pad enum, the
     /// routing register and any future single-byte setting.
@@ -376,6 +398,68 @@ final class DirectUSBClient {
         }
     }
 
+    /// The read-back for a matrix cell (bmReq 0xC0, 1-byte response;
+    /// wValue = the input, wIndex = the output).
+    func readCell(wValue input: UInt16, index: UInt16, bRequest: UInt8) -> UInt8? {
+        guard let dev = device else { return nil }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0xC0
+        req.bRequest = bRequest
+        req.wValue = input
+        req.wIndex = index
+        req.wLength = 1
+        let d = NSMutableData(data: Data(repeating: 0, count: 1))
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return (d as Data).first
+        } catch {
+            lastError = "cell read: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// The read-back for a multi-byte block (bmReq 0xC0; wIndex = the
+    /// block selector) — the 0x10 mixer snapshot blocks (28 bytes).
+    func readBlock(index: UInt16, bRequest: UInt8, length: Int) -> [UInt8]? {
+        guard let dev = device else { return nil }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0xC0
+        req.bRequest = bRequest
+        req.wValue = 0
+        req.wIndex = index
+        req.wLength = UInt16(length)
+        let d = NSMutableData(data: Data(repeating: 0, count: length))
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return (d as Data).map { $0 }
+        } catch {
+            lastError = "block read: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// The write for a multi-byte block (bmReq 0x40; wIndex = the block
+    /// selector) — the 0x10 mixer snapshot blocks (28 bytes).
+    @discardableResult
+    func writeBlock(index: UInt16, bRequest: UInt8, bytes: [UInt8]) -> Bool {
+        guard let dev = device else { return false }
+        var req = IOUSBDeviceRequest()
+        req.bmRequestType = 0x40
+        req.bRequest = bRequest
+        req.wValue = 0
+        req.wIndex = index
+        req.wLength = UInt16(bytes.count)
+        let d = NSMutableData(bytes: bytes, length: bytes.count)
+        do {
+            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            return true
+        } catch {
+            lastError = "block write: \(error.localizedDescription)"
+            QBLog.log("directUSB: \(lastError)")
+            return false
+        }
+    }
+
     /// The monitor-output flags — sweep-VERIFIED 11/7 (the daemon's own
     /// writes): dim = bRequest 0x40, sum = 0x46, wIndex = the output
     /// (0 = Main, 1 = HP), wValue = 0, 1 byte 0/1. (The old 0x4E/0x4F-at-
@@ -403,70 +487,47 @@ final class DirectUSBClient {
 
     /// The mixer channel fader — sweep-VERIFIED: 0x4C, wIndex = the channel
     /// (0…12, 14 = master), value = clamp(dB + 48, 0…54).
+    /// The MIXER PLANE = wValue (0 = Mixer 1, 1 = Mixer 2 — ear/back-verified
+    /// with the distinguishing-write probe: the planes read back separately).
+    @discardableResult
+    func setMixerVolume(mixer: UInt16, channel: UInt16, db: Double) -> Bool {
+        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
+        return setRawByteValue(0x4C, wValue: mixer, index: channel, byte: UInt8(clamped))
+    }
+
     @discardableResult
     func setMixerVolume(channel: UInt16, db: Double) -> Bool {
-        guard let dev = device else { return false }
-        var req = IOUSBDeviceRequest()
-        req.bmRequestType = 0x40
-        req.bRequest = 0x4C
-        req.wValue = 0
-        req.wIndex = channel
-        req.wLength = 1
-        let clamped = Swift.max(0, Swift.min(54, Int(db.rounded()) + 48))
-        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
-        do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
-            return true
-        } catch {
-            lastError = "mixer volume: \(error.localizedDescription)"
-            QBLog.log("directUSB: \(lastError)")
-            return false
-        }
+        setMixerVolume(mixer: 0, channel: channel, db: db)
+    }
+
+    func readMixerCell(mixer: UInt16, channel: UInt16, bRequest: UInt8) -> UInt8? {
+        readCell(wValue: mixer, index: channel, bRequest: bRequest)
     }
 
     /// The mixer channel MUTE — sweep-VERIFIED: 0x4F, wIndex = the channel
-    /// (0…12, 14 = the master), 1 byte 0/1.
+    /// (0…12, 14 = the master), 1 byte 0/1. The plane = wValue (see the
+    /// fader).
+    @discardableResult
+    func setMixerMute(mixer: UInt16, channel: UInt16, mute: Bool) -> Bool {
+        setRawByteValue(0x4F, wValue: mixer, index: channel, byte: mute ? 1 : 0)
+    }
+
     @discardableResult
     func setMixerMute(channel: UInt16, mute: Bool) -> Bool {
-        guard let dev = device else { return false }
-        var req = IOUSBDeviceRequest()
-        req.bmRequestType = 0x40
-        req.bRequest = 0x4F
-        req.wValue = 0
-        req.wIndex = channel
-        req.wLength = 1
-        let d = NSMutableData(bytes: [mute ? UInt8(1) : UInt8(0)], length: 1)
-        do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
-            return true
-        } catch {
-            lastError = "mixer mute: \(error.localizedDescription)"
-            QBLog.log("directUSB: \(lastError)")
-            return false
-        }
+        setMixerMute(mixer: 0, channel: channel, mute: mute)
     }
 
     /// The mixer channel pan — sweep-VERIFIED: 0x4D, wIndex = the channel,
-    /// value = round(pan × 128) (0.5 = center = 0x40).
+    /// value = round(pan × 128) (0.5 = center = 0x40). The plane = wValue.
+    @discardableResult
+    func setMixerPan(mixer: UInt16, channel: UInt16, pan: Double) -> Bool {
+        let clamped = Swift.max(0, Swift.min(128, Int((pan * 128).rounded())))
+        return setRawByteValue(0x4D, wValue: mixer, index: channel, byte: UInt8(clamped))
+    }
+
     @discardableResult
     func setMixerPan(channel: UInt16, pan: Double) -> Bool {
-        guard let dev = device else { return false }
-        var req = IOUSBDeviceRequest()
-        req.bmRequestType = 0x40
-        req.bRequest = 0x4D
-        req.wValue = 0
-        req.wIndex = channel
-        req.wLength = 1
-        let clamped = Swift.max(0, Swift.min(128, Int((pan * 128).rounded())))
-        let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
-        do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
-            return true
-        } catch {
-            lastError = "mixer pan: \(error.localizedDescription)"
-            QBLog.log("directUSB: \(lastError)")
-            return false
-        }
+        setMixerPan(mixer: 0, channel: channel, pan: pan)
     }
 
     /// The analog-output TRIM — sweep-VERIFIED: 0x18, wIndex = out−2

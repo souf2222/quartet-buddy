@@ -266,6 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var talkbackOn = false
     var talkbackMomentary = false
+
+    /// The mixer register's channel space: 0–11 = the hardware inputs,
+    /// 12/13 = the stereo playback pair (VERIFIED 11/8: the mixer planes
+    /// = wValue 0/1, the FADER gates a channel).
+    static let mixerChannels: [UInt16] = (0...13).map { UInt16($0) }
     /// Hardware dim on the speakers (Out 1‑2), synced from the glue tree.
     var speakerDim = false
     /// Hardware sum/mono on the speakers + dim/sum on the headphones —
@@ -504,6 +509,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupInsert()
         setupSettingsWindow()
         setupConsoleWindow()
+        // The talkback ear-test probe: walks the HP→Mixer route candidates
+        // with read-backs while the user listens (see runTalkbackProbe — the
+        // byte "4" was guessed, never ear-verified).
+        if ProcessInfo.processInfo.environment["QB_TALKBACK_PROBE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runTalkbackProbe()
+            }
+        }
+        // The hardware-mixer probe: dumps both mixer planes' full register
+        // state (fader/pan/solo/mute × channels 0-14) and proves/disproves
+        // that wValue = 1 selects the MIXER 2 plane (see runMixerProbe).
+        if ProcessInfo.processInfo.environment["QB_MIXER_PROBE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runMixerProbe()
+            }
+        }
+        // The mixer WATCHER: diff-reads the whole mixer register space
+        // (0x4C-0x4F × wValue 0/1 × wIndex 0-14) every ~0.7 s and logs
+        // every change — the user operates the TOUCHSCREEN's mixer and
+        // the diff reveals the firmware's true register encoding.
+        // The mic-channel SCAN: polls the running metering tap's held
+        // peaks for 10 s while the user talks; logs which of the 12
+        // inputs actually carry signal — ends the "which channel is my
+        // mic on" guessing for good.
+        if ProcessInfo.processInfo.environment["QB_MIC_SCAN"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runMicScan()
+            }
+        }
+        if ProcessInfo.processInfo.environment["QB_MIXER_WATCH"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runMixerWatch()
+            }
+        }
+        // One-shot sanity restore: factory cells on both monitor mixes,
+        // the HP route back to its playback pair (byte 3) and saved.
+        if ProcessInfo.processInfo.environment["QB_MIXER_RESTORE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runMixerRestore()
+            }
+        }
         if ProcessInfo.processInfo.environment["QB_AUTO_UI"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 QBLog.log("insert: AUTO-UI debug trigger")
@@ -778,9 +824,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Talkback
 
     func toggleTalkback() {
-        glue.setBool(id: PathIds.talkbackOn, !talkbackOn)
-        talkbackOn = !talkbackOn
-        refreshMenu()
+        setTalkback(!talkbackOn)
     }
 
     private func setupHotKey() {
@@ -941,15 +985,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ch = UInt16(max(0, min(11, talkbackSourceInput)))
             let hpRestore = UserDefaults.standard.object(forKey: "hwout.route.3") as? Int ?? 3
             if on {
-                _ = directUSB.setMixerMute(channel: ch, mute: false)        // the mic opens
-                _ = directUSB.setRawByte(0x53, index: 3, byte: 4)           // the HP → Mixer 1
+                _ = directUSB.setRawByte(0x53, index: 3, byte: 5)           // the HP → the monitor mix
+                    // (EAR-VERIFIED 11/8: byte 5 = music + the raw inputs —
+                    // the ONLY route that carries the mic; bytes 0-3 = pure
+                    // playback. The route switch IS the mic gate: normal
+                    // listening = a playback pair (no mic), talkback = the
+                    // monitor mix. Restored on off.)
+                _ = directUSB.setRawByteValue(0x4f, wValue: 1, index: ch, byte: 0)   // the HP's mic cell unmuted
+                _ = directUSB.setRawByteValue(0x4c, wValue: 1, index: ch, byte: 48)  // …and open at 0 dB
+                _ = directUSB.setMixerMute(channel: ch, mute: false)        // the Main's cell too (belt & braces)
                 _ = directUSB.setOutputFlag(0x40, output: 0, on: true)      // the mains' dim
-                QBLog.log("talkback: on — mic ch \(ch + 1) opened, HP → Mixer 1, mains dimmed")
+                QBLog.log("talkback: on — HP → monitor mix (0x53=05, mic raw-carried), mains dimmed")
             } else {
-                _ = directUSB.setRawByte(0x53, index: 3, byte: UInt8(hpRestore)) // the restore
-                _ = directUSB.setMixerMute(channel: ch, mute: true)         // the mic closes
+                _ = directUSB.setRawByte(0x53, index: 3, byte: UInt8(hpRestore)) // the restore (a playback pair = no mic)
+                _ = directUSB.setRawByteValue(0x4f, wValue: 1, index: ch, byte: 1)   // the HP's mic cell muted
+                _ = directUSB.setMixerMute(channel: ch, mute: true)         // the Main's cell muted
                 _ = directUSB.setOutputFlag(0x40, output: 0, on: false)     // the dim = off
-                QBLog.log("talkback: off — HP routing restored (\(hpRestore)), mic muted, dim off")
+                QBLog.log("talkback: off — HP routing restored (\(hpRestore) = playback, no mic), dim off")
             }
         } else {
             glue.setBool(id: PathIds.talkbackOn, on)
@@ -962,6 +1014,331 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var talkbackSourceInput: Int {
         get { UserDefaults.standard.integer(forKey: "talkback.sourceInput") }
         set { UserDefaults.standard.set(newValue, forKey: "talkback.sourceInput") }
+    }
+
+    // MARK: - The talkback EAR-TEST probe, round 2 (QB_TALKBACK_PROBE=1)
+
+    /// Round 1 learned: every candidate write is accepted, nothing was
+    /// heard — but the round had three confounders: the HP sat at −44 dB,
+    /// nobody was listening at the windows, and the round-2 relaunch had
+    /// the source on Analog 1 while the user's mic lives on Digital 1.
+    ///
+    /// This round isn't silently-passable: the HP is boosted to −10 dB
+    /// (the user's own earlier "LOUD" anchor), the MAIN OUTPUT is muted
+    /// for the run (no feedback), and it starts with a POSITIVE CONTROL —
+    /// the direct-monitoring matrix cell (input→headphones), the one
+    /// routing family that WAS ear-verified. If the control is silent,
+    /// the problem is upstream (the ADAT stream / the source itself).
+    /// Then it closes the cell and walks the 0x53 source candidates.
+    private func runTalkbackProbe() {
+        guard directUSB.opened else {
+            QBLog.log("tb-probe: no direct-USB session (device away?) — launch again")
+            return
+        }
+        let ch = UInt16(max(0, min(11, talkbackSourceInput)))
+        let name = ch < 4 ? "Analog \(ch + 1)" : "Digital \(ch - 3)"
+        QBLog.log("tb-probe2: START — source = \(name) (mixer ch \(ch)); the FIRST window (A) starts 45 s from now, then one every 8 s — put the headphones ON and get ready")
+
+        // save
+        let savedHPGain = directUSB.readInput(input: 1, bRequest: 0x33)
+        let savedMainMute = directUSB.readInput(input: 0, bRequest: 0x35)
+        let savedMasterMute = directUSB.readInput(input: 14, bRequest: 0x4f)
+        let savedMasterFader = directUSB.readInput(input: 14, bRequest: 0x4c)
+        let savedMicMute = directUSB.readInput(input: ch, bRequest: 0x4f)
+        let savedMicFader = directUSB.readInput(input: ch, bRequest: 0x4c)
+        let savedCellGain = directUSB.readCell(wValue: ch, index: 1, bRequest: 0x4c)
+        let savedCellMute = directUSB.readCell(wValue: ch, index: 1, bRequest: 0x4e)
+        QBLog.log("tb-probe2: initial — HP |dB| \(savedHPGain.map { String($0) } ?? "nil"), mainMute \(savedMainMute.map { String($0) } ?? "nil"), master(r \(savedMasterFader.map { String($0) } ?? "nil") m \(savedMasterMute.map { String($0) } ?? "nil")), \(name)'s ch(r \(savedMicFader.map { String($0) } ?? "nil") m \(savedMicMute.map { String($0) } ?? "nil")), direct-cell(r \(savedCellGain.map { String($0) } ?? "nil") m \(savedCellMute.map { String($0) } ?? "nil"))")
+
+        // the audible stage: HP −10 dB (LOUD), mains muted, the mic's
+        // channel + the master open at 0 dB
+        _ = directUSB.setRawByte(0x33, index: 1, byte: 10)   // HP |dB| = 10 (−10 dB)
+        _ = directUSB.setRawByte(0x35, index: 0, byte: 1)    // the mains muted for the run
+        _ = directUSB.setMixerVolume(channel: ch, db: 0)
+        _ = directUSB.setMixerMute(channel: ch, mute: false)
+        _ = directUSB.setRawByte(0x4f, index: 14, byte: 0)
+        _ = directUSB.setRawByte(0x4c, index: 14, byte: 48)
+        QBLog.log("tb-probe2: HP boosted to −10 dB, mains muted, master + \(name)'s mixer channel open at 0 dB")
+
+        // WINDOW A (+18 s, 6 s): the POSITIVE CONTROL — the direct-
+        // monitoring matrix cell: this input's audio added straight to
+        // the headphones output (wValue = input, wIndex = output 1).
+        var t: TimeInterval = 60
+        DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+            _ = self?.directUSB.setRawByteValue(0x4c, wValue: ch, index: 1, byte: 48)
+            _ = self?.directUSB.setRawByteValue(0x4e, wValue: ch, index: 1, byte: 0)
+            let cMute = self?.directUSB.readCell(wValue: ch, index: 1, bRequest: 0x4e)
+            QBLog.log("tb-probe2: A — CONTROL: \(name) opened STRAIGHT into the HP via the direct matrix (cell mute rb \(cMute.map { String($0) } ?? "nil")) — LISTEN NOW (6 s): talk into the mic")
+        }
+        t += 8
+        DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+            // close the direct cell again (it would mask the mixer tests)
+            _ = self?.directUSB.setRawByteValue(0x4e, wValue: ch, index: 1, byte: 1)
+            _ = self?.directUSB.setRawByteValue(0x4c, wValue: ch, index: 1, byte: 48)
+            QBLog.log("tb-probe2: A closed — the mixer-route tests begin")
+        }
+        // the 0x53 candidates: 04/05 (the presumption) + the 0x11–0x16
+        // tree-code family the device is known to translate
+        let candidates: [UInt8] = [4, 5, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16]
+        for (i, c) in candidates.enumerated() {
+            t += 8
+            let tag = String(UnicodeScalar(65 + 1 + i)!)   // B, C, D …
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                guard let self else { return }
+                _ = self.directUSB.setRawByte(0x53, index: 3, byte: c)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    let v = self.directUSB.readInput(input: 3, bRequest: 0x53)
+                    QBLog.log("tb-probe2: \(tag) — HP route ← 0x\(String(c, radix: 16)) (read-back \(v.map { String($0) } ?? "nil")) — LISTEN NOW (6 s): talk into the mic")
+                }
+            }
+        }
+        t += 10
+        DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+            guard let self else { return }
+            // the restore: the HP route to the app's saved slot, the HP
+            // fader + main mute + master + mic channel + the direct cell
+            let hp = UInt8(UserDefaults.standard.object(forKey: "hwout.route.3") as? Int ?? 3)
+            _ = directUSB.setRawByte(0x53, index: 3, byte: hp)
+            if let v = savedHPGain { _ = directUSB.setRawByte(0x33, index: 1, byte: v) }
+            if let v = savedMainMute { _ = directUSB.setRawByte(0x35, index: 0, byte: v) }
+            if let v = savedMicFader { _ = directUSB.setRawByte(0x4c, index: ch, byte: v) }
+            else { _ = directUSB.setMixerVolume(channel: ch, db: 0) }
+            _ = directUSB.setRawByte(0x4f, index: ch, byte: 1)   // the feedback guard
+            if let v = savedMasterMute { _ = directUSB.setRawByte(0x4f, index: 14, byte: v) }
+            if let v = savedMasterFader { _ = directUSB.setRawByte(0x4c, index: 14, byte: v) }
+            if let v = savedCellGain { _ = directUSB.setRawByteValue(0x4c, wValue: ch, index: 1, byte: v) }
+            if let v = savedCellMute { _ = directUSB.setRawByteValue(0x4e, wValue: ch, index: 1, byte: v) }
+            QBLog.log("tb-probe2: DONE — everything restored (HP ← \(hp), gains/mutes back, direct cell closed, mic muted)")
+        }
+    }
+
+    // MARK: - The hardware-mixer probe (QB_MIXER_PROBE=1)
+
+    /// Dumps both monitor outputs' mix cells (fader/pan/solo?/mute? ×
+    /// source 0-14) — post-reinterpretation: wValue = the OUTPUT (0 = Main,
+    /// 1 = Headphones), wIndex = the source. Read-only, nothing written.
+    private func runMixerProbe() {
+        guard directUSB.opened else {
+            QBLog.log("mix-probe: no direct-USB session (device away?) — launch again")
+            return
+        }
+        DispatchQueue(label: "qb.mixprobe").async { [weak self] in
+            guard let self, self.directUSB.opened else { return }
+            // THE CELL DUMP (post-reinterpretation): wValue = the OUTPUT
+            // (0 = Main, 1 = Headphones), wIndex = the source (0-11 inputs,
+            // 12/13 playback, 14 ?). Dump both outputs' cells fully.
+            let reqs: [(String, UInt8)] = [("f", 0x4c), ("p", 0x4d), ("s", 0x4e), ("m", 0x4f)]
+            let outs: [UInt16] = [0, 1]
+            let chans: [UInt16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+            for out in outs {
+                var lines: [String] = []
+                for chx in chans {
+                    let cells = reqs.map { req -> String in
+                        let v = self.directUSB.readCell(wValue: out, index: chx, bRequest: req.1)
+                        return "\(req.0)\(v.map { String($0) } ?? "?")"
+                    }
+                    lines.append("ch\(chx)[\(cells.joined(separator: " "))]")
+                }
+                let label = out == 0 ? "MAIN OUT" : "HEADPHONES"
+                QBLog.log("mix-probe: \(label) mix cells (f=fader p=pan s=? m=?): " + lines.joined(separator: " "))
+            }
+            let routes = (0..<4).map { self.directUSB.readInput(input: UInt16($0), bRequest: 0x53).map { String($0) } ?? "?" }
+            QBLog.log("mix-probe: 0x53 routes: \(routes.joined(separator: ","))")
+            // THE MUTE/SOLO HUNT: the mic (Digital 1, block-0 s4) open at
+            // 0 dB on byte 4. The user talks continuously; each stage flips
+            // ONE candidate: the 0x4F mute register (wValue 0-3) or a
+            // marker bit. The stage where the voice dies = the mute's home.
+            // The app speaks each stage's label; every write rb-verified.
+            var speaker: NSSpeechSynthesizer?
+            func speak(_ s: String) {
+                QBLog.log("mix-probe: 🔊 \"\(s)\"")
+                speaker?.startSpeaking(s)
+            }
+            func setReg(_ reg: UInt8, _ wV: UInt16, _ ch: UInt16, _ v: UInt8) {
+                _ = self.directUSB.setRawByteValue(reg, wValue: wV, index: ch, byte: v)
+                let r = self.directUSB.readCell(wValue: wV, index: ch, bRequest: reg)
+                QBLog.log("mix-probe: 0x\(String(reg, radix: 16)) w\(wV) ch\(ch) ← \(v) — rb \(r.map { String($0) } ?? "nil")")
+            }
+            func setSlot(_ blockWI: UInt16, _ slot: Int, _ gain: UInt8, _ marker: UInt8) {
+                guard var block = self.directUSB.readBlock(index: blockWI,
+                                                           bRequest: 0x10, length: 28) else { return }
+                block[slot * 2] = gain
+                block[slot * 2 + 1] = marker
+                let ok = self.directUSB.writeBlock(index: blockWI, bRequest: 0x10, bytes: block)
+                let rb = self.directUSB.readBlock(index: blockWI, bRequest: 0x10, length: 28)
+                    .map { "g\($0[slot * 2]) m\($0[slot * 2 + 1])" } ?? "nil"
+                QBLog.log("mix-probe: block \(blockWI) slot \(slot) ← g\(gain) m\(marker) — \(ok ? "ok" : "FAILED") rb \(rb)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self else { return }
+                speaker = NSSpeechSynthesizer()   // main thread
+                _ = self.directUSB.setRawByte(0x53, index: 3, byte: 4)   // HP → byte 4 (Mixer 1)
+                _ = self.directUSB.setRawByte(0x35, index: 0, byte: 1)   // Main muted
+                setSlot(0, 4, 0x30, 0xA1)                                // the mic open, factory marker
+                QBLog.log("mix-probe: MUTE-HUNT stage 1 (+10 s) — baseline")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                guard let self else { return }
+                speak("Stage one. Baseline. Talk.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 22) { [weak self] in
+                guard let self else { return }
+                setReg(0x4f, 0, 4, 1)
+                speak("Stage two. Mute register, plane zero.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 34) { [weak self] in
+                guard let self else { return }
+                setReg(0x4f, 0, 4, 0)
+                setReg(0x4f, 1, 4, 1)
+                speak("Stage three. Mute register, plane one.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 46) { [weak self] in
+                guard let self else { return }
+                setReg(0x4f, 1, 4, 0)
+                setReg(0x4f, 2, 4, 1)
+                speak("Stage four. Mute register, plane two.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 58) { [weak self] in
+                guard let self else { return }
+                setReg(0x4f, 2, 4, 0)
+                setReg(0x4f, 3, 4, 1)
+                speak("Stage five. Mute register, plane three.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 70) { [weak self] in
+                guard let self else { return }
+                setReg(0x4f, 3, 4, 0)
+                setSlot(0, 4, 0x30, 0xA3)                                // marker bit 1
+                speak("Stage six. Marker bit one.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 82) { [weak self] in
+                guard let self else { return }
+                setSlot(0, 4, 0x30, 0xA5)                                // marker bit 2
+                speak("Stage seven. Marker bit two.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 94) { [weak self] in
+                guard let self else { return }
+                setSlot(0, 4, 0x30, 0x81)                                // clear marker bit 5
+                speak("Stage eight. Marker bit five cleared.")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 106) { [weak self] in
+                guard let self else { return }
+                setSlot(0, 4, 0x30, 0xA1)                                // the factory marker
+                _ = self.directUSB.setRawByte(0x53, index: 3, byte: 5)   // HP → byte 5
+                _ = self.directUSB.setRawByte(0x35, index: 0, byte: 0)   // Main unmuted
+                QBLog.log("mix-probe: MUTE-HUNT DONE — marker restored, HP → byte 5")
+            }
+            QBLog.log("mix-probe: DONE — dump only, nothing written")
+        }
+    }
+
+    /// The mic-channel SCAN (QB_MIC_SCAN=1): polls the metering tap's
+    /// held peaks for 10 s while the user talks; ranks the 12 inputs by
+    /// their max dBFS and flags the channels that carry the mic.
+    private func runMicScan() {
+        QBLog.log("mic-scan: START — TALK into the mic CONTINUOUSLY for the next 10 s")
+        AdatGainEngine.shared.windowVisible = true
+        AdatGainEngine.shared.refreshChannelCount()
+        var best = [Double?](repeating: nil, count: 12)
+        var elapsed = 0.0
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+            elapsed += 0.5
+            for ch in 0...11 {
+                if let db = AdatGainEngine.shared.heldPeakDBFS(ch),
+                   best[ch] == nil || db > best[ch]! {
+                    best[ch] = db
+                }
+            }
+            if elapsed >= 10 {
+                timer.invalidate()
+                var lines: [String] = []
+                for ch in 0...11 {
+                    let name = ch < 4 ? "Analog \(ch + 1)" : "Digital \(ch - 3)"
+                    if let db = best[ch] {
+                        lines.append("mic-scan:   \(name): \(Int(db)) dBFS\(db > -50 ? "   ← SIGNAL" : "")")
+                    } else {
+                        lines.append("mic-scan:   \(name): silent")
+                    }
+                }
+                QBLog.log("mic-scan: RESULT over 10 s:\n" + lines.joined(separator: "\n"))
+                QBLog.log("mic-scan: DONE")
+            }
+        }
+    }
+
+    /// One-shot sanity restore (QB_MIXER_RESTORE=1): both monitor mixes'
+    /// cells to the factory state, the HP route back to its playback pair
+    /// (byte 3, mic-free) and saved. Everything logged with read-backs.
+    private func runMixerRestore() {
+        guard directUSB.opened else {
+            QBLog.log("mix-restore: no direct-USB session — relaunch with the device present")
+            return
+        }
+        DispatchQueue(label: "qb.mixrestore").async { [weak self] in
+            guard let self, self.directUSB.opened else { return }
+            QBLog.log("mix-restore: START")
+            // MAIN's mix (wValue 0): the inputs closed (fader −48, unmute —
+            // the factory state), the playback cells open.
+            for ch in UInt16(0)...11 {
+                _ = self.directUSB.setRawByteValue(0x4c, wValue: 0, index: ch, byte: 0)
+                _ = self.directUSB.setRawByteValue(0x4f, wValue: 0, index: ch, byte: 0)
+            }
+            for ch in [UInt16(12), 13, 14] {
+                _ = self.directUSB.setRawByteValue(0x4c, wValue: 0, index: ch, byte: 48)
+                _ = self.directUSB.setRawByteValue(0x4f, wValue: 0, index: ch, byte: 0)
+            }
+            // HP's mix (wValue 1): everything open at 0 dB (the factory).
+            for ch in UInt16(0)...14 {
+                _ = self.directUSB.setRawByteValue(0x4c, wValue: 1, index: ch, byte: 48)
+                _ = self.directUSB.setRawByteValue(0x4f, wValue: 1, index: ch, byte: 0)
+            }
+            // the route: HP → its playback pair (byte 3, no mic) + saved
+            _ = self.directUSB.setRawByte(0x53, index: 3, byte: 3)
+            UserDefaults.standard.set(3, forKey: "hwout.route.3")
+            let r = self.directUSB.readInput(input: 3, bRequest: 0x53)
+            let f4 = self.directUSB.readCell(wValue: 1, index: 4, bRequest: 0x4c)
+            QBLog.log("mix-restore: DONE — HP route ← 3 (rb \(r.map { String($0) } ?? "nil")), saved = 3; HP's Digital-1 cell fader rb \(f4.map { String($0) } ?? "nil") = 0 dB (open, but byte 3 carries no inputs)")
+        }
+    }
+
+    /// The mixer register WATCHER (QB_MIXER_WATCH=1): diff-reads the whole
+    /// mixer space every ~0.7 s for ~3 minutes and logs every change as
+    /// `reg/wValue/wIndex: old → new`. The user performs touchscreen mixer
+    /// actions in parallel; the diffs = the firmware's true encoding.
+    private func runMixerWatch() {
+        guard directUSB.opened else {
+            QBLog.log("mix-watch: no direct-USB session — relaunch with the device present")
+            return
+        }
+        DispatchQueue(label: "qb.mixwatch").async { [weak self] in
+            guard let self, self.directUSB.opened else { return }
+            QBLog.log("mix-watch: START — watching 0x4C/0x4D/0x4E/0x4F × wValue 0-1 × wIndex 0-14; do the touchscreen mixer actions NOW")
+            let regs: [UInt8] = [0x4c, 0x4d, 0x4e, 0x4f]
+            var snapshot: [String: UInt8] = [:]
+            let key = { (r: UInt8, wV: UInt16, wI: UInt16) -> String in
+                String(format: "%02x-%d-%d", r, wV, wI)
+            }
+            let t0 = Date()
+            while Date().timeIntervalSince(t0) < 180 {
+                var now: [String: UInt8] = [:]
+                for r in regs {
+                    for wV in [UInt16(0), 1] {
+                        for wI in UInt16(0)...14 {
+                            if let v = self.directUSB.readCell(wValue: wV, index: wI, bRequest: r) {
+                                now[key(r, wV, wI)] = v
+                            }
+                        }
+                    }
+                }
+                if !snapshot.isEmpty {
+                    for (k, v) in now where snapshot[k] != v {
+                        QBLog.log("mix-watch: \(k): \(snapshot[k].map { String($0) } ?? "?") → \(v)")
+                    }
+                }
+                snapshot = now
+                Thread.sleep(forTimeInterval: 0.7)
+            }
+            QBLog.log("mix-watch: DONE (3 min elapsed)")
+        }
     }
 
     /// ± dB adjustment on one output (hardware fader, range-clamped).
@@ -997,9 +1374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let t = self.midiTrigger,
                   t.channel == event.channel, t.kind == event.kind, t.number == event.number else { return }
             if self.talkbackMomentary {
-                self.glue.setBool(id: PathIds.talkbackOn, event.isDown)
-                self.talkbackOn = event.isDown
-                self.refreshMenu()
+                self.setTalkback(event.isDown)
             } else if event.isDown {
                 self.toggleTalkback()
             }
@@ -1470,8 +1845,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// always 1 channel → grayed channel picker).
     func talkbackDescription() -> TalkbackSourceDescription? {
         // 11.7 offline: the app's OWN model — the source = this Quartet,
-        // 4 analog inputs; the selection = the stored engine input. (The
-        // tree's Talkback node = the daemon's/helpers' — gone offline.)
+        // 4 analog + 8 optical inputs; the selection = the stored engine
+        // input. (The tree's Talkback node = the daemon's/helpers' — gone
+        // offline.)
         if lastTree == nil {
             let saved = talkbackSourceInput
             // 12 inputs total: 4 analog + 8 optical (the mixer channels
@@ -1733,6 +2109,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.readTalkback = { [weak self] in self?.talkbackDescription() }
         settingsWindow.writeTalkbackSource = { [weak self] device, channel in
             self?.selectTalkbackSource(device: device, channel: channel)
+        }
+        // Hardware mixers (Settings ▸ Quartet ▸ Hardware Mixers):
+        // VERIFIED 11/8 — Mixer 1 = route byte 4, Mixer 2 = byte 5. The
+        // mixers' channel gains live in the 0x10 blocks, ONE BLOCK PER
+        // STEREO SIDE, 14 slots of (gain, marker): slots 0-11 = the
+        // inputs, SLOT 12 = THE PLAYBACK (the tree's playback.mixerChannel
+        // = 12!) — the stereo playback spans the side blocks: L block's
+        // slot 12 = playback L, R block's slot 13 = playback R (factory
+        // 0x20 = −16 dB). Mixer 1 = blocks 0 (L) + 1 (R), Mixer 2 = 2 (L)
+        // + 3 (R). PAN = the L/R gain difference. The 0x4C cells gate
+        // NOTHING on the mixer routes (the playback-gating matrix v2:
+        // sealing w0/w1 ch12/13 never silenced the bus).
+        settingsWindow.readMixer = { [weak self] plane in
+            guard let self, self.directUSB.opened else { return nil }
+            let lWI = UInt16(plane == 0 ? 0 : 2)
+            let rWI = UInt16(plane == 0 ? 1 : 3)
+            let lBlock = self.directUSB.readBlock(index: lWI, bRequest: 0x10, length: 28)
+            let rBlock = self.directUSB.readBlock(index: rWI, bRequest: 0x10, length: 28)
+            return (0...12).map { ch -> (ch: Int, lFader: Int, rFader: Int, present: Bool) in
+                let present = lBlock != nil
+                if ch <= 11 {
+                    return (ch: ch, lFader: lBlock.flatMap { Int($0[ch * 2]) } ?? 0,
+                            rFader: rBlock.flatMap { Int($0[ch * 2]) } ?? 0, present: present)
+                }
+                // the Playback row = slot 12 of each side block
+                return (ch: ch, lFader: lBlock.flatMap { Int($0[24]) } ?? 0,
+                        rFader: rBlock.flatMap { Int($0[26]) } ?? 0, present: present)
+            }
+        }
+        settingsWindow.writeMixerGains = { [weak self] plane, ch, lByte, rByte in
+            guard let self else { return }
+            let lWI = UInt16(plane == 0 ? 0 : 2)
+            let rWI = UInt16(plane == 0 ? 1 : 3)
+            // the channel's slot per side block: inputs 0-11; the playback
+            // = the L block's slot 12 and the R block's slot 13 (stereo
+            // channel spanning the two side blocks)
+            let lSlot = Int(ch) * 2
+            let rSlot = (ch == 12 ? 13 : Int(ch)) * 2
+            for (wI, byte, side, slot) in [(lWI, lByte, "L", lSlot), (rWI, rByte, "R", rSlot)] {
+                guard var block = self.directUSB.readBlock(index: wI,
+                                                           bRequest: 0x10, length: 28) else { continue }
+                block[slot] = byte   // the marker byte stays verbatim
+                let ok = self.directUSB.writeBlock(index: wI, bRequest: 0x10, bytes: block)
+                let rb = self.directUSB.readBlock(index: wI, bRequest: 0x10, length: 28)
+                    .map { String($0[slot]) } ?? "nil"
+                QBLog.log("mixer \(plane) \(ch == 12 ? "playback" : "in \(ch + 1)") \(side) slot \(slot / 2) ← \(byte) (\(Int(byte) - 48) dB) \(ok ? "ok" : "FAILED") rb \(rb)")
+            }
         }
         // Line-out hardware levels (Settings ▸ Quartet ▸ Output Levels):
         // read the tree's hwout2..7 analogRefLevel, write int32 via glue.

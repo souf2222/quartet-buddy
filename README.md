@@ -146,8 +146,46 @@ the decoded registers):
    (the feedback guard), the dim off.
 
 **Settings ▸ Talkback** picks the source — any of the **12 inputs** (Analog
-1–4 = mixer channels 1–4, Optical 1–8 = 5–12) — the behavior (toggle /
+1–4 = mixer channels 1–4, Optical/Digital 1–8 = 5–12) — the behavior (toggle /
 hold-to-talk), and the MIDI trigger.
+
+Ear-verified protocol detail (11/8): the two mixer route bytes on
+register 0x53 = **04 (Mixer 1)** and **05 (Mixer 2)** — Apogee's original
+source list (Playback 1-2…7-8 = 00-03, Mixer 1 = 04, Mixer 2 = 05). The
+talkback engine's mic gate = the route switch: normal listening on a
+playback pair (no mic), talkback on the selected mixer (music + mic),
+restored on release.
+
+### Hardware mixers (Settings ▸ Quartet ▸ Hardware Mixers)
+
+**VERIFIED MODEL (11/8):** Mixer 1 = route byte 4, Mixer 2 = byte 5
+(Apogee's original source list). The mixers' channel gains live in the
+**0x10 snapshot blocks — ONE PER STEREO SIDE, 14 slots of (gain, marker)**:
+Mixer 1 = block 0 (L) + block 1 (R), Mixer 2 = block 2 (L) + block 3 (R).
+Slots 0-11 = the inputs (gain = clamp(dB+48, 0…54) → −48…+6 dB; factory:
+Mixer 1 = 0x00 (−48, silent), Mixer 2 = 0x16 (−26 dB) — the "always-on
+mic" mystery was Mixer 2's Digital 1 sitting at −26 dB). **Slot 12 = THE
+PLAYBACK channel** (the tree's playback.mixerChannel = 12): the stereo
+playback spans the side blocks — **L block's slot 12 = playback L, R
+block's slot 13 = playback R** (factory 0x20 = −16 dB; the old 0x4C
+ch12/13 cells gate nothing on the mixer routes — the playback-gating
+matrix v2 proved the bus survives their seals). **PAN = the L/R gain
+difference** (verified: writing only block 2 moved the LEFT output
+channel). The marker bytes (0xA1 for inputs, 0x00 for the playback
+slots) must be preserved when rewriting slots.
+
+The UI: Mixer 1 / Mixer 2 sections, rows = Analog 1-4, Digital 1-8,
+Playback (one stereo row — writes L slot 12 + R slot 13), fader
+(−48…+6 dB) + Pan (the L/R balance), live read-backs through the blocks.
+Route any output pair to Mixer 1/2 via the routing popups.
+
+**Mute/Solo = app-level (11/8):** the mute/solo hunt found no hardware
+gate — the 0x4F mute register reads back on every wValue plane (0-3) but
+gates nothing on the block-mixer routes, and marker bits 1/2/5 don't
+either. So the app implements them like the daemon likely did: a muted
+row's both side slots sit at −48 dB while the fader/pan keep the user's
+positions (remembered across relaunches in defaults); solo ducks every
+unsoloed row the same way. Functionally identical to AC2's mixer.
 
 The front-panel pads can't trigger talkback: the pads execute the unit's
 built-in action enum, and talkback is a host-loop feature that lives in the
