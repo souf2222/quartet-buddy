@@ -1,17 +1,19 @@
 # Quartet Buddy 🎛
 
-A menubar companion for the **Apogee Quartet** audio interface, built by
-reverse-engineering Apogee Control 2's IPC protocol
-([`docs/protocol-notes.md`](docs/protocol-notes.md)).
+A menubar companion for the **Apogee Quartet** audio interface — now
+**fully standalone**: it talks to the Quartet over USB **directly** and
+needs **no Apogee software at all** (no ApogeeGlue daemon, no Apogee
+Control 2, no kext). Built by reverse-engineering the Quartet's vendor
+protocol — every register decoded and verified
+([`docs/standalone-plan.md`](docs/standalone-plan.md)).
 
-It fixes what Apogee Control 2 breaks on modern macOS: the Quartet's driver
-never lets macOS's volume keys touch the **real fader** — all the system sees
-is a display-only volume slider (range −64…0 dB, no audible effect), so the
-volume keys are effectively dead. Quartet Buddy **binds that slider to the
-real fader, both directions**, giving the Quartet a fully native macOS
-volume experience — plus a few things Apogee never offered. It talks to the
-ApogeeGlue daemon directly, so you keep Apogee Control 2 installed (for
-routing) and everything stays in sync.
+It started by fixing what Apogee Control 2 breaks on modern macOS: the
+Quartet's driver never lets macOS's volume keys touch the **real fader** —
+all the system sees is a display-only volume slider (range −64…0 dB, no
+audible effect). Quartet Buddy **binds that slider to the real fader, both
+directions** — and then replaced Apogee Control 2 entirely: preamps,
+routing, front-panel pads, output trims, touchscreen preferences, and
+talkback, all straight to the hardware.
 
 ## Screenshots
 
@@ -23,6 +25,28 @@ toggles it.
 
 ![Quartet Buddy — Quartet Control](docs/screenshots/screenshot-3.jpeg)
 
+**The analog inputs** — level mode (Mic / +4 dBu / −10 dBV / Instrument),
+preamp gain, Auto Gain, 48V, soft limit, polarity, ganging — and the
+monitor bar (Speakers · Headphones) with their M/D/∑ chips, all live:
+
+![Analog inputs](docs/screenshots/control-window.jpg)
+
+**The Digital 1–8 bank** — the optical ADAT inputs as eight compact strips
+with the live meter and the Digital Gain Assistant:
+
+![Digital inputs](docs/screenshots/digital-inputs.jpg)
+
+**Settings ▸ Quartet ▸ Output Levels** — the line-out reference levels,
+the hardware trims, and the **hardware output routing** (each output pair
+plays a USB playback pair or one of the two hardware mixers):
+
+![Settings — Output Levels](docs/screenshots/settings-output-levels.jpg)
+
+**Settings ▸ Quartet ▸ Controls** — the touchscreen preferences and the
+front-panel pad assignments:
+
+![Settings — Controls](docs/screenshots/settings-controls.jpg)
+
 ## Features
 
 | Feature | Details |
@@ -33,16 +57,18 @@ toggles it.
 | **Volume target** | Choose **Main Out** or **Headphones** for the binding — a **system-wide switch hotkey** (recorded in Settings ▸ Shortcuts) or the next/previous-output shortcuts. The menubar icon shows which one is active (Apogee logo = Main Out, headphones glyph = HP). **Defaults to Main Out** on every launch and Quartet (re)connect. |
 | **Talkback hotkey** | Any ⌘/⌥/⌃-combo, recorded in-app. |
 | **Talkback MIDI button** | Press a note/CC on the keyboard plugged into the Quartet's MIDI port — MIDI-learn captures it. Toggle or momentary mode. |
+| **Talkback (standalone)** | The engine runs in-app — no helper process. Pressing talkback: **opens the selected mic's mixer channel**, **re-routes your headphones to that hardware mixer** (which carries the playback *and* the mic), and **dims the main outputs**. Release/press-again restores everything: the headphones to your saved routing, the mic muted, the dim off. The source = any of the Quartet's **12 inputs** (the 4 analog + the 8 optical), picked in Settings ▸ Talkback. |
 | **Live status** | The menubar tooltip and the Quartet Control window show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 | **AU insert** | Run any AU plugin independently on each of the Quartet's 4 stereo pairs, with per-pair routing (own playback / mirror another pair with a selectable tap point on its chain — Pre-FX / Post-FX / Post-Trim / silence) in the Quartet Control window. No loopback driver, no default-device switch, volume keys unaffected. See [`docs/au-insert.md`](docs/au-insert.md`). |
 | **Quartet Control** | One unified audio-control window (the old "Quartet Console" + "Outputs & Plug-ins" merged) with an explicit signal flow: **inputs → outputs & routing → monitor**. Per analog input — analog level (Mic / +4 dBu / −10 dBV / Instrument), preamp gain (mic and instrument keep their own values — the slider edits the active mode's; hidden at the line levels), signal meter, +48V (Mic only), soft limit, polarity, and **ganging** (a chain-link toggle on each channel-pair's divider — inputs 1–2 and 3–4; linked preamps move together, mirrored by the app exactly like the touchscreen's linked faders). Per stereo output pair — destination name, source (a grouped menu whose second section picks where the signal is taken from a mirrored source's chain: Pre-FX / Post-FX / Post-Trim), processing slot (enable / open / replace), output trim. A persistent bottom strip keeps Main Speakers + Headphones monitor level, mute, dim, mono always visible while the rest scrolls, and the window's subtitle shows the device's name. Reads are always live (tree poll); **write ids are computed from the device serial via the cracked descriptor hash** (see [`docs/protocol-notes.md`](docs/protocol-notes.md)) — every control works on any Quartet, no setup, no capture. |
 | **Digital inputs (ADAT)** | A single compact **Analog 1–4 \| Digital 1–8** **segmented bank selector** in the Inputs section header (two equal-width segments in one shared dark container — switching banks only changes the displayed input view). The Digital bank shows the optical inputs — digital inputs 1–8 via ADAT — as eight compact channel strips (4 × 2) — channel heading with its **Assist…/Stop/Recheck** button on one row, then the SAME live meter the analog strips use (4-pt track, zones, held-peak marker, clip lamp) with the inline held-peak readout ("−12.4", one decimal, colored by the held value's band) at its right end. No circular readout, no gain knob, no 48V button: the Quartet's ADAT preamps are the external converter's, and the interface doesn't imply hardware control it doesn't have. The channel count follows the LIVE stream configuration (at 88.2/96 kHz each lightpipe carries four channels); off-stream channels read "—". Names are app-side (Settings ▸ Quartet ▸ Channel Names ▸ Digital Inputs). |
 | **Digital Gain Assistant** | Assisted Gain for Digital 1–8 (the optical ADAT inputs) — measurement and guidance, not automatic gain control, inline on each channel strip. It measures the selected channels' highest SAMPLE peak for the Settings-defined duration (default 5 s), compares it with the target (default −12 dBFS, ±2 dB) and shows a relative instruction — "↑ Increase external gain by 8 dB" — which stays FROZEN while the user turns the external preamp's knob; **Recheck** runs a fresh measurement and verifies. The loop: Listen → Recommend → Manual adjustment → Recheck → Verified. The button follows the session state (Assist… → Stop while listening → Recheck when frozen); the two-line guidance appears ONLY on the strip hosting the session — "Play your loudest section" / "Listening · 3 s" while measuring, a **trailing Done** text action when frozen (never glued to the instruction's tail) — and collapses on Done; the idle strips carry no reserved space, the row grows just the two lines while the session runs, and the window re-fits once per open/close. A take without usable signal reads "No signal during measurement" (signal arriving later still shows on the active meter), a clipped take "Input clipped" without an exact correction off the ceiling. One assistant runs at a time; it never changes the audio signal, and it cedes the device's IOProc when an analog Auto Gain calibration runs. |
 | **Names** | Settings ▸ Names renames the hardware inputs (what the touchscreen and Apogee Control 2 show), the hardware outputs (Main Out / Headphones / Analog Out 1–6), and the app-side stereo-pair display names. |
+| **Hardware output routing** | Settings ▸ Quartet ▸ Output Levels ▸ Hardware output routing: each output pair (Out 1-2 Main, Out 3-4, Out 5-6, Headphones) plays a **USB playback pair** (Playback 1-2 / 3-4 / 5-6 / 7-8) or one of the **two hardware mixers** — the DAC's source selection, written straight to the unit's flash. The headphone's default = Playback 7-8. |
 | **Line out levels** | Settings ▸ Audio ▸ Line Out Levels gives each of the six ¼" line outputs (Analog Out 1–6) its own hardware reference level (+4 dBu / −10 dBV), the same knob the touchscreen's output settings drive. |
 | **Talkback source** | Settings ▸ Talkback picks which input device the talkback helper listens to (Quartet inputs, MacBook mic, a Continuity iPhone mic — whatever is in the tree) and its input channel; talkback then works even when the Mac's default input isn't the Quartet. |
-| **Touchscreen prefs** | Settings ▸ General drives the unit's front-panel touchscreen preferences: meter peak hold, over/clip hold, and lock home screen — verified to reach the hardware. |
-| **Front-panel pads** | Settings ▸ General ▸ Front Panel Pads remaps the unit's A / B / C touchpads and the encoder push (Mute / Dim / Sum to Mono / Toggle / Clear Meters / Speaker Set engages) — the assignments the touchscreen and Apogee Control 2 show, written through ApogeeGlue (verified live). The encoder gets its own restricted menu, exactly like Apogee Control 2's. |
+| **Touchscreen prefs** | Settings ▸ Quartet ▸ Controls drives the unit's front-panel touchscreen preferences: meter peak hold, overload hold, and lock home screen — live registers, verified against the touchscreen itself. |
+| **Front-panel pads** | Settings ▸ Quartet ▸ Controls remaps the unit's A / B / C touchpads and the encoder push — written **once, straight to the unit's flash** (the assignments survive reboots, power cycles, and moving the unit between computers). The pads' menu = Mute / Dim / Sum to Mono (Speaker/Headphone/All), Clear Meters, Engage Speaker Set 1/2/3; **the toggles are encoder-only** (the device's pad enum doesn't carry them), so the encoder gets its own restricted menu — Mute Speaker/Headphone/All + Toggle Mute Speaker/HP — exactly like Apogee Control 2's. |
 | **Device buffer** | Settings ▸ Audio sets the Quartet's CoreAudio IO buffer (32…4096 frames) — the tree's `preferredBufferSize` is a daemon preference that never reaches the HAL (verified), so this writes the device property directly like the sample-rate selector. |
 | **Connection awareness** | The menubar icon greys out when the Quartet isn't connected (USB-level detection, instant plug/unplug), and the Quartet Control window flags what's unreachable ("Quartet Not Connected" / "Glue Offline"). |
 | **Quick-control panel** | An optional floating, titlebar-free strip with the essentials — monitor knobs with their M/D/∑ chips, talkback and mute-all tiles — toggled by a configurable global hotkey (default ⌥C). Clicking the menubar Apogee logo toggles the full Quartet Control window; ⌘P pins/unpins it while it's focused. All keyboard shortcuts are configurable in Settings ▸ Shortcuts. |
@@ -56,8 +82,10 @@ no prompts.
 ## Requirements
 
 - macOS 13+ (developed on macOS 27)
-- Apogee Control 2 installed (its ApogeeGlue daemon is what we talk to)
 - Quartet connected over USB
+- **No Apogee software** — Control 2, the daemon, and the helper are not
+  needed (uninstall them if you like; the settings live in the unit's own
+  flash and survive moving the unit between computers)
 
 ## Install & first run
 
@@ -102,6 +130,30 @@ the app re-registers itself automatically on the next launch.
 - **Talkback:** *Turn Talkback On* to test, then record the *Talkback Hotkey*
   and/or *MIDI Button → Learn…* (press a button on your keyboard)
 - **MIDI mode:** *Toggle* (press = on/off) or *Momentary* (hold to talk)
+
+## Talkback
+
+Talkback is the app-side engine (Apogee's helper process reimplemented on
+the decoded registers):
+
+1. **Press** (the strip button, the menubar, a hotkey, or MIDI) and Quartet
+   Buddy:
+   - opens the selected mic channel in the hardware mixer (unmutes it),
+   - switches your **headphones' routing to that mixer** — mixer 1 carries
+     the USB playback *and* the mic, so you keep hearing your music,
+   - **dims the main outputs** so the speakers don't blast the room.
+2. **Release** (hold-to-talk) or **press again** (toggle) and everything
+   restores: the headphones back to your saved routing, the mic muted again
+   (the feedback guard), the dim off.
+
+**Settings ▸ Talkback** picks the source — any of the **12 inputs** (Analog
+1–4 = mixer channels 1–4, Optical 1–8 = 5–12) — the behavior (toggle /
+hold-to-talk), and the MIDI trigger.
+
+The front-panel pads can't trigger talkback: the pads execute the unit's
+built-in action enum, and talkback is a host-loop feature that lives in the
+app. The menubar button, the strip button, the hotkey, and MIDI are the
+triggers.
 
 ## How it works
 
