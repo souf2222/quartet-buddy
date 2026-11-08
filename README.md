@@ -23,13 +23,12 @@ the persistent monitor bar (Speakers · Headphones with their M/D/∑ chips),
 plus the live sample-rate readout — and clicking the menubar Apogee logo
 toggles it.
 
-![Quartet Buddy — Quartet Control](docs/screenshots/screenshot-3.jpeg)
+![Analog inputs](docs/screenshots/control-window.jpg)
 
 **The analog inputs** — level mode (Mic / +4 dBu / −10 dBV / Instrument),
 preamp gain, Auto Gain, 48V, soft limit, polarity, ganging — and the
 monitor bar (Speakers · Headphones) with their M/D/∑ chips, all live:
 
-![Analog inputs](docs/screenshots/control-window.jpg)
 
 **The Digital 1–8 bank** — the optical ADAT inputs as eight compact strips
 with the live meter and the Digital Gain Assistant:
