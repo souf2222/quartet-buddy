@@ -5,8 +5,9 @@ import AppKit
 // A compact, borderless panel with the essentials: both monitor outputs
 // (Speakers · Headphones) as knobs with their M/D/∑ chips, the OS
 // volume-target marker, and the global tiles (Talkback · Mute-All ·
-// Settings). Shown/hidden with a configurable global hotkey (default
-// ⌥C — Settings ▸ Shortcuts ▸ "Show / hide quick-control panel").
+// Settings). Currently has no opener of its own — its "Show / hide
+// quick-control panel" shortcut was removed because it duplicated the
+// main window's binding.
 //
 // Everything re-uses the main window's controls and plumbing: the knobs,
 // chips and icon tiles are the same classes, the state is read back from

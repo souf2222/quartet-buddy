@@ -21,7 +21,6 @@ enum ShortcutAction: String, CaseIterable {
 
     // Window & Navigation
     case showHideWindow
-    case showQuickPanel
     case pinPanel
     case openSettings
     case selectNextOutput
@@ -98,7 +97,7 @@ enum ShortcutAction: String, CaseIterable {
     /// Section heading in the settings table.
     var section: String {
         switch self {
-        case .showHideWindow, .showQuickPanel, .pinPanel, .openSettings, .selectNextOutput, .selectPreviousOutput:
+        case .showHideWindow, .pinPanel, .openSettings, .selectNextOutput, .selectPreviousOutput:
             return "Window & Navigation"
         case .speakerMute, .speakerDim, .speakerSum, .speakerVolumeUp, .speakerVolumeDown,
              .speakerFineUp, .speakerFineDown:
@@ -130,7 +129,6 @@ enum ShortcutAction: String, CaseIterable {
     var title: String {
         switch self {
         case .showHideWindow: return "Show / hide Quartet Control"
-        case .showQuickPanel: return "Show / hide quick-control panel"
         case .pinPanel: return "Pin / unpin the control panel"
         case .openSettings: return "Open Settings"
         case .selectNextOutput: return "Select next output"
@@ -194,7 +192,6 @@ enum ShortcutAction: String, CaseIterable {
     var defaultGlobal: Bool {
         switch self {
         case .showHideWindow: return true
-        case .showQuickPanel: return true
         // ⌘P is the app's pin toggle — APP-ONLY by default (matched by the
         // local monitor while the control panel is focused), so the
         // global ⌘P of other applications is never intercepted.
@@ -227,7 +224,6 @@ enum ShortcutAction: String, CaseIterable {
             .init(keyCode: code, modifiers: mods)
         }
         switch self {
-        case .showQuickPanel: return combo(UInt32(kVK_ANSI_C), UInt32(optionKey))
         case .pinPanel: return combo(UInt32(kVK_ANSI_P), UInt32(cmdKey))
         case .openSettings: return combo(UInt32(kVK_ANSI_Comma), UInt32(cmdKey))
         case .talkbackToggle: return combo(UInt32(kVK_ANSI_T), UInt32(cmdKey | shiftKey))
@@ -448,10 +444,13 @@ final class ShortcutManager {
             // at the current designed defaults (v2 reshuffle).
             Self.migrateDefaultsIfNeeded(&bindings)
             // Actions added after the user's bindings were persisted carry
-            // no entry — seed those with their designed defaults (e.g. the
-            // quick panel's ⌥C), so a new action is bound out of the box.
+            // no entry — seed those with their designed defaults, so a new
+            // action is bound out of the box. Skip a default that another
+            // action already holds — otherwise the seed would duplicate an
+            // existing binding (two rows claiming the same combination).
             for action in ShortcutAction.allCases where bindings[action] == nil {
-                if let combo = action.defaultCombo {
+                if let combo = action.defaultCombo,
+                   conflict(for: combo, excluding: action) == nil {
                     bindings[action] = Binding(combo: combo,
                                                 isGlobal: action.defaultGlobal && action.allowGlobal)
                 }

@@ -816,7 +816,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         // Window & Navigation
         case .showHideWindow: control.toggleShown()
-        case .showQuickPanel: QuickPanelController.shared.toggleShown()
         // ⌘P — app-only (the local monitor fires this just while the
         // control panel is focused); other apps' ⌘P is untouched
         case .pinPanel: control.togglePinned()
