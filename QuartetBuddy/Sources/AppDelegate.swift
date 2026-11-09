@@ -433,10 +433,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         2: ["hwout6", "hwout7"],
     ]
 
-    /// Firmware trim hard range: −24…0 dB (attenuation only). Clamped on
+    /// Firmware trim hard range: −10…0 dB (attenuation only). Clamped on
     /// EVERY path — settings write, reconnect push, DB readback — so no
     /// write and no saved value can leave the window.
-    static let hwoutTrimMin = -24.0
+    static let hwoutTrimMin = -10.0
     static let hwoutTrimMax = 0.0
 
     /// The saved settings-side hardware trims (`hwout.trim.<pair>`, set in

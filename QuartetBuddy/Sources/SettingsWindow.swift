@@ -1716,7 +1716,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
             // dash while it isn't (never a handle at a made-up position)
             let trimCell: NSView
             if row.pair != nil {
-                let slider = HwoutTrimSlider(value: 0, minValue: -24, maxValue: 0,
+                let slider = HwoutTrimSlider(value: 0, minValue: -10, maxValue: 0,
                                              target: self,
                                              action: #selector(hwoutTrimChanged(_:)))
                 slider.tag = 3700 + row.pair!
@@ -2053,7 +2053,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         sends, so it affects every app. A write goes to BOTH strips of
         the pair so they track together; a read shows the left strip's
         value (a pair trimmed apart on the touchscreen shows the left
-        one until touched). Range −24…0 dB, attenuation only.
+        one until touched). Range −10…0 dB, attenuation only.
         ⌘+click a slider to reset it to 0 dB. Values survive power
         cycles and are re-pushed from the saved settings on every
         reconnect.
