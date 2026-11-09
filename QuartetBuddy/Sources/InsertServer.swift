@@ -47,10 +47,13 @@ final class InsertServer: NSObject {
     /// docs/protocol-notes.md) — but that is DEVICE state, owned by
     /// Settings ▸ Quartet ▸ Outputs, not chain state.
     ///
-    /// Label map (live-mapped Oct 26 2026): hwout2…7 are MONO strips named
-    /// "Analog Out 1..6"; pairs are  Out 3‑4 → hwout2+3, Out 5‑6 → hwout4
-    /// +5, Out 7‑8 → hwout6+7. Out 1‑2 (Main Out) has NO trim property —
-    /// the main bus rides `gain`, which the OS fader binding owns.
+    /// Label map (re-mapped Nov 9 2026 against live listening tests): the
+    /// DAC strips' numbering starts AT Main Out — hwoutN feeds jack N−1 —
+    /// so the trim pairs are Out 1‑2 (Main) → hwout2+3, Out 3‑4 →
+    /// hwout4+5, Out 5‑6 → hwout6+7. The tree exposes no strips beyond
+    /// hwout7; the monitor strips hwout0/1 (Main / HP level faders)
+    /// carry `gain` — the OS fader binding owns them and they have no
+    /// trim property, so the headphone jack has no trim.
 
     // MARK: - The 4 stereo pairs
 

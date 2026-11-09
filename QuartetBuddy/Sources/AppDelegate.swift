@@ -409,22 +409,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// clients' hellos must not spam identical writes.
     private var pushedHardwareTrims: [Int: Double] = [:]
 
-    /// The line-out strips' firmware trim, pairs 1…3 — mono strips, so a
-    /// pair is TWO hwout nodes (hwout names are strip names "Analog Out
-    /// 1..6" = hwout2…7):
+    /// The DAC strips' firmware trim, pairs 0…2 — mono strips, so a pair
+    /// is TWO hwout nodes. The strip numbering starts AT Main Out:
+    /// hwoutN feeds jack N−1 (hwout2 = the strip behind the Main jacks
+    /// 1-2, hwout4 = jacks 3-4 …), while hwout0/1 are the separate
+    /// monitor strips (Main / HP level faders) that the OS fader
+    /// binding owns — the tree shows they carry gain/dim/mute, NO trim.
     ///
-    ///     pair 1 → hwout2 + hwout3 · pair 2 → hwout4 + hwout5 ·
-    ///     pair 3 → hwout6 + hwout7
+    ///     pair 0 → hwout2 + hwout3 · pair 1 → hwout4 + hwout5 ·
+    ///     pair 2 → hwout6 + hwout7
     ///
-    /// (MAPPING, corrected Nov 8 2026 against the live unit — the Oct 26
-    /// "one pair up" note was wrong: the jack numbers ARE the macOS pair
-    /// numbers. pair 1 = jack Out 3-4, pair 2 = jack Out 5-6, pair 3 =
-    /// jack Out 7-8 = the HEADPHONE pair — the touchscreen's "Analog Out
-    /// 1..6" numbering starts after Main Out consumes channels 1-2.)
+    /// (MAPPING, re-corrected Nov 9 2026 against live listening tests —
+    /// the Nov 8 table trimmed everything ONE PAIR DOWN: with it the
+    /// Out 3-4 slider attenuated Main Out 1-2, Out 5-6 hit jacks 3-4
+    /// and Headphones hit jacks 5-6. docs/captures/entire_tree.xml
+    /// confirms the unit exposes NO strips beyond hwout7: "Analog Out
+    /// 1..6" = the jack pairs 1-2 / 3-4 / 5-6, and the headphone jack's
+    /// level rides the hwout1 "HP" monitor strip — the Headphones row
+    /// has no trim register and shows its dash.)
     private static let hwoutTrimNodes: [Int: [String]] = [
-        1: ["hwout2", "hwout3"],
-        2: ["hwout4", "hwout5"],
-        3: ["hwout6", "hwout7"],
+        0: ["hwout2", "hwout3"],
+        1: ["hwout4", "hwout5"],
+        2: ["hwout6", "hwout7"],
     ]
 
     /// Firmware trim hard range: −24…0 dB (attenuation only). Clamped on
@@ -2209,38 +2215,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The strips' `trim` is a dB double applied by the firmware at the
         // DAC — downstream of everything macOS sends — so it listens to
         // ALL apps, not just this one's chain. Rows are PAIRS of the mono
-        // strips (Analog Out 1/2 = hwout2+hwout3 … 5/6 = hwout6+hwout7);
-        // a write goes to BOTH strips so the pair tracks together. Reads
-        // take the left strip's value: a pair whose strips were trimmed
-        // apart on the touchscreen shows the left one until touched.
+        // strips (Main 1-2 = hwout2+hwout3, Out 3-4 = hwout4+hwout5,
+        // Out 5-6 = hwout6+hwout7 — the strip behind jack N is
+        // hwoutN+1, and the tree exposes no strips beyond hwout7, so the
+        // headphone jack has no trim); a write goes to BOTH strips so the
+        // pair tracks together. Reads take the left strip's value: a pair
+        // whose strips were trimmed apart on the touchscreen shows the
+        // left one until touched.
         settingsWindow.readHwoutTrims = { [weak self] in
             guard let self else { return [] }
             // 11.7: the glue down ⇒ the registers, never the stale snapshot
             if self.glue.state != .connected {
-                return (1...3).map { pair -> (name: String, trim: Double?) in
-                    let idx = 2 * pair - 2   // hwout2, hwout4, hwout6 → 0, 2, 4
+                return (0...2).map { pair -> (name: String, trim: Double?) in
+                    let idx = 2 * pair      // hwout2, hwout4, hwout6 → 0, 2, 4
                     let v = self.directUSB.readInput(input: UInt16(idx), bRequest: 0x18)
-                    return ("Analog Out \(2 * pair - 1) / \(2 * pair)",
+                    return ("Out \(2 * pair + 1) / \(2 * pair + 2)",
                             v.map { -Double(Int($0)) / 10.0 })
                 }
             }
             guard let dev = self.deviceNode() else {
                 // 11.7 offline: the trim registers (0x18, |dB|×10); the pair's
                 // value = the LEFT strip's byte
-                return (1...3).map { pair -> (name: String, trim: Double?) in
-                    let idx = 2 * pair - 2   // hwout2, hwout4, hwout6 → 0, 2, 4
+                return (0...2).map { pair -> (name: String, trim: Double?) in
+                    let idx = 2 * pair      // hwout2, hwout4, hwout6 → 0, 2, 4
                     let v = self.directUSB.readInput(input: UInt16(idx), bRequest: 0x18)
-                    return ("Analog Out \(2 * pair - 1) / \(2 * pair)",
+                    return ("Out \(2 * pair + 1) / \(2 * pair + 2)",
                             v.map { -Double(Int($0)) / 10.0 })
                 }
             }
-            return (1...3).map { pair -> (name: String, trim: Double?) in
-                let left = GlueClient.findNode(in: dev, type: "hwout\(2 * pair)")
-                let right = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 1)")
+            return (0...2).map { pair -> (name: String, trim: Double?) in
+                let left = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 2)")
+                let right = GlueClient.findNode(in: dev, type: "hwout\(2 * pair + 3)")
                 let propsL = left.flatMap { $0["props"] as? [String: Any] }
                 let propsR = right.flatMap { $0["props"] as? [String: Any] }
-                let nameL = (propsL?["name"] as? String) ?? "Analog Out \(2 * pair - 1)"
-                let nameR = (propsR?["name"] as? String) ?? "Analog Out \(2 * pair)"
+                let nameL = (propsL?["name"] as? String) ?? "Out \(2 * pair + 1)"
+                let nameR = (propsR?["name"] as? String) ?? "Out \(2 * pair + 2)"
                 return ("\(nameL) / \(nameR)", left.flatMap { GlueClient.doubleProp($0, "trim") })
             }
         }

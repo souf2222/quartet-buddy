@@ -1591,19 +1591,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     var readHwoutRouting: (() -> [Int?])?
     var writeHwoutRouting: ((Int, Int) -> Void)?
     // --- Routing & hardware trim — ONE table, one row per destination.
-    // MAPPING (corrected Nov 8 2026 against the live unit; the Oct 26
-    // "one pair up" note was wrong): the jack numbers ARE the macOS pair
-    // numbers — Main Out = Out 1-2, and the touchscreen numbers the
-    // remaining strips "Analog Out 1…6" (= hwout2…7), which ARE the jack
-    // pairs Out 3-4 / 5-6 / 7-8. The headphone jack plays the Out 7-8
-    // pair, so ALL FOUR destinations have a 0x53 routing slot (0…3) and
-    // a hardware trim — Main Out is the only destination without a trim.
+    // MAPPING (re-corrected Nov 9 2026 against live listening tests — the
+    // Nov 8 table was one pair off): the DAC strips' numbering starts AT
+    // Main Out — hwoutN feeds jack N−1. Main Out = Out 1-2 (hwout2/3; its
+    // LEVEL rides the hwout0 monitor fader), Out 3-4 = hwout4/5, Out 5-6 =
+    // hwout6/7. The tree exposes no strips beyond hwout7 and the hwout1
+    // "HP" monitor strip carries gain, not trim — so the headphone jack
+    // has NO hardware trim (its row shows a dash). The three trim rows
+    // plus the all-four routing slots (0…3) stand.
     private static let outputRows: [(label: String, secondary: String,
                                      slot: Int?, pair: Int?)] = [
-        ("Main Out", "Out 1–2", 0, nil),
+        ("Main Out", "Out 1–2", 0, 0),
         ("Out 3–4", "", 1, 1),
         ("Out 5–6", "", 2, 2),
-        ("Headphones", "Out 7–8", 3, 3),
+        ("Headphones", "Out 7–8", 3, nil),
     ]
 
     /// Fixed row geometry so every destination's controls share columns.
@@ -1791,13 +1792,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         for i in 0..<6 {
             // the reference-level popup for one hardware line output (the
             // same analogRefLevel enum as the inputs: 2 = +4 dBu, 3 = −10 dBV).
-            // Out 3…8 = the hwout2…7 strips; Out 7/8 are the headphone pair.
-            let label = NSTextField(labelWithString: "Out \(3 + i)")
+            // Jacks 1…6 = the hwout2…7 strips (the strip behind jack N is
+            // hwoutN+1); the headphone jack (Out 7-8) has no ref level —
+            // its level rides the hwout1 "HP" monitor fader.
+            let label = NSTextField(labelWithString: "Out \(1 + i)")
             label.font = .systemFont(ofSize: 13)
             label.setContentCompressionResistancePriority(
                 NSLayoutConstraint.Priority(751), for: .horizontal)
             label.translatesAutoresizingMaskIntoConstraints = false
-            if i >= 4 { label.toolTip = "Headphones — the Out 7–8 pair" }
+            if i < 2 { label.toolTip = "Main Out — the Out 1–2 pair" }
             let p = NSPopUpButton()
             p.translatesAutoresizingMaskIntoConstraints = false
             p.addItem(withTitle: "+4 dBu")
@@ -1873,11 +1876,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     @objc private func hwoutTrimChanged(_ sender: NSSlider) {
         let pair = sender.tag - 3700
-        guard !hwoutTrimSuppress, (1...3).contains(pair) else { return }
+        guard !hwoutTrimSuppress, (0...2).contains(pair) else { return }
         let db = min(AppDelegate.hwoutTrimMax, max(AppDelegate.hwoutTrimMin,
             (sender.doubleValue * 2).rounded() / 2))   // 0.5 dB steps, clamped
         sender.doubleValue = db
-        hwoutTrimReadouts[pair - 1].stringValue = String(format: "%.1f dB", db)
+        hwoutTrimReadouts[pair].stringValue = String(format: "%.1f dB", db)
         writeHwoutTrim?(pair, db)
         QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
     }
@@ -1928,11 +1931,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         lastRoutingValues = routingRead
         routingSuppress = false
 
-        // hardware trims (pairs 1…3 = table rows 1…3)
+        // hardware trims (pairs 0…2 = the trim rows in order; the
+        // Headphones row has no trim register and keeps its dash)
         hwoutTrimSuppress = true
         let trims = readHwoutTrims?() ?? []
-        for pair in 1...3 {
-            let i = pair - 1
+        for pair in 0...2 {
+            let i = pair
             let slider = hwoutTrimSliders[i]
             let dash = hwoutTrimDashes[i]
             let readout = hwoutTrimReadouts[i]
@@ -2054,34 +2058,39 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         cycles and are re-pushed from the saved settings on every
         reconnect.
 
-        CONNECTOR MAP (corrected Nov 8 against the live unit — the Oct 26
-        "one pair up" note was wrong)
+        CONNECTOR MAP (re-corrected Nov 9 against live listening tests —
+        the Nov 8 map was one pair off; ear tests then showed the Out 3-4
+        trim changing Main Out, Out 5-6 changing jacks 3-4 and Headphones
+        changing jacks 5-6)
 
-        The jack numbers ARE the macOS pair numbers; Main Out consumes
-        Out 1-2, and the touchscreen numbers the remaining strips
-        "Analog Out 1…6" from hwout2…7:
+        The DAC strips' numbering starts AT Main Out — the strip behind
+        jack N is hwout(N+1), so the strips pair up as:
 
-            Main Out             = jack Out 1-2 (macOS 1-2, hwout0)
-            Out 3-4              = touchscreen "Analog Out 1/2" (hwout2/3)
-            Out 5-6              = touchscreen "Analog Out 3/4" (hwout4/5)
-            Headphones (Out 7-8) = touchscreen "Analog Out 5/6" (hwout6/7)
+            Main Out             = jack Out 1-2 (level = hwout0 monitor
+                                   fader, trim = hwout2/3)
+            Out 3-4              = strips hwout4/5
+            Out 5-6              = strips hwout6/7
+            Headphones (Out 7-8) = NO trim — the jack's level rides the
+                                   hwout1 "HP" monitor fader (the tree
+                                   exposes no strips beyond hwout7)
 
         The headphone jack plays the Out 7-8 pair, so all FOUR
         destinations have a routing slot (0-3) — the headphone slot's
-        default source = Playback 7-8. Main Out is the only destination
-        without a hardware trim. This page uses the jack identities
-        throughout; the unit's own strip names ("Analog Out 1…6",
-        renamable in Settings ▸ Quartet ▸ Channel Names) are what the
-        touchscreen shows.
+        default source = Playback 7-8. This page uses the jack
+        identities throughout; the unit's own strip names ("Analog Out
+        1…6", renamable in Settings ▸ Quartet ▸ Channel Names) are what
+        the touchscreen shows.
         """
 
     /// The implementation notes behind the reference-level ⓘ button.
     private static let refLevelTechNote = """
-        Each ¼" line output carries its own reference level — the same
+        Each DAC strip carries its own reference level — the same
         analogRefLevel setting the touchscreen's output page drives
-        (hwout2…7: 2 = +4 dBu, 3 = −10 dBV, the same enum as the input
-        levels). The six channels stay independent: pairs are NOT
-        linked, so the two halves of a jack pair may differ.
+        (hwout2…7 = jacks 1…6, Main Out included: 2 = +4 dBu,
+        3 = −10 dBV, the same enum as the input levels). The six strips
+        stay independent: pairs are NOT linked, so the two halves of a
+        jack pair may differ. The headphone jack (Out 7-8) has no ref
+        level — its level rides the hwout1 "HP" monitor fader.
 
         Reads come from the glue tree while Apogee's daemon is up,
         otherwise straight from the registers; the values live in the
