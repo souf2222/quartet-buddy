@@ -1817,16 +1817,16 @@ final class BankSegmentedControl: NSView {
 
     /// The two segments — real NSButtons (see BankSegment).
     let analog: BankSegment
-    let digital: BankSegment
+    let optical: BankSegment
 
     init(target: AnyObject?, action: Selector) {
         analog = BankSegment(title: "Analog 1–4", tag: 1500, target: target, action: action)
-        digital = BankSegment(title: "Optical 1–8", tag: 1501, target: target, action: action)
+        optical = BankSegment(title: "Optical 1–8", tag: 1501, target: target, action: action)
         analog.roundsLeading = true
-        digital.roundsTrailing = true
+        optical.roundsTrailing = true
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        for v in [analog, digital] as [NSView] {
+        for v in [analog, optical] as [NSView] {
             addSubview(v)
             v.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -1834,13 +1834,13 @@ final class BankSegmentedControl: NSView {
         // container's geometry is entirely these eight constraints
         NSLayoutConstraint.activate([
             analog.leadingAnchor.constraint(equalTo: leadingAnchor),
-            analog.trailingAnchor.constraint(equalTo: digital.leadingAnchor),
-            digital.trailingAnchor.constraint(equalTo: trailingAnchor),
-            analog.widthAnchor.constraint(equalTo: digital.widthAnchor),
+            analog.trailingAnchor.constraint(equalTo: optical.leadingAnchor),
+            optical.trailingAnchor.constraint(equalTo: trailingAnchor),
+            analog.widthAnchor.constraint(equalTo: optical.widthAnchor),
             analog.topAnchor.constraint(equalTo: topAnchor),
             analog.bottomAnchor.constraint(equalTo: bottomAnchor),
-            digital.topAnchor.constraint(equalTo: topAnchor),
-            digital.bottomAnchor.constraint(equalTo: bottomAnchor),
+            optical.topAnchor.constraint(equalTo: topAnchor),
+            optical.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1848,7 +1848,7 @@ final class BankSegmentedControl: NSView {
     /// The control hugs its segments: TWICE the wider segment's width
     /// (equal widths), the fixed height.
     override var intrinsicContentSize: NSSize {
-        let w = max(analog.intrinsicContentSize.width, digital.intrinsicContentSize.width)
+        let w = max(analog.intrinsicContentSize.width, optical.intrinsicContentSize.width)
         return NSSize(width: ceil(w) * 2, height: Self.controlHeight)
     }
 

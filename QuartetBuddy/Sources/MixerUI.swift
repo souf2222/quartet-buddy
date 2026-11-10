@@ -374,7 +374,7 @@ final class MixerBankView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: x, height: Self.height))
 
         // the group headings (tight against the strips)
-        let headings: [(String, Int, Int)] = [("ANALOG", 0, 3), ("DIGITAL", 4, 11),
+        let headings: [(String, Int, Int)] = [("ANALOG", 0, 3), ("OPTICAL", 4, 11),
                                               ("PLAYBACK", 12, n - 1)]
         for (text, from, to) in headings {
             let x0 = scaleFrames[headings.firstIndex(where: { $0.0 == text })!].minX

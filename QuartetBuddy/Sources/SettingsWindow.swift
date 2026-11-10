@@ -1316,10 +1316,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// The row model: label + the register channels the row drives (the
     /// Playback = one logical stereo channel, slot 12 in each side block).
     private static let mixerRows: [(label: String, channels: [UInt16])] = [
-        ("Analog 1", [0]), ("Analog 2", [1]), ("Analog 3", [2]), ("Analog 4", [3]),
-        ("Optical 1", [4]), ("Optical 2", [5]), ("Optical 3", [6]),
-        ("Optical 4", [7]), ("Optical 5", [8]), ("Optical 6", [9]),
-        ("Optical 7", [10]), ("Optical 8", [11]),
+        ("A1", [0]), ("A2", [1]), ("A3", [2]), ("A4", [3]),
+        ("O1", [4]), ("O2", [5]), ("O3", [6]),
+        ("O4", [7]), ("O5", [8]), ("O6", [9]),
+        ("O7", [10]), ("O8", [11]),
         ("Playback", [12]),
     ]
 
