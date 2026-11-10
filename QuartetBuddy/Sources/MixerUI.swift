@@ -4,7 +4,7 @@ import AppKit
 //
 // A presentation redesign (11/8): one mixer at a time via the segmented
 // selector, a horizontal bank of vertical channel strips (Analog 1-4,
-// Digital 1-8, Playback), graphite styling on the pane's charcoal. The
+// Optical 1-8, Playback), graphite styling on the pane's charcoal. The
 // control model is untouched — the strips drive the VERIFIED registers
 // through SettingsWindowController's closures: the input gains = the 0x10
 // blocks (one per stereo side), the playback = slots 12/13, pan = the L/R
@@ -333,7 +333,7 @@ final class MixerScaleColumn: NSView {
     }
 }
 
-/// The horizontal bank: 13 strips (Analog 1-4, Digital 1-8, Playback),
+/// The horizontal bank: 13 strips (Analog 1-4, Optical 1-8, Playback),
 /// a dB scale column at the left of each group, subtle separators +
 /// slightly larger gaps between the groups, the group headings on top.
 /// Fixed frames; the hosting scroll view scrolls horizontally at narrow

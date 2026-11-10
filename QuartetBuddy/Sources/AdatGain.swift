@@ -637,7 +637,7 @@ final class AdatGainEngine {
 /// of each strip's height, pushing the second ADAT row and the Outputs
 /// section far down. Now:
 ///
-///     Digital 1                  [ Assist… ]
+///     Optical 1                  [ Assist… ]
 ///     [━━━━━━━━━━ 4-pt meter ━━━━━━━━━━━ ▪ −24.1]
 ///
 ///     ↑ Increase external gain by 12 dB      ← only while the
@@ -675,7 +675,7 @@ final class AdatTile: NSView {
     var doneAction: (() -> Void)?
 
     private let marker = NSView()             // the assistant's focus marker
-    private let numberLabel = NSTextField(labelWithString: "Digital 1")
+    private let numberLabel = NSTextField(labelWithString: "Optical 1")
     private let nameLabel = NSTextField(labelWithString: "")
     /// The shared horizontal input meter with its inline held-peak
     /// readout — the analog bank's own meter occupies the strip's body.
@@ -703,7 +703,7 @@ final class AdatTile: NSView {
         // mode dropdown has no ADAT counterpart, and nothing in a
         // compact strip should take an empty row. Same name typography
         // as the analog strips (13-pt medium): one name treatment.
-        numberLabel.stringValue = "Digital \(index + 1)"
+        numberLabel.stringValue = "Optical \(index + 1)"
         numberLabel.font = GGTheme.nameFont
         numberLabel.textColor = GGTheme.primary
         numberLabel.lineBreakMode = .byTruncatingTail
@@ -765,7 +765,7 @@ final class AdatTile: NSView {
         // line in every state, so no reflow. Zones + held-peak marker +
         // transient target + clip lamp (click to reset) all inside.
         levelMeter.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        levelMeter.toolTip = "Digital input level via ADAT · Adjust gain on the external preamp"
+        levelMeter.toolTip = "Optical input level via ADAT · Adjust gain on the external preamp"
         col.addArrangedSubview(levelMeter)
         levelMeter.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
 

@@ -30,10 +30,10 @@ preamp gain, Auto Gain, 48V, soft limit, polarity, ganging — and the
 monitor bar (Speakers · Headphones) with their M/D/∑ chips, all live:
 
 
-**The Digital 1–8 bank** — the optical ADAT inputs as eight compact strips
-with the live meter and the Digital Gain Assistant:
+**The Optical 1–8 bank** — the optical ADAT inputs as eight compact strips
+with the live meter and the Optical Gain Assistant:
 
-![Digital inputs](docs/screenshots/digital-inputs.jpg)
+![Optical inputs](docs/screenshots/digital-inputs.jpg)
 
 **Settings ▸ Quartet ▸ Outputs** — one destination table with the
 **hardware output routing** (each output pair plays a USB playback pair
@@ -61,8 +61,8 @@ front-panel pad assignments:
 | **Live status** | The menubar tooltip and the Quartet Control window show both output levels in dB, mute, and talkback state — synced in real time with the hardware touchscreen, Apogee Control 2, and the app. |
 | **AU insert** | Run any AU plugin independently on each of the Quartet's 4 stereo pairs, with per-pair routing (own playback / mirror another pair with a selectable tap point on its chain — Pre-FX / Post-FX / Post-Trim / silence) in the Quartet Control window. No loopback driver, no default-device switch, volume keys unaffected. See [`docs/au-insert.md`](docs/au-insert.md`). |
 | **Quartet Control** | One unified audio-control window (the old "Quartet Console" + "Outputs & Plug-ins" merged) with an explicit signal flow: **inputs → outputs & routing → monitor**. Per analog input — analog level (Mic / +4 dBu / −10 dBV / Instrument), preamp gain (mic and instrument keep their own values — the slider edits the active mode's; hidden at the line levels), signal meter, +48V (Mic only), soft limit, polarity, and **ganging** (a chain-link toggle on each channel-pair's divider — inputs 1–2 and 3–4; linked preamps move together, mirrored by the app exactly like the touchscreen's linked faders). Per stereo output pair — destination name, source (a grouped menu whose second section picks where the signal is taken from a mirrored source's chain: Pre-FX / Post-FX / Post-Trim), processing slot (enable / open / replace), output trim. A persistent bottom strip keeps Main Speakers + Headphones monitor level, mute, dim, mono always visible while the rest scrolls, and the window's subtitle shows the device's name. Reads are always live (tree poll); **write ids are computed from the device serial via the cracked descriptor hash** (see [`docs/protocol-notes.md`](docs/protocol-notes.md)) — every control works on any Quartet, no setup, no capture. |
-| **Digital inputs (ADAT)** | A single compact **Analog 1–4 \| Digital 1–8** **segmented bank selector** in the Inputs section header (two equal-width segments in one shared dark container — switching banks only changes the displayed input view). The Digital bank shows the optical inputs — digital inputs 1–8 via ADAT — as eight compact channel strips (4 × 2) — channel heading with its **Assist…/Stop/Recheck** button on one row, then the SAME live meter the analog strips use (4-pt track, zones, held-peak marker, clip lamp) with the inline held-peak readout ("−12.4", one decimal, colored by the held value's band) at its right end. No circular readout, no gain knob, no 48V button: the Quartet's ADAT preamps are the external converter's, and the interface doesn't imply hardware control it doesn't have. The channel count follows the LIVE stream configuration (at 88.2/96 kHz each lightpipe carries four channels); off-stream channels read "—". Names are app-side (Settings ▸ Quartet ▸ Channel Names ▸ Digital Inputs). |
-| **Digital Gain Assistant** | Assisted Gain for Digital 1–8 (the optical ADAT inputs) — measurement and guidance, not automatic gain control, inline on each channel strip. It measures the selected channels' highest SAMPLE peak for the Settings-defined duration (default 5 s), compares it with the target (default −12 dBFS, ±2 dB) and shows a relative instruction — "↑ Increase external gain by 8 dB" — which stays FROZEN while the user turns the external preamp's knob; **Recheck** runs a fresh measurement and verifies. The loop: Listen → Recommend → Manual adjustment → Recheck → Verified. The button follows the session state (Assist… → Stop while listening → Recheck when frozen); the two-line guidance appears ONLY on the strip hosting the session — "Play your loudest section" / "Listening · 3 s" while measuring, a **trailing Done** text action when frozen (never glued to the instruction's tail) — and collapses on Done; the idle strips carry no reserved space, the row grows just the two lines while the session runs, and the window re-fits once per open/close. A take without usable signal reads "No signal during measurement" (signal arriving later still shows on the active meter), a clipped take "Input clipped" without an exact correction off the ceiling. One assistant runs at a time; it never changes the audio signal, and it cedes the device's IOProc when an analog Auto Gain calibration runs. |
+| **Optical inputs (ADAT)** | A single compact **Analog 1–4 \| Optical 1–8** **segmented bank selector** in the Inputs section header (two equal-width segments in one shared dark container — switching banks only changes the displayed input view). The Optical bank shows the optical inputs — digital inputs 1–8 via ADAT — as eight compact channel strips (4 × 2) — channel heading with its **Assist…/Stop/Recheck** button on one row, then the SAME live meter the analog strips use (4-pt track, zones, held-peak marker, clip lamp) with the inline held-peak readout ("−12.4", one decimal, colored by the held value's band) at its right end. No circular readout, no gain knob, no 48V button: the Quartet's ADAT preamps are the external converter's, and the interface doesn't imply hardware control it doesn't have. The channel count follows the LIVE stream configuration (at 88.2/96 kHz each lightpipe carries four channels); off-stream channels read "—". Names are app-side (Settings ▸ Quartet ▸ Channel Names ▸ Optical Inputs). |
+| **Optical Gain Assistant** | Assisted Gain for Optical 1–8 (the optical ADAT inputs) — measurement and guidance, not automatic gain control, inline on each channel strip. It measures the selected channels' highest SAMPLE peak for the Settings-defined duration (default 5 s), compares it with the target (default −12 dBFS, ±2 dB) and shows a relative instruction — "↑ Increase external gain by 8 dB" — which stays FROZEN while the user turns the external preamp's knob; **Recheck** runs a fresh measurement and verifies. The loop: Listen → Recommend → Manual adjustment → Recheck → Verified. The button follows the session state (Assist… → Stop while listening → Recheck when frozen); the two-line guidance appears ONLY on the strip hosting the session — "Play your loudest section" / "Listening · 3 s" while measuring, a **trailing Done** text action when frozen (never glued to the instruction's tail) — and collapses on Done; the idle strips carry no reserved space, the row grows just the two lines while the session runs, and the window re-fits once per open/close. A take without usable signal reads "No signal during measurement" (signal arriving later still shows on the active meter), a clipped take "Input clipped" without an exact correction off the ceiling. One assistant runs at a time; it never changes the audio signal, and it cedes the device's IOProc when an analog Auto Gain calibration runs. |
 | **Names** | Settings ▸ Names renames the hardware inputs (what the touchscreen and Apogee Control 2 show), the hardware outputs (Main Out / Headphones / Analog Out 1–6), and the app-side stereo-pair display names. |
 | **Hardware output routing** | Settings ▸ Quartet ▸ Outputs ▸ Routing & hardware trim: each output pair (Main Out = Out 1-2, Out 3-4, Out 5-6, Headphones = Out 7-8) plays a **USB playback pair** (Playback 1-2 / 3-4 / 5-6 / 7-8) or one of the **two hardware mixers** — the DAC's source selection, written straight to the unit's flash. The headphone's default = Playback 7-8. The touchscreen numbers the same jacks "Analog Out 1–6" (strip "Analog Out 1/2" = jack Out 3-4 … "Analog Out 5/6" = the Out 7-8 headphone pair); the ⓘ popover carries the full connector map. |
 | **Line out levels** | Settings ▸ Quartet ▸ Outputs ▸ Reference levels gives each of the six ¼" line outputs its own hardware reference level (+4 dBu / −10 dBV) — the grid runs Out 3…8 (the touchscreen's "Analog Out 1–6" strips; Out 7/8 are the headphone pair), the same knob the touchscreen's output settings drive. Independent channels, pairs not linked. |
@@ -147,7 +147,7 @@ the decoded registers):
    (the feedback guard), the dim off.
 
 **Settings ▸ Talkback** picks the source — any of the **12 inputs** (Analog
-1–4 = mixer channels 1–4, Optical/Digital 1–8 = 5–12) — the behavior (toggle /
+1–4 = mixer channels 1–4, Optical 1–8 = 5–12) — the behavior (toggle /
 hold-to-talk), and the MIDI trigger.
 
 Ear-verified protocol detail (11/8): the two mixer route bytes on
@@ -165,7 +165,7 @@ restored on release.
 Mixer 1 = block 0 (L) + block 1 (R), Mixer 2 = block 2 (L) + block 3 (R).
 Slots 0-11 = the inputs (gain = clamp(dB+48, 0…54) → −48…+6 dB; factory:
 Mixer 1 = 0x00 (−48, silent), Mixer 2 = 0x16 (−26 dB) — the "always-on
-mic" mystery was Mixer 2's Digital 1 sitting at −26 dB). **Slot 12 = THE
+mic" mystery was Mixer 2's Optical 1 sitting at −26 dB). **Slot 12 = THE
 PLAYBACK channel** (the tree's playback.mixerChannel = 12): the stereo
 playback spans the side blocks — **L block's slot 12 = playback L, R
 block's slot 13 = playback R** (factory 0x20 = −16 dB; the old 0x4C
@@ -175,7 +175,7 @@ difference** (verified: writing only block 2 moved the LEFT output
 channel). The marker bytes (0xA1 for inputs, 0x00 for the playback
 slots) must be preserved when rewriting slots.
 
-The UI: Mixer 1 / Mixer 2 sections, rows = Analog 1-4, Digital 1-8,
+The UI: Mixer 1 / Mixer 2 sections, rows = Analog 1-4, Optical 1-8,
 Playback (one stereo row — writes L slot 12 + R slot 13), fader
 (−48…+6 dB) + Pan (the L/R balance), live read-backs through the blocks.
 Route any output pair to Mixer 1/2 via the routing popups.

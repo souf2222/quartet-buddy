@@ -1035,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Round 1 learned: every candidate write is accepted, nothing was
     /// heard — but the round had three confounders: the HP sat at −44 dB,
     /// nobody was listening at the windows, and the round-2 relaunch had
-    /// the source on Analog 1 while the user's mic lives on Digital 1.
+    /// the source on Analog 1 while the user's mic lives on Optical 1.
     ///
     /// This round isn't silently-passable: the HP is boosted to −10 dB
     /// (the user's own earlier "LOUD" anchor), the MAIN OUTPUT is muted
@@ -1050,7 +1050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let ch = UInt16(max(0, min(11, talkbackSourceInput)))
-        let name = ch < 4 ? "Analog \(ch + 1)" : "Digital \(ch - 3)"
+        let name = ch < 4 ? "Analog \(ch + 1)" : "Optical \(ch - 3)"
         QBLog.log("tb-probe2: START — source = \(name) (mixer ch \(ch)); the FIRST window (A) starts 45 s from now, then one every 8 s — put the headphones ON and get ready")
 
         // save
@@ -1158,7 +1158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let routes = (0..<4).map { self.directUSB.readInput(input: UInt16($0), bRequest: 0x53).map { String($0) } ?? "?" }
             QBLog.log("mix-probe: 0x53 routes: \(routes.joined(separator: ","))")
-            // THE MUTE/SOLO HUNT: the mic (Digital 1, block-0 s4) open at
+            // THE MUTE/SOLO HUNT: the mic (Optical 1, block-0 s4) open at
             // 0 dB on byte 4. The user talks continuously; each stage flips
             // ONE candidate: the 0x4F mute register (wValue 0-3) or a
             // marker bit. The stage where the voice dies = the mute's home.
@@ -1266,7 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 timer.invalidate()
                 var lines: [String] = []
                 for ch in 0...11 {
-                    let name = ch < 4 ? "Analog \(ch + 1)" : "Digital \(ch - 3)"
+                    let name = ch < 4 ? "Analog \(ch + 1)" : "Optical \(ch - 3)"
                     if let db = best[ch] {
                         lines.append("mic-scan:   \(name): \(Int(db)) dBFS\(db > -50 ? "   ← SIGNAL" : "")")
                     } else {
@@ -1310,7 +1310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(3, forKey: "hwout.route.3")
             let r = self.directUSB.readInput(input: 3, bRequest: 0x53)
             let f4 = self.directUSB.readCell(wValue: 1, index: 4, bRequest: 0x4c)
-            QBLog.log("mix-restore: DONE — HP route ← 3 (rb \(r.map { String($0) } ?? "nil")), saved = 3; HP's Digital-1 cell fader rb \(f4.map { String($0) } ?? "nil") = 0 dB (open, but byte 3 carries no inputs)")
+            QBLog.log("mix-restore: DONE — HP route ← 3 (rb \(r.map { String($0) } ?? "nil")), saved = 3; HP's Optical-1 cell fader rb \(f4.map { String($0) } ?? "nil") = 0 dB (open, but byte 3 carries no inputs)")
         }
     }
 

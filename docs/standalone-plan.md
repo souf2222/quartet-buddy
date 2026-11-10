@@ -584,7 +584,7 @@ firmware MIRRORS the 0x49 slot 0 ↔ slot 3 on writes (write wI=0 changes
 both) — harmless for the 3 real pads. The mixer-source byte verdict (the
 11/8 ear tests): **0x04 = Mixer 1, 0x05 = Mixer 2** — Apogee's original
 6-source list. Byte 4 read "silent" once = the mic's channels were closed
-in Mixer 1 then (the mic feeds several Digital channels — 5-7 — per the
+in Mixer 1 then (the mic feeds several Optical channels — 5-7 — per the
 sealed-fader tests). **The FADER gates a mixer channel; the 0x4F byte
 does NOT mute** (the early "sealed" tests used 0x4F and the mic passed).
 The mixer-source TREE codes remain unknown (0x11-0x1A families all

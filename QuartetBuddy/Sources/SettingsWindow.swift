@@ -103,7 +103,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                                       "Analog output 3", "Analog output 4", "Analog output 5",
                                       "Analog output 6"]
     private static let pairLabels = ["Pair 1", "Pair 2", "Pair 3", "Pair 4"]
-    private static let adatLabels = (0..<8).map { "Digital \($0 + 1)" }
+    private static let adatLabels = (0..<8).map { "Optical \($0 + 1)" }
 
     private var nameFields: [NSTextField] = []
     private var nameSuppress = false
@@ -1157,8 +1157,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         nameBlock(into: stack, "Stereo Pair Names",
                   "Shown only in Quartet Buddy's window (defaults like \"Out 1–2\");\nleave empty to fall back to the physical pair name.",
                   Self.pairLabels, 5020)
-        nameBlock(into: stack, "Digital Inputs",
-                  "App-side names for the eight digital inputs via ADAT (shown\nin the Digital bank and Gain Assistant); leave empty to show\njust \"Digital n\".",
+        nameBlock(into: stack, "Optical Inputs",
+                  "App-side names for the eight optical inputs via ADAT (shown\nin the Optical bank and Gain Assistant); leave empty to show\njust \"Optical n\".",
                   Self.adatLabels, 5030)
         stack.addArrangedSubview(SettingsHelpText.label(
             "Press Return (or click away) to commit a rename; Esc cancels the edit."))
@@ -1317,9 +1317,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Playback = one logical stereo channel, slot 12 in each side block).
     private static let mixerRows: [(label: String, channels: [UInt16])] = [
         ("Analog 1", [0]), ("Analog 2", [1]), ("Analog 3", [2]), ("Analog 4", [3]),
-        ("Digital 1", [4]), ("Digital 2", [5]), ("Digital 3", [6]),
-        ("Digital 4", [7]), ("Digital 5", [8]), ("Digital 6", [9]),
-        ("Digital 7", [10]), ("Digital 8", [11]),
+        ("Optical 1", [4]), ("Optical 2", [5]), ("Optical 3", [6]),
+        ("Optical 4", [7]), ("Optical 5", [8]), ("Optical 6", [9]),
+        ("Optical 7", [10]), ("Optical 8", [11]),
         ("Playback", [12]),
     ]
 
@@ -2248,7 +2248,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         body.addArrangedSubview(LabeledSettingRow("Acceptable range",
                                                   control: assistTolerancePopup))
         body.addArrangedSubview(SettingsHelpText.label(
-            "Used by the Gain Assistant (Inputs ▸ Digital 1–8). Changes\napply to the next measurement — a running measurement keeps\nits own settings."))
+            "Used by the Gain Assistant (Inputs ▸ Optical 1–8). Changes\napply to the next measurement — a running measurement keeps\nits own settings."))
 
         // PLUG-INS
         SettingsSection.add(to: body, "Plug-ins")
@@ -2442,7 +2442,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         body.addArrangedSubview(LabeledSettingRow("Input channel", control: channelPopup))
         body.addArrangedSubview(SettingsHelpText.label(
             "Who the talkback listens to. Analog 1 is the device's first input,\n" +
-            "Digital 1–8 are the optical/ADAT inputs — the same source Apogee\n" +
+            "Optical 1–8 are the optical/ADAT inputs — the same source Apogee\n" +
             "Control 2's Talkback pane writes."))
 
         // ACTIVATION
@@ -2525,11 +2525,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     /// The Quartet's inputs in the app-wide naming (the control window's
-    /// banks): 4 analog + 8 optical — "Analog 1…4", then "Digital 1…8".
+    /// banks): 4 analog + 8 optical — "Analog 1…4", then "Optical 1…8".
     /// Any other device keeps its generic "Ch N".
     private static func channelTitle(inDevice device: String, index: Int) -> String {
         guard device == "Quartet" else { return "Ch \(index + 1)" }
-        return index < 4 ? "Analog \(index + 1)" : "Digital \(index - 3)"
+        return index < 4 ? "Analog \(index + 1)" : "Optical \(index - 3)"
     }
 
     @objc private func talkbackSourceChanged(_ sender: NSPopUpButton) {
