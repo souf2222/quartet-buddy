@@ -328,14 +328,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the volume keys did nothing. Now the session open reads the device's
     /// own faders (0x33) into the app's state, sets gainKnown, and enforces
     /// — which arms the listener. The keys work from the first second.
-    private func armMirrorFromDevice() {
+    ///
+    /// THE CONNECT READ (Nov 13): the read can fail while the device is
+    /// briefly busy after the session opens — a nil read at fresh launch
+    /// would silently leave the 0 dB defaults and pin THOSE onto the macOS
+    /// slider ("it starts at 0 dB"). So: every read is logged, a failed
+    /// read re-arms up to twice (1 s apart), and the slider pin waits for a
+    /// complete read (or the last attempt, best effort).
+    private func armMirrorFromDevice(attempt: Int = 1) {
+        var anyReadFailed = false
         for (target, ch) in [(OutputTarget.mainOut, 0), (.headphones, 1)] {
             if let v = directUSB.readInput(input: UInt16(ch), bRequest: 0x33) {
                 gain[target] = -Double(v)
+                QBLog.log(String(format: "mirror: %@ fader read %.0f dB (0x33)", target.rawValue, -Double(v)))
+            } else {
+                anyReadFailed = true
+                QBLog.log("mirror: \(target.rawValue) fader read (0x33) FAILED — device briefly busy after the session open?")
             }
         }
         gainKnown = true
-        syncMacSlider(force: true)
+        if !anyReadFailed || attempt >= 3 {
+            syncMacSlider(force: true)   // pin the macOS slider to the card's real level
+        }
+        if anyReadFailed && attempt < 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, self.directUSB.opened else { return }
+                self.armMirrorFromDevice(attempt: attempt + 1)
+            }
+        }
     }
 
     /// The gain write with the transport selection. Returns the dB applied
@@ -385,6 +405,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
             return
         }
+        // THE FIRST-PRESS GUARD: until one enforce() write has landed, the
+        // macOS slider is at macOS's own remembered position (often 0 dB
+        // right after connect — the connect-time pin write fails while the
+        // driver is busy). A key press now would read that stale position
+        // and slam it onto the fader (Nov 13: the "it starts at 0 dB"
+        // report). The pin retry (OSVolumeMirror.enforce) lands within a
+        // second or two; press after that and the keys work from the card's
+        // real level, as they should.
+        guard osSlider.pinnedOnce else {
+            QBLog.log(String(format: "mirror: dropped %.1f dB — the macOS slider isn't pinned to the card yet", db))
+            return
+        }
         let target = selectedOutput
         let current = gain[target] ?? 0
         if abs(db - current) <= 0.5 {
@@ -398,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard writeGain(target, db) else { return }
         gain[target] = db
         lastSliderDB = db
+        osSlider.noteLevel(db)      // rebind/retries must re-apply THIS level, not a stale snapshot
         refreshMenu()
     }
 
@@ -825,13 +858,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         osSlider.start()   // re-bind automatically when the Quartet is replugged
     }
 
-    /// ± dB adjustments (Test menu items).
+    /// ± dB adjustments (Test menu items). Via writeGain — same rule as
+    /// adjust(_:): no transport = no write = no phantom state.
     private func adjustGain(by delta: Double) {
         let target = selectedOutput
         let new = min(0, max(Self.minDB, (gain[target] ?? 0) + delta))
-        glue.setDouble(id: target.gainId, new)
+        guard writeGain(target, new) else { return }
         gain[target] = new
         syncMacSlider()
+        osSlider.noteLevel(new)
         refreshMenu()
     }
 
@@ -1356,18 +1391,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// ± dB adjustment on one output (hardware fader, range-clamped).
+    /// Via writeGain: no transport = no write = no phantom state (the blind
+    /// glue.setDouble used to adopt a level the card never got, and the
+    /// mirror then pinned that phantom onto the macOS slider).
     private func adjust(_ t: OutputTarget, _ delta: Double) {
         let new = min(0, max(Self.minDB, (gain[t] ?? 0) + delta))
         guard abs(new - (gain[t] ?? 0)) > 0.01 else { return }
-        glue.setDouble(id: t.gainId, new)
+        guard writeGain(t, new) else { return }
         gain[t] = new
         syncMacSlider()
+        osSlider.noteLevel(new)
     }
 
     /// Hardware mute toggle per output target.
     private func toggleMute(_ t: OutputTarget) {
         let new = !(muted[t] ?? false)
-        glue.setBool(id: t.muteId, new)
+        guard writeMute(t, new) else { return }
         muted[t] = new
     }
 

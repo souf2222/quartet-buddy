@@ -111,6 +111,15 @@ final class GlueClient: NSObject, StreamDelegate {
                 let n = out.write(ptr.bindMemory(to: UInt8.self).baseAddress!, maxLength: frame.count)
                 if n < 0 {
                     QBLog.log("glue: WRITE FAILED: \(out.streamError?.localizedDescription ?? "?")")
+                    // A dead socket must stop pretending: the transport
+                    // selection (AppDelegate.writeGain) checks `state`, and a
+                    // zombie .connected sent every volume write into the void
+                    // while the mirror kept adopting levels the card never
+                    // got ("WRITE FAILED: Connection refused" in the Nov 13
+                    // log). Flip to .disconnected: the next writes fall back
+                    // to direct-USB and the reconnect timer re-syncs from a
+                    // fresh tree (applyTree re-reads the real faders).
+                    self.setState(.disconnected)
                 }
             }
         }

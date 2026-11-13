@@ -43,7 +43,24 @@ final class OSVolumeMirror {
     private var listenedDevice: AudioDeviceID?
     private var listenerProc: AudioObjectPropertyListenerProc?
     private var cachedDeviceID: AudioDeviceID?
+    /// The level the mirror believes the macOS slider should be at — the
+    /// card's real fader. Updated by enforce(_:) AND by noteLevel(_:) (the
+    /// app applying an OS slider move / hotkey step to the fader). rebind()
+    /// and the retry chain re-apply THIS, so they must never hold a stale
+    /// snapshot: the Nov 13 bug — the user's first key press after connect
+    /// started at 0 dB — was a stale snapshot snapping the macOS slider
+    /// back to the connect-time value after the user had already moved on.
     private var lastEnforcedDB: Double?
+    /// True once an enforce() WRITE has actually landed on the current
+    /// Quartet device. Until then the macOS slider sits at whatever macOS
+    /// last remembered (often 0 dB after connect — the driver is briefly
+    /// busy right after the USB session opens and the first write fails),
+    /// so a key press in that window would read the STALE position and slam
+    /// it onto the fader — the loud first-press jump. The app drops slider
+    /// events until this is true (AppDelegate.osSliderMoved). Reset by
+    /// rebind() (a replugged Quartet = a fresh CoreAudio device whose
+    /// slider position is macOS's remembered value again).
+    private(set) var pinnedOnce = false
     /// The last OS mute state delivered upward (nil before the first read).
     /// The listener proc fires on ANY output-property notification — volume
     /// writes included — so without a baseline a stale OS mute would be
@@ -93,7 +110,19 @@ final class OSVolumeMirror {
         guard let db = lastEnforcedDB else { return }
         cachedDeviceID = nil
         listenedDevice = nil     // force fresh listener registration
+        pinnedOnce = false       // the new device's slider position is unknown until a write lands
         enforce(db)
+    }
+
+    /// The app changed the fader WITHOUT an enforce — an OS slider move
+    /// applied to the card (the macOS → Quartet half), a hotkey step.
+    /// Remember it: rebind() and any pending write-retry must re-apply the
+    /// CURRENT level, never the last value this class itself pushed onto
+    /// the slider (that stale value was the "first key press starts at
+    /// 0 dB after connect" bug). Main-thread only, like enforce().
+    func noteLevel(_ db: Double) {
+        guard db.isFinite, db >= -65, db <= 1 else { return }
+        lastEnforcedDB = db
     }
 
     /// The Quartet's CoreAudio device id, by name (nil if not present).
@@ -138,8 +167,19 @@ final class OSVolumeMirror {
         }
         if Self.write(decibels: db, to: dev) {
             QBLog.log(String(format: "slider sync: macOS slider -> %.1f dB", db))
+            pinnedOnce = true
+            cancelRetry()
         } else if !Self.volumeControlMissing {
             QBLog.log("slider sync: slider write failed")
+            // THE CONNECT-TIME PIN: right after the USB session opens the
+            // Apogee driver is briefly busy and the write fails — without a
+            // retry the macOS slider stayed at macOS's remembered position
+            // (0 dB after a replug) while the mirror already claimed to be
+            // synced, so the user's FIRST key press stepped from 0 dB and
+            // slammed that onto the fader (Nov 13, four sessions in a row:
+            // "slider write failed" at connect, no retry, then the jump).
+            // Retry on the same ladder as the no-device case above.
+            scheduleRetry()
         }
     }
 
