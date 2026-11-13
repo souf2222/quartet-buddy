@@ -73,7 +73,7 @@ final class QuickPanelController: NSObject, NSWindowDelegate {
             sumToggles[o].isEnabled = connected && !learning
             sumToggles[o].state = (st.sum ?? false) ? .on : .off
             markers[o].layer?.backgroundColor = (o == target
-                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
+                ? GGTheme.accent.cgColor : NSColor.clear.cgColor)
         }
         let tb = control.talkbackState?() ?? false
         talkbackButton?.state = tb ? .on : .off
@@ -102,15 +102,15 @@ final class QuickPanelController: NSObject, NSWindowDelegate {
         content.wantsLayer = true
         content.layer?.cornerRadius = 12
 
-        // quiet dark surface, like the main window's
-        let blur = NSVisualEffectView()
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.material = .windowBackground
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 12
-        content.addSubview(blur, positioned: .below, relativeTo: nil)
+        // THEME: the same flat neutral-charcoal surface as the main
+        // window — no material, no blur.
+        let backdrop = NSView()
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.wantsLayer = true
+        backdrop.layer?.backgroundColor = GGTheme.background.cgColor
+        backdrop.layer?.cornerRadius = 12
+        backdrop.layer?.masksToBounds = true
+        content.addSubview(backdrop, positioned: .below, relativeTo: nil)
 
         let title = NSTextField(labelWithString: "Quartet · Quick Control")
         title.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
@@ -163,10 +163,10 @@ final class QuickPanelController: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(globals)
 
         NSLayoutConstraint.activate([
-            blur.topAnchor.constraint(equalTo: content.topAnchor),
-            blur.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            blur.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            backdrop.topAnchor.constraint(equalTo: content.topAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             title.topAnchor.constraint(equalTo: content.topAnchor, constant: 9),
             title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             stack.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),

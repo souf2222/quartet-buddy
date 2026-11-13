@@ -10,8 +10,9 @@ import AppKit
 // blocks (one per stereo side), the playback = slots 12/13, pan = the L/R
 // balance, mute/solo = app-level (gains to −48, the state remembered).
 
-/// The vertical level fader: −48…+6 dB, a slim dark track, a unity tick
-/// and a compact graphite handle. ⌘+click = 0 dB; the wheel nudges ±1 dB.
+/// The vertical level fader: −48…+6 dB, a slim recessed track, a unity
+/// tick and a compact medium-gray handle. ⌘+click = 0 dB; the wheel
+/// nudges ±1 dB.
 final class VFaderControl: NSView {
     static let minDB: Double = -48
     static let maxDB: Double = 6
@@ -44,24 +45,25 @@ final class VFaderControl: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let tr = trackRect
         let track = NSBezierPath(roundedRect: tr, xRadius: 2, yRadius: 2)
-        NSColor(white: 0.15, alpha: 1).setFill()
+        // the well: recessed — darker than the strip's charcoal panel
+        GGTheme.inset.setFill()
         track.fill()
-        NSColor(white: 0.3, alpha: 1).setStroke()
+        GGTheme.idleBorder.setStroke()
         track.lineWidth = 1
         track.stroke()
         // the unity tick (0 dB)
         NSColor(white: 1, alpha: 0.26).setFill()
         NSRect(x: tr.minX - 5, y: y(forDB: 0) - 0.5, width: tr.width + 10, height: 1).fill()
-        // the handle
+        // the handle — medium gray, light center line
         let hy = y(forDB: dB)
         let handle = NSRect(x: (bounds.width - 26) / 2, y: hy - 6, width: 26, height: 12)
         let hp = NSBezierPath(roundedRect: handle, xRadius: 3, yRadius: 3)
-        NSColor(white: faderEnabled ? 0.33 : 0.24, alpha: 1).setFill()
+        (faderEnabled ? GGTheme.control : GGTheme.subduedFill).setFill()
         hp.fill()
-        NSColor(white: faderEnabled ? 0.52 : 0.36, alpha: 1).setStroke()
+        NSColor(white: 1, alpha: faderEnabled ? 0.30 : 0.16).setStroke()
         hp.lineWidth = 1
         hp.stroke()
-        NSColor(white: 0.88, alpha: faderEnabled ? 1 : 0.35).setFill()
+        GGTheme.offWhite.withAlphaComponent(faderEnabled ? 1 : 0.35).setFill()
         NSRect(x: handle.midX - 9, y: hy - 0.5, width: 18, height: 1).fill()
     }
 
@@ -115,9 +117,9 @@ final class HPanControl: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let tr = trackRect
         let track = NSBezierPath(roundedRect: tr, xRadius: 1.5, yRadius: 1.5)
-        NSColor(white: 0.15, alpha: 1).setFill()
+        GGTheme.inset.setFill()
         track.fill()
-        NSColor(white: 0.3, alpha: 1).setStroke()
+        GGTheme.idleBorder.setStroke()
         track.lineWidth = 1
         track.stroke()
         // the center tick
@@ -127,9 +129,9 @@ final class HPanControl: NSView {
         let tx = x(forByte: panByte)
         let thumb = NSRect(x: tx - 5, y: (bounds.height - 9) / 2, width: 10, height: 9)
         let tp = NSBezierPath(roundedRect: thumb, xRadius: 2.5, yRadius: 2.5)
-        NSColor(white: faderEnabled ? 0.33 : 0.24, alpha: 1).setFill()
+        (faderEnabled ? GGTheme.control : GGTheme.subduedFill).setFill()
         tp.fill()
-        NSColor(white: faderEnabled ? 0.52 : 0.36, alpha: 1).setStroke()
+        NSColor(white: 1, alpha: faderEnabled ? 0.30 : 0.16).setStroke()
         tp.lineWidth = 1
         tp.stroke()
     }
@@ -157,8 +159,9 @@ final class HPanControl: NSView {
     }
 }
 
-/// The Mute / Solo button: graphite when inactive; a muted red for the
-/// active mute and an amber for the active solo — fill + label contrast.
+/// The Mute / Solo button: graphite when inactive; RED for the active
+/// mute and MUSTARD for the active solo — the theme's fixed state
+/// colors (fill + dark label for contrast on both).
 final class MSButton: NSView {
     enum Kind { case mute, solo }
     var kind: Kind = .mute { didSet { needsDisplay = true } }
@@ -173,18 +176,19 @@ final class MSButton: NSView {
         let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                              xRadius: 4, yRadius: 4)
         let active: NSColor = kind == .mute
-            ? NSColor(red: 0.75, green: 0.30, blue: 0.24, alpha: 1)
-            : NSColor(red: 0.80, green: 0.60, blue: 0.20, alpha: 1)
+            ? GGTheme.red
+            : GGTheme.soloYellow
         let lit = isOn && faderEnabled
-        (lit ? active : NSColor(white: 0.2, alpha: 1)).setFill()
+        (lit ? active : NSColor(white: 1, alpha: 0.07)).setFill()
         r.fill()
-        NSColor(white: lit ? 0.55 : 0.3, alpha: 1).setStroke()
+        NSColor(white: 1, alpha: lit ? 0.35 : 0.16).setStroke()
         r.lineWidth = 1
         r.stroke()
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-            .foregroundColor: lit ? NSColor.white
-                : (faderEnabled ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor),
+            // dark ink on the red/mustard fills; readable grays otherwise
+            .foregroundColor: lit ? GGTheme.darkText
+                : (faderEnabled ? GGTheme.softGray : GGTheme.muted),
         ]
         let s = NSAttributedString(string: label, attributes: attrs)
         let sz = s.size()
@@ -235,12 +239,14 @@ final class MixerStrip: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: stripWidth, height: Self.height))
 
         nameLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        nameLabel.textColor = GGTheme.primary
         nameLabel.alignment = .center
         panReadout.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        panReadout.textColor = GGTheme.softGray
         panReadout.alignment = .center
         levelReadout.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         levelReadout.alignment = .center
-        levelReadout.textColor = .labelColor
+        levelReadout.textColor = GGTheme.offWhite
 
         // fixed frames — top-down → AppKit bottom-up (h = 232)
         nameLabel.frame = NSRect(x: 0, y: Self.height - 16, width: stripWidth, height: 14)
@@ -299,7 +305,7 @@ final class MixerScaleColumn: NSView {
         super.init(frame: frame)
         let lb = NSTextField(labelWithString: "dB")
         lb.font = .systemFont(ofSize: 9, weight: .medium)
-        lb.textColor = .secondaryLabelColor
+        lb.textColor = GGTheme.softGray
         lb.alignment = .center
         lb.frame = NSRect(x: 0, y: frame.height + 3, width: frame.width, height: 11)
         addSubview(lb)
@@ -316,7 +322,7 @@ final class MixerScaleColumn: NSView {
             NSRect(x: bounds.width - 8, y: y - 0.5, width: unity ? 8 : 5, height: 1).fill()
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 8, weight: unity ? .medium : .regular),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: GGTheme.softGray,
             ]
             let s = NSAttributedString(string: text, attributes: attrs)
             let sz = s.size()
@@ -324,7 +330,7 @@ final class MixerScaleColumn: NSView {
             if unity {
                 let u = NSAttributedString(string: "unity", attributes: [
                     .font: NSFont.systemFont(ofSize: 6.5),
-                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .foregroundColor: GGTheme.muted,
                 ])
                 let usz = u.size()
                 u.draw(at: NSPoint(x: bounds.width - 10 - usz.width, y: y - sz.height / 2 - usz.height - 1))
@@ -381,7 +387,7 @@ final class MixerBankView: NSView {
             let x1 = frames[to].maxX
             let lb = NSTextField(labelWithString: text)
             lb.font = .systemFont(ofSize: 9, weight: .medium)
-            lb.textColor = .secondaryLabelColor
+            lb.textColor = GGTheme.softGray
             lb.alignment = .center
             lb.frame = NSRect(x: x0, y: MixerStrip.height + 2,
                               width: x1 - x0, height: 12)
@@ -391,7 +397,7 @@ final class MixerBankView: NSView {
         for sx in separatorXs {
             let v = NSView(frame: NSRect(x: sx, y: 6, width: 1, height: Self.height - 24))
             v.wantsLayer = true
-            v.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+            v.layer?.backgroundColor = GGTheme.idleBorder.withAlphaComponent(0.55).cgColor
             addSubview(v)
         }
         // the scale columns

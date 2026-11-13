@@ -65,82 +65,118 @@ import CoreText
 /// routing state lives in InsertServer, and Learn mode captures missing
 /// ids by listening to the live event stream.
 
-// MARK: - Theme (native macOS: system colors + a few app accents)
+// MARK: - Theme — one semantic palette, shared by every surface
+//
+// A neutral, subtly warm charcoal scheme with restrained functional
+// accents (the mixer-console look): almost every surface is a gray,
+// and color appears ONLY where it carries state:
+//
+//   blue    — selection + enabled processing (plug-in slots, SL, ∑)
+//   green   — live activity (meter fills, knob arcs)
+//   purple  — Auto Gain running
+//   mustard — active solo + DIM
+//   red     — active mute, 48V, clipping, errors
+//   orange  — input monitoring / talkback, polarity (Ø)
+//   gray    — everything inactive (idle, hover, disabled: neutral)
 
 enum GGTheme {
-    // Text — the system label hierarchy (dark appearance in effect).
+    // Surfaces — the fixed neutrals everything is drawn on.
 
-    /// Primary text — names, values, titles.
-    static let primary = NSColor.labelColor
-    /// Secondary text — labels.
-    static let softGray = NSColor.secondaryLabelColor
-    /// Muted text — supporting metadata only.
-    static let muted = NSColor.tertiaryLabelColor
+    /// The window and pane background — neutral warm charcoal.
+    static let background = hex("252624")
+    /// The sidebar surface — a step darker than the content pane.
+    static let sidebarFill = hex("1F201E")
+    /// Recessed areas — meter wells, numeric fields, bank container:
+    /// clearly darker than the panel they sit in.
+    static let inset = hex("1C1D1B")
+    /// The CONTROL surface — dropdowns, inactive buttons, fader
+    /// handles: a clear step lighter than the background.
+    static let control = hex("393A37")
+    /// A quiet divider / control edge — the hairline everywhere.
+    static let idleBorder = hex("484A45")
 
-    /// The ONE interaction color — the system accent (focus, selection,
-    /// and the neutral active functions: Ø, SUM, plug-in enable,
-    /// Auto Gain running).
-    static let accent = NSColor.controlAccentColor
+    // Text — fixed grays (every window forces darkAqua, so the system
+    // dynamic label colors are not needed).
 
-    /// The pin's SELECTED blue — every blue on the pin toggle (ink,
-    /// bed, border) is this one flat color with alpha, not the system
-    /// accent, so the toggle's selected look is its own.
-    static let pinBlue = hex("266FB6")
+    /// Primary text — names, values, titles: warm off-white.
+    static let primary = hex("ECEDE9")
+    /// Secondary text — units, group headings, supporting labels.
+    static let softGray = hex("A4A69F")
+    /// Muted text — supporting metadata, disabled-but-readable labels.
+    static let muted = hex("7E817A")
+
+    /// The ONE interaction blue — selection, focus markers, enabled
+    /// processing (Ø, SL, ∑, plug-in enable). Deeper than the old
+    /// electric blue: a mixer-console slot blue.
+    static let accent = hex("0876B5")
+
+    /// The pin's SELECTED blue — the same slot blue as `accent`, named
+    /// for the pin toggle's ink/bed/border trio.
+    static let pinBlue = accent
 
     // Function accents — flat fills when engaged, neutral otherwise.
     // ONE job per color:
-    //   blue   — selection, focus, enabled processing
-    //   green  — knob arcs + healthy-signal meters (+ talkback)
-    //   cyan   — enabled Soft Limit
-    //   purple — enabled polarity (Ø)
-    //   amber  — enabled DIM
-    //   red    — enabled 48V, active mute, errors
-    //   gray   — everything inactive
+    //   blue    — selection + enabled processing (plug-in slots, SL, ∑)
+    //   green   — live activity: knob arcs, healthy meters
+    //   purple  — Auto Gain running
+    //   mustard — active solo + enabled DIM
+    //   red     — active mute, enabled 48V, clipping, errors
+    //   orange  — talkback / input monitoring, polarity (Ø)
+    //   gray    — everything inactive
 
-    /// Green — knob value arcs, healthy-signal meters, talkback.
-    static let green = hex("46C58A")
-    /// Cyan — Soft Limit engaged.
-    static let cyan = hex("50D8F4")
-    /// Purple — polarity (Ø) engaged.
-    static let purple = hex("B08CFF")
-    /// Amber — DIM engaged.
-    static let amber = hex("E7AE49")
-    /// Red — 48V engaged, Mute engaged, global mute, clipping warnings.
-    static let red = hex("E3636D")
+    /// Green — knob value arcs, healthy-signal meters, Auto Gain.
+    static let green = hex("19C35A")
+    /// Blue — Soft Limit engaged (the slot blue, restrained).
+    static let softLimit = accent
+    /// Orange — polarity (Ø) engaged: the monitoring orange (phase is
+    /// what you check while monitoring the source).
+    static let polarity = monitorOrange
+    /// Mustard — DIM engaged (and the meters' caution zone).
+    static let amber = hex("B99A00")
+    /// Red — 48V engaged, clipping warnings, errors.
+    static let red = hex("CE3548")
     static let warning = red
+
+    // State colors with FIXED meanings across every view:
+    /// MUSTARD — solo engaged (mixer S).
+    static let soloYellow = hex("B99A00")
+    /// ORANGE — talkback / input monitoring active.
+    static let monitorOrange = hex("C57822")
 
     // Toolbar state palette — STATE-driven fills (never hover/focus):
     //   talkback orange while active · green while unmuted · red while
     //   muted · purple while Auto Gain runs · neutral gray at rest.
-    /// Talkback ACTIVE — solid orange.
-    static let talkbackActive = hex("E68A32")
+    /// Talkback ACTIVE — solid monitoring orange.
+    static let talkbackActive = monitorOrange
     /// Global mute tile — green while the outputs are UNMUTED.
-    static let muteIdle = hex("35BA68")
+    static let muteIdle = green
     /// Global mute tile — red while Mute All is engaged.
-    static let muteEngaged = hex("E25560")
-    /// Auto Gain All — solid purple for the WHOLE run (measure + apply).
-    static let autoGainRun = hex("9255C8")
+    static let muteEngaged = red
+    /// PURPLE — Auto Gain running: solid purple for the WHOLE run
+    /// (measure + apply).
+    static let purple = hex("9255C8")
+    static let autoGainRun = purple
 
-    /// Near-black label ON flat accent fills.
-    static let darkText = hex("101318")
+    /// Near-black label ON flat accent fills (dark enough to read on
+    /// the red and mustard fills; readable on the blue).
+    static let darkText = hex("141513")
 
     // Sample-rate readout (monitor-bar selector) — a compact numeric
     // instrument display.
     /// The selector's flat charcoal container (legacy).
-    static let sampleFill = hex("25262C")
-    /// The readout's flat, NEARLY BLACK surface — just darker than the
-    /// toolbar material (no gradient, no border, no glow).
-    static let sampleReadoutFill = hex("14141A")
-    /// The primary readout text — cool off-white.
-    static let sampleValue = hex("DEE3ED")
+    static let sampleFill = hex("2B2C29")
+    /// The readout's recessed numeric well — darker than the panel.
+    static let sampleReadoutFill = inset
+    /// The primary readout text — warm off-white.
+    static let sampleValue = hex("ECEDE9")
     /// The unit ("Hz") — muted, less dominant than the number.
-    static let sampleUnit = hex("A8AFBD")
+    static let sampleUnit = hex("A4A69F")
 
     // Level-meter markers:
     /// Medium blue — the Auto Gain target marker on the input meters.
-    static let scanTrail = hex("3FA9F5")
+    static let scanTrail = hex("4E9FD6")
     /// Off-white — the held-peak marker on the input meters.
-    static let offWhite = hex("E6E8EB")
+    static let offWhite = hex("ECEDE9")
 
     // Knob — the app's one custom control: a LAYERED FLAT dial. A thick
     // charcoal track → a lighter solid center disk → the off-white
@@ -148,15 +184,15 @@ enum GGTheme {
     // gradients, bevels, glow or shadows — and every neutral is an
     // alpha-white, so the layers adapt to whatever dark panel they sit
     // on:
-    //   near-black panel  <  track (lifted charcoal)  <  disk (a clear
-    //   step lighter)  <  value (off-white, the brightest detail).
+    //   charcoal panel  <  track (lifted)  <  disk (a clear step
+    //   lighter)  <  value (off-white, the brightest detail).
 
     /// The CENTER DISK — the knob's solid "body": a clear step lighter
     /// than the panel, so it reads as the top layer inside the track.
     /// Kept DARK enough to sit IN the panel rather than float above it.
     static let knobCenter = NSColor(white: 1, alpha: 0.22)
     /// The UNFILLED portion of the thick outer track — charcoal lifted
-    /// just enough to stay visible on the near-black panel, and still
+    /// just enough to stay visible on the charcoal panel, and still
     /// clearly darker than the center disk.
     static let knobTrack = NSColor(white: 1, alpha: 0.14)
     /// The green value arc riding on the track — a LIVE, known value
@@ -175,17 +211,16 @@ enum GGTheme {
     /// joins.
     static let flowLine = NSColor(white: 1, alpha: 0.32)
 
-    // Idle custom controls — quiet, system-adjacent neutrals.
+    // Idle custom controls — quiet neutrals over the charcoal panel.
+    // The alpha-whites land ON `background` at the palette's surface
+    // values: α0.10 ≈ `control`, α0.16 ≈ the hover surface.
 
     static let idleFill = NSColor(white: 1, alpha: 0.10)
-    static let idleBorder = NSColor.separatorColor
-    static let idleLabel = NSColor.secondaryLabelColor
+    static let idleLabel = softGray
     static let hoverFill = NSColor(white: 1, alpha: 0.16)
     /// DISABLED function controls — dimmer than idle-but-available (an
     /// available-but-off button must never look unusable).
     static let subduedFill = NSColor(white: 1, alpha: 0.04)
-    /// Recessed areas — plug-in well, meter bed.
-    static let inset = NSColor(white: 0, alpha: 0.18)
 
     // Inputs bank segmented control — ONE shared recessed container with
     // two equal-width segments. Graphite selection, deliberately NOT the
@@ -357,7 +392,7 @@ final class Hairline: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = NSColor.separatorColor.cgColor
+        layer?.backgroundColor = GGTheme.idleBorder.cgColor
         heightAnchor.constraint(equalToConstant: 1).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1888,9 +1923,9 @@ final class BankSegmentedControl: NSView {
 /// focus ring never reads as the purple linked look.
 final class LinkPairButton: FunctionButton {
 
-    /// The ganging state color — vivid purple, deliberately NOT the Ø
-    /// polarity or Auto Gain purples: ganging is its own function.
-    static let ink = GGTheme.hex("A970FF")
+    /// The ganging state color — the slot blue, shared with the other
+    /// enabled-processing accents: ganging links a stereo pair.
+    static let ink = GGTheme.accent
 
     /// "inputs 1 and 2" / "inputs 3 and 4" — the tooltip's + label part.
     private let pairText: String
@@ -1930,7 +1965,7 @@ final class LinkPairButton: FunctionButton {
             GGTheme.subduedFill.setFill()
             path.fill()
         } else if engaged {
-            // LINKED: subtle purple bed + thin purple border — persistent
+            // LINKED: subtle blue bed + thin blue border — persistent
             Self.ink.withAlphaComponent(0.16).setFill()
             path.fill()
             Self.ink.withAlphaComponent(0.5).setStroke()
@@ -2284,7 +2319,7 @@ final class PluginSlotView: NSControl {
         // of one control, never as three small buttons inside a frame.
         // the keyboard-picked area — the accent follows the selection
         if focused, hoverArea < 0 {
-            NSColor.controlAccentColor.withAlphaComponent(0.20).setFill()
+            GGTheme.accent.withAlphaComponent(0.20).setFill()
             NSBezierPath(rect: areaRect(selectedArea)).fill()
         }
         // the hovered area — a restrained lift
@@ -2645,9 +2680,11 @@ class IconButton: FunctionButton {
             path.lineWidth = 1
             path.stroke()
         }
-        // WHITE icons on the colored tiles, quiet label grays otherwise.
+        // DARK ink on the colored tiles (the fills are deep — red,
+        // mustard-orange, green — so near-black glyphs read best),
+        // quiet label grays otherwise.
         let color: NSColor = !enabled && !onColoredTile ? .disabledControlTextColor
-            : onColoredTile ? .white : GGTheme.idleLabel
+            : onColoredTile ? GGTheme.darkText : GGTheme.idleLabel
         drawGlyph(color: color)
     }
 
@@ -4002,21 +4039,19 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         // + footer ≈ 624pt) with no scrollbar at the default size.
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 1060, height: 632))
 
-        // NATIVE background: the standard dark window material over a
-        // subtle system blur — no manually simulated black overlay, no
-        // per-panel glass. The whole content area is ONE stable material;
-        // Liquid Glass stays with the native toolbar controls.
-        let blur = NSVisualEffectView()
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.material = .windowBackground
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        content.addSubview(blur, positioned: .below, relativeTo: nil)
+        // THEME: one FLAT neutral-charcoal surface behind the whole
+        // content area — no material, no blur, no glass. All the depth
+        // comes from the recessed wells and lifted controls on top.
+        let backdrop = NSView()
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.wantsLayer = true
+        backdrop.layer?.backgroundColor = GGTheme.background.cgColor
+        content.addSubview(backdrop, positioned: .below, relativeTo: nil)
         NSLayoutConstraint.activate([
-            blur.topAnchor.constraint(equalTo: content.topAnchor),
-            blur.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            blur.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            backdrop.topAnchor.constraint(equalTo: content.topAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
 
         // --- assemble: three regions pinned with autolayout — the MONITOR
@@ -4236,7 +4271,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let sep = NSView()
         sep.translatesAutoresizingMaskIntoConstraints = false
         sep.wantsLayer = true
-        sep.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.7).cgColor
+        sep.layer?.backgroundColor = GGTheme.idleBorder.withAlphaComponent(0.7).cgColor
         sep.widthAnchor.constraint(equalToConstant: 1).isActive = true
         sep.heightAnchor.constraint(equalToConstant: 18).isActive = true
         row.addArrangedSubview(sep)
@@ -4707,8 +4742,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             ag.toolTip = "Auto Gain — measure this input's loudest level and set the preamp"
             autoGainButtons.append(ag)
 
-            // one compact row of toggles — 48V / SL / Ø (red / cyan /
-            // purple when engaged; small intrinsic chips).
+            // one compact row of toggles — 48V / SL / Ø (red / blue /
+            // orange when engaged; small intrinsic chips).
             let row = NSStackView()
             row.orientation = .horizontal
             row.spacing = 6
@@ -4717,11 +4752,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             tv.toolTip = "+48V phantom power"
             row.addArrangedSubview(tv)
             toggles48V.append(tv)
-            let soft = toggle("SL", 400 + i, GGTheme.cyan)
+            let soft = toggle("SL", 400 + i, GGTheme.softLimit)
             soft.toolTip = "Soft Limit"
             row.addArrangedSubview(soft)
             softLimitToggles.append(soft)
-            let pol = toggle("Ø", 500 + i, GGTheme.purple)
+            let pol = toggle("Ø", 500 + i, GGTheme.polarity)
             pol.toolTip = "Invert polarity"
             row.addArrangedSubview(pol)
             polarityToggles.append(pol)
@@ -5102,7 +5137,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let rule = NSView()
         rule.translatesAutoresizingMaskIntoConstraints = false
         rule.wantsLayer = true
-        rule.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        rule.layer?.backgroundColor = GGTheme.idleBorder.cgColor
         strip.addArrangedSubview(rule)
         rule.widthAnchor.constraint(equalToConstant: 1).isActive = true
         rule.topAnchor.constraint(equalTo: strip.topAnchor).isActive = true
@@ -5180,7 +5215,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let seg = NSView()
         seg.translatesAutoresizingMaskIntoConstraints = false
         seg.wantsLayer = true
-        seg.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        seg.layer?.backgroundColor = GGTheme.idleBorder.cgColor
         rule.addSubview(seg)
         seg.widthAnchor.constraint(equalToConstant: 1).isActive = true
         seg.centerXAnchor.constraint(equalTo: rule.centerXAnchor).isActive = true
@@ -5611,8 +5646,8 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         textCol.addArrangedSubview(titleRow)
 
-        // M / D / ∑ — TINY chips under the name: Mute (coral red), DIM
-        // (amber), Sum to mono (system accent) when active; neutral dark
+        // M / D / ∑ — TINY chips under the name: Mute (red), DIM
+        // (mustard), Sum to mono (slot blue) when active; neutral dark
         // gray at rest. Full names live in tooltips + accessibility.
         let btnRow = NSStackView()
         btnRow.orientation = .horizontal
@@ -5922,7 +5957,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                            y: (b.bounds.height - side) / 2,
                            width: side, height: side)
         dot.cornerRadius = side / 2
-        dot.backgroundColor = GGTheme.cyan.cgColor
+        dot.backgroundColor = GGTheme.purple.cgColor
         if dot.superlayer == nil { l.addSublayer(dot) }
         dot.isHidden = false
         dot.removeAnimation(forKey: "breathe")
@@ -6625,7 +6660,7 @@ extension QuartetControlController {
     func updateCardHighlights() {
         for (i, m) in inputMarkers.enumerated() {
             m.layer?.backgroundColor = (i == selectedInputIndex
-                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
+                ? GGTheme.accent.cgColor : NSColor.clear.cgColor)
             // the marker's meaning, on the title it sits beside
             inputHeaders[i]?.toolTip = i == selectedInputIndex
                 ? "Selected input — gain & Auto Gain shortcuts act here"
@@ -6633,7 +6668,7 @@ extension QuartetControlController {
         }
         for (i, m) in outputMarkers.enumerated() {
             m.layer?.backgroundColor = (i == selectedOutputIndex
-                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
+                ? GGTheme.accent.cgColor : NSColor.clear.cgColor)
             nameFields[i].toolTip = i == selectedOutputIndex
                 ? "Selected output — trim & source shortcuts act here · double-click to rename"
                 : "Click to select · double-click to rename this output"
@@ -6645,7 +6680,7 @@ extension QuartetControlController {
         for (i, m) in monitorMarkers.enumerated() {
             let selected = (i == target)
             m.layer?.backgroundColor = (selected
-                ? NSColor.controlAccentColor.cgColor : NSColor.clear.cgColor)
+                ? GGTheme.accent.cgColor : NSColor.clear.cgColor)
             // the tooltip rides on the LABEL beside the marker
             if let title = m.superview?.subviews.compactMap({ $0 as? SelectLabel }).first {
                 title.toolTip = selected ? "Controlled by system volume keys" : nil

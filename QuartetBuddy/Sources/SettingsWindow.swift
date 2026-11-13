@@ -212,28 +212,26 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         w.center()
         w.minSize = SettingsLayout.minPageSize
         w.maxSize = NSSize(width: 1600, height: 1200)
-        // Native dark surface — the standard window background, matching
-        // Quartet Control's system-material look in every appearance.
+        // THEME surface — the same neutral charcoal as Quartet Control's
+        // flat backdrop, no system material.
         w.appearance = NSAppearance(named: .darkAqua)
-        w.backgroundColor = NSColor.windowBackgroundColor
+        w.backgroundColor = GGTheme.background
         window = w
     }
 
-    /// Sidebar: the standard sidebar MATERIAL (the system's own surface,
-    /// like System Settings — a NSVisualEffectView with the .sidebar
-    /// material, correct in every appearance), light text, and a clear
-    /// selected-row pill.
+    /// Sidebar: the THEME's darker sidebar surface — a flat charcoal one
+    /// step darker than the content pane (like a console's edge bay),
+    /// light text, and a lighter-graphite selected-row pill.
     ///
     /// NB never assign a dynamic color's `.cgColor` to a layer here: it
     /// resolves against whatever appearance is CURRENT at that moment
     /// (before the window's darkAqua is guaranteed), yielding the LIGHT
     /// variant — a white sidebar with white text.
     private func makeSidebar() -> NSView {
-        let sidebar = NSVisualEffectView()
+        let sidebar = NSView()
         sidebar.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.material = .sidebar
-        sidebar.blendingMode = .behindWindow
-        sidebar.state = .active
+        sidebar.wantsLayer = true
+        sidebar.layer?.backgroundColor = GGTheme.sidebarFill.cgColor
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -390,7 +388,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         for (p, view) in paneViews { view.isHidden = p != pane }
         for (p, row) in paneRows {
             row.layer?.backgroundColor = (p == pane)
-                ? NSColor(white: 1, alpha: 0.10).cgColor   // clear selected pill
+                ? GGTheme.control.cgColor   // selected: lighter graphite pill
                 : NSColor.clear.cgColor
         }
         for (p, button) in sidebarButtons {
@@ -663,7 +661,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
         if let other = sameScopeConflict(of: action, in: shortcuts) {
             button.attributedTitle = NSAttributedString(
                 string: binding.combo.displayString,
-                attributes: [.foregroundColor: NSColor.systemOrange,
+                attributes: [.foregroundColor: GGTheme.monitorOrange,
                              .font: NSFont.systemFont(ofSize: 13)])
             button.toolTip = "\"\(binding.combo.displayString)\" is also assigned to " +
                 "\"\(other.title)\" in the same scope."
@@ -1456,6 +1454,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                              styleMask: [.titled, .closable, .resizable, .miniaturizable],
                              backing: .buffered, defer: false)
             w.isReleasedWhenClosed = false
+            // THEME: the same flat charcoal as the settings pane, so the
+            // strips sit on one continuous surface in either host.
+            w.appearance = NSAppearance(named: .darkAqua)
+            w.backgroundColor = GGTheme.background
             w.minSize = NSSize(width: 560, height: 300)
             w.delegate = self
             mixerWindow = w
