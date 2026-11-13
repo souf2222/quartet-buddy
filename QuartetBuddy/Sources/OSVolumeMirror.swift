@@ -34,8 +34,17 @@ final class OSVolumeMirror {
     /// (HAL 'who!' on every volume read/write — driver wedge observed
     /// after the device re-enumerates, e.g. overnight USB churn). The
     /// binding cannot work until the Quartet is power-cycled; reset on
-    /// every device-list change (replug gives the control back).
+    /// every device-list change (replug gives the control back), AND
+    /// re-probed below — the control can also return without any
+    /// device-list change (driver settling after a power cycle).
     private(set) static var volumeControlMissing = false
+    /// The slow re-probe while the control is missing: 2 s cadence,
+    /// ~2 min. Without it the flag is a one-way latch — the control came
+    /// back after the user power-cycled and the binding stayed dead until
+    /// the app was restarted (Nov 13: wedge at 14:47, relaunch at 14:47
+    /// did not clear it because the device id never changed).
+    private static var recoveryTimer: Timer?
+    private static var recoveryTries = 0
 
     /// kAudioHardwareUnknownPropertyError — 'who!'
     private static let whoErr: OSStatus = 2003332927
@@ -84,6 +93,24 @@ final class OSVolumeMirror {
     private var systemListenerProc: AudioObjectPropertyListenerProc?
     private var retryTimer: Timer?
     private var retryCount = 0
+    /// While one of OUR OWN enforce() volume writes lands on a MUTED
+    /// device, macOS AUTO-UNMUTES it (observed Oct 19). The "OS mute off"
+    /// notification that follows is our echo, never a real F10 — and with
+    /// the Nov 13 bug (the macOS slider remembered 0 dB = FULL) delivering
+    /// it unmuted the speakers at full volume. The window: a mute-OFF
+    /// arriving this soon after our muted write is absorbed — the card
+    /// keeps its mute; the OS mute flag going off is the known cosmetic
+    /// drift (an OS mute write is banned — see syncMuteAfterSwitch).
+    private var mutedWriteGuardUntil = Date.distantPast
+    /// Back-off after a FAILED volume write: the Oct 18 precedent — a
+    /// single wedging write was bad, but the Nov 13 storm was worse (a
+    /// glue echo every 2 s re-fired enforce, each failure restarted the
+    /// retry ladder, and the wedged driver took a failed write every
+    /// couple of seconds for minutes). No volume write is attempted for
+    /// 10 s after a failure; the recovery probe and retry ladder land
+    /// after the cooldown, so a dead control costs at most one write per
+    /// ~10 s instead of one per second.
+    private static var writeCooldownUntil = Date.distantPast
 
     /// Watch the system device list. When the Quartet is (re)plugged it gets
     /// a fresh CoreAudio device id, and USB presence fires BEFORE CoreAudio
@@ -107,6 +134,7 @@ final class OSVolumeMirror {
     /// re-apply the last known level to the (possibly new) Quartet device.
     private func rebind() {
         Self.volumeControlMissing = false
+        Self.cancelRecoveryProbe()
         guard let db = lastEnforcedDB else { return }
         cachedDeviceID = nil
         listenedDevice = nil     // force fresh listener registration
@@ -161,16 +189,43 @@ final class OSVolumeMirror {
         }
         cancelRetry()
         armListener(on: dev)
+        // A write failed seconds ago (wedged driver) — do not poke it
+        // again now. Keep the 2 s probe alive so enforce() comes back
+        // right after the cooldown and writes once (the tree echoes no
+        // longer re-fire it — the per-target dedupe holds them off).
+        if Date() < Self.writeCooldownUntil {
+            scheduleRecoveryProbe(db)
+            return
+        }
+        // RECOVERY CHECK — the control can come back (driver settled after
+        // a power cycle) WITHOUT a device-list change; the missing flag
+        // must not outlive it.
+        if Self.volumeControlMissing && Self.volumeControlExists(dev) {
+            Self.volumeControlMissing = false
+            Self.recoveryTries = 0
+            Self.cancelRecoveryProbe()
+            QBLog.log("slider sync: Quartet volume control RESTORED — the macOS volume keys binding is live again")
+        }
         if !Self.volumeControlExists(dev) {
             Self.noteMissingControl()
+            scheduleRecoveryProbe(db)
             return
         }
         if Self.write(decibels: db, to: dev) {
             QBLog.log(String(format: "slider sync: macOS slider -> %.1f dB", db))
             pinnedOnce = true
             cancelRetry()
+            Self.writeCooldownUntil = .distantPast
+            Self.recoveryTries = 0
+            Self.cancelRecoveryProbe()
+            // macOS auto-unmutes a muted device on a volume write — arm
+            // the absorb window for the notification that follows.
+            if Self.readMute(from: dev) == true {
+                mutedWriteGuardUntil = Date().addingTimeInterval(3)
+            }
         } else if !Self.volumeControlMissing {
             QBLog.log("slider sync: slider write failed")
+            Self.writeCooldownUntil = Date().addingTimeInterval(10)
             // THE CONNECT-TIME PIN: right after the USB session opens the
             // Apogee driver is briefly busy and the write fails — without a
             // retry the macOS slider stayed at macOS's remembered position
@@ -222,12 +277,40 @@ final class OSVolumeMirror {
         retryTimer = nil
     }
 
+    /// The MISSING-CONTROL re-probe: re-run enforce() every 2 s so a
+    /// returning volume control is picked up without needing a CoreAudio
+    /// device event. Read-only while the control is gone (the HasProperty
+    /// probe), one write the moment it returns. Caps at ~2 min — after
+    /// that, a replug or any device-list change re-triggers enforce via
+    /// the devices listener anyway.
+    private func scheduleRecoveryProbe(_ db: Double) {
+        guard Self.recoveryTries < 60 else { return }
+        Self.recoveryTimer?.invalidate()
+        Self.recoveryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            Self.recoveryTimer = nil
+            Self.recoveryTries += 1
+            self.enforce(db)
+        }
+    }
+
+    private static func cancelRecoveryProbe() {
+        recoveryTimer?.invalidate()
+        recoveryTimer = nil
+    }
+
     // MARK: - macOS → Quartet
 
     private func sliderChanged() {
-        guard let dev = device(),
-              let db = Self.readDecibels(from: dev) else {
+        guard let dev = device() else {
             QBLog.log("mirror: sliderChanged — device/read failed")
+            return
+        }
+        // The wedged control fires 'who!' on every read — and every MUTE
+        // notification lands here too (one listener for both selectors),
+        // so this would spam the log forever. The recovery probe in
+        // enforce() handles the comeback.
+        guard !Self.volumeControlMissing, let db = Self.readDecibels(from: dev) else {
             return
         }
         QBLog.log(String(format: "mirror: slider changed → %.1f dB", db))
@@ -284,6 +367,15 @@ final class OSVolumeMirror {
             absorbNextMuteChange = false
             lastMute = m
             QBLog.log("mute sync: absorbed stale OS mute (\(m ? "on" : "off")) after target switch")
+            return
+        }
+        // Our own muted volume write just landed: the "mute off" that
+        // follows is macOS's auto-unmute echo, NOT the user unmuting.
+        // Absorb it — the card keeps its mute (Nov 13: this delivered an
+        // unmute at the remembered 0 dB = full blast).
+        if !m, Date() < mutedWriteGuardUntil {
+            lastMute = m
+            QBLog.log("mute sync: absorbed auto-unmute echo after our own muted volume write")
             return
         }
         // Only deliver REAL changes. The listener fires on any output

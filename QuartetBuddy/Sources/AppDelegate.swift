@@ -283,7 +283,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// True once a tree has given us real hardware gain values (never
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
-    private var lastSliderDB: Double?
+    /// Last level enforced per output — the glue stream echoes BOTH
+    /// outputs' gains every tree (2 s), and a single scalar dedupe made
+    /// the non-selected target's echo differ every time, re-firing
+    /// enforce() (a CoreAudio write) on EVERY tree — the write storm that
+    /// kept poking a wedged driver (Nov 13, one "slider write failed"
+    /// every 2 s for minutes).
+    private var lastSliderDB: [OutputTarget: Double] = [:]
 
     /// Copy the selected output's real level onto the macOS volume slider —
     /// the Quartet → macOS half of the binding (see OSVolumeMirror).
@@ -291,13 +297,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// must not be pushed onto the slider and re-read back into the fader.
     private func syncMacSlider(force: Bool = false) {
         guard gainKnown else { return }
-        let db = gain[selectedOutput] ?? 0
-        guard force || lastSliderDB != db else { return }
+        let target = selectedOutput
+        let db = gain[target] ?? 0
+        guard force || lastSliderDB[target] != db else { return }
         guard Self.isValidDB(db) else {
             QBLog.log(String(format: "slider sync: IGNORED bogus hardware level %.1f dB", db))
             return
         }
-        lastSliderDB = db
+        lastSliderDB[target] = db
         osSlider.enforce(db)
     }
 
@@ -334,7 +341,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// would silently leave the 0 dB defaults and pin THOSE onto the macOS
     /// slider ("it starts at 0 dB"). So: every read is logged, a failed
     /// read re-arms up to twice (1 s apart), and the slider pin waits for a
-    /// complete read (or the last attempt, best effort).
+    /// complete read.
+    ///
+    /// 11.9 — NO PIN OF A GUESSED VALUE, EVER. The old "best effort" pin
+    /// after three failed reads pinned the app's 0 dB DEFAULT onto the
+    /// macOS slider (14:47:35, twice) — macOS REMEMBERS that per device,
+    /// and with the OS mute later dropped (macOS auto-unmutes on volume
+    /// activity) the next interaction ran the speakers at FULL. Now the
+    /// pin happens ONLY on a complete read; failed reads keep retrying in
+    /// the background (2 s apart, ~1 min) and the macOS slider simply
+    /// stays wherever macOS left it until a real level lands.
     private func armMirrorFromDevice(attempt: Int = 1) {
         var anyReadFailed = false
         for (target, ch) in [(OutputTarget.mainOut, 0), (.headphones, 1)] {
@@ -346,15 +362,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("mirror: \(target.rawValue) fader read (0x33) FAILED — device briefly busy after the session open?")
             }
         }
-        gainKnown = true
-        if !anyReadFailed || attempt >= 3 {
-            syncMacSlider(force: true)   // pin the macOS slider to the card's real level
+        if !anyReadFailed {
+            gainKnown = true
+            syncMacSlider(force: true)   // pin the macOS slider to the card's REAL level
+            return
         }
-        if anyReadFailed && attempt < 3 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        gainKnown = false                // no real values yet — never enforce defaults
+        if attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 guard let self, self.directUSB.opened else { return }
                 self.armMirrorFromDevice(attempt: attempt + 1)
             }
+        } else {
+            QBLog.log("mirror: fader reads still failing after \(attempt) attempts — macOS slider left UNPINNED (no guessed 0 dB)")
         }
     }
 
@@ -429,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                          db, target.rawValue, current))
         guard writeGain(target, db) else { return }
         gain[target] = db
-        lastSliderDB = db
+        lastSliderDB[target] = db
         osSlider.noteLevel(db)      // rebind/retries must re-apply THIS level, not a stale snapshot
         refreshMenu()
     }
@@ -678,10 +698,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the menubar icon + the offline transport are ready before
                 // the first write. When ApogeeGlue is running it wins the
                 // exclusive open and the glue path stays primary.
+                //
+                // 11.9: EVERY replug re-enumerates the device — a session
+                // opened before it is a STALE IOUSBHostDevice whose every
+                // control request fails ("Unable to send device request";
+                // the Nov 13 power-cycle left the whole offline UI dead
+                // because even the 0x33 fader reads failed). So CLOSE the
+                // old session and force a fresh one on every arrival —
+                // open() re-reads the faders and re-pins the macOS slider
+                // to the card's real level.
                 DispatchQueue.main.async { [weak self] in
-                    _ = self?.ensureDirectUSB()   // opens + re-pushes the saved routing
-                    self?.refreshMenu()
+                    guard let self else { return }
+                    self.directUSB.close()
+                    _ = self.ensureDirectUSB()
+                    self.refreshMenu()
                 }
+            } else {
+                // release the dead claim right away — the handle is stale
+                // the moment the device leaves the bus
+                DispatchQueue.main.async { [weak self] in self?.directUSB.close() }
             }
             if !connected, self?.talkbackOn == true {
                 // the TalkbackHelper resets talkback when the device goes away
