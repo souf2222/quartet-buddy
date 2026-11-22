@@ -97,12 +97,12 @@ final class HotKeyManager {
         let started = Date()
         releaseTimer?.invalidate()
         releaseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
-            guard let self else { t.invalidate(); return }
+            guard self != nil else { t.invalidate(); return }
             let down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(combo.keyCode))
             if !down || Date().timeIntervalSince(started) >= Self.maxHold {
                 t.invalidate()
-                self.keyIsDown = false
-                self.onHotKeyUp?()
+                self!.keyIsDown = false
+                self!.onHotKeyUp?()
             }
         }
     }

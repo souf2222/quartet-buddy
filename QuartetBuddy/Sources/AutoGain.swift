@@ -60,11 +60,11 @@ final class AutoGainEngine {
     /// "level" so nobody has to care about the units.
     static var targetDBFS: Double {
         get {
-            let v = UserDefaults.standard.double(forKey: "autoGainTargetDBFS")
+            let v = UserDefaults.standard.double(forKey: UserDefaultsKeys.autoGainTargetDBFS)
             return targetOptions.contains(v) ? v : -12
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: "autoGainTargetDBFS")
+            UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.autoGainTargetDBFS)
         }
     }
     static let targetOptions: [Double] = [-18, -15, -12, -9, -6]
@@ -73,11 +73,11 @@ final class AutoGainEngine {
     /// faster but rougher; verify is always a fixed 2 s afterwards.
     static var listenSeconds: Double {
         get {
-            let v = UserDefaults.standard.double(forKey: "autoGainListenSeconds")
+            let v = UserDefaults.standard.double(forKey: UserDefaultsKeys.autoGainListenSeconds)
             return listenOptions.contains(v) ? v : 5
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: "autoGainListenSeconds")
+            UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.autoGainListenSeconds)
         }
     }
     static let listenOptions: [Double] = [5, 8, 10, 15]

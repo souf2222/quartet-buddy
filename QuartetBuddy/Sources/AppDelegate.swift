@@ -12,9 +12,8 @@ import ServiceManagement
 // on every unit.
 //
 // The app picks the table by the serial found in the glue tree (see
-// AppDelegate.setupGlue). For a NEW Quartet, run the built-in wizard
-// (menubar → "Setup New Quartet…"): it captures the ids live and stores
-// them in preferences — no code change needed.
+// AppDelegate.setupGlue). Path-ids are computed from the hash formula,
+// so every Quartet works out of the box — no setup wizard needed.
 enum PathIds {
     struct DeviceTable: Codable {
         var hwout0Gain: [UInt8]   // Main Out fader (double)
@@ -73,7 +72,7 @@ enum PathIds {
         hwout1Mute: [0xfe, 0x81, 0x75, 0xb7],
         hwout0Dim:  [0x82, 0x2c, 0x69, 0x37])
 
-    // MARK: - The descriptor hash (CRACKED — see tools/crack_id_hash.py)
+    // MARK: - The descriptor hash
     //
     // The path-id of a property is a Java string hash (h = h·31 + UTF-8
     // byte, 32-bit wrapping) of its slash path from the tree root, sent as
@@ -162,13 +161,11 @@ enum PathIds {
         }
     }
 
-    /// Wizard-capture endpoint. The hash formula computes every id now, so
-    /// captured tables are no longer stored or consulted — keep the entry
-    /// point (PathIdSetup still calls it) but make it a no-op re-select.
+    /// Legacy capture endpoint. The hash formula computes every id now, so
+    /// captured tables are never stored or consulted — this is a no-op
+    /// re-select kept for the one internal `learn` caller.
     static func adopt(table: DeviceTable, for serial: String) {
-        activeSerial = nil   // force a fresh computed pick below
-        select(serial: serial)
-        QBLog.log("path-ids: wizard table for \(serial) ignored — computed table is authoritative")
+        select(serial: serial)  // computed tables ignore the passed table anyway
     }
 
     /// Assign a newly captured id to a console-window control and persist it
@@ -418,8 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// loop — an out-of-range write that took the whole unit down (dark
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
-        guard !PathIdSetupController.shared.sessionActive,
-              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
+        guard !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         guard Self.isValidDB(db) else {
             QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
@@ -503,11 +499,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .connected = glue.state, PathIds.activeSerial != nil else { return }
         var pushedAny = false
         for pair in Self.hwoutTrimNodes.keys {
-            guard UserDefaults.standard.object(forKey: "hwout.trim.\(pair)") != nil else { continue }
-            let raw = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            guard UserDefaults.standard.object(forKey: UserDefaultsKeys.hwoutTrim(pair)) != nil else { continue }
+            let raw = UserDefaults.standard.double(forKey: UserDefaultsKeys.hwoutTrim(pair))
             let db = min(Self.hwoutTrimMax, max(Self.hwoutTrimMin, raw))
             if raw != db {
-                UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+                UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(pair))
                 QBLog.log(String(format: "trim: pair %d saved %.1f dB out of range — clamped to %.1f", pair, raw, db))
             }
             guard pushedHardwareTrims[pair] != db else { continue }
@@ -530,8 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// header); the one exception is a target switch, where the OS mute is
     /// written once so the macOS display matches the newly selected output.
     private func osMuteChanged(to m: Bool) {
-        guard !PathIdSetupController.shared.sessionActive,
-              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
+        guard !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         let target = selectedOutput
         let current = muted[target] ?? false
@@ -753,31 +748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Glue
 
-    // MARK: - the tree snapshot (the offline boot + the state recovery)
-
-    private static var treeSnapshotURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("QuartetBuddy/lastTree.json", isDirectory: true)
-    }
-
-    /// Persist the full tree so an offline boot can populate the UI.
-    private func saveTreeSnapshot(_ tree: [String: Any]) {
-        do {
-            let url = Self.treeSnapshotURL
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: tree)
-            try data.write(to: url)
-        } catch {
-            QBLog.log("tree snapshot save failed: \(error)")
-        }
-    }
-
-    private static func loadTreeSnapshot() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: treeSnapshotURL),
-              let tree = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return tree
-    }
+    // MARK: - the tree (offline boot + state recovery)
 
     /// Apply a tree (live or the saved snapshot) to the app's state model.
     private func applyTree(_ tree: [String: Any]) {
@@ -828,11 +799,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the offline branches never fired (the talkback picker's grey +
         // the dropped writes). lastTree = the LIVE glue tree only (the
         // connected-era path); offline = nil = the offline branches own it.
-        try? FileManager.default.removeItem(at: Self.treeSnapshotURL)
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
-            // the setup wizard listens to the same stream (capture steps)
-            PathIdSetupController.shared.handle(event)
             // so does the Quartet Control window (live updates + Learn mode)
             QuartetControlController.shared.handle(event)
             switch event.id {
@@ -1254,53 +1222,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("mix-probe: block \(blockWI) slot \(slot) ← g\(gain) m\(marker) — \(ok ? "ok" : "FAILED") rb \(rb)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 speaker = NSSpeechSynthesizer()   // main thread
-                _ = self.directUSB.setRawByte(0x53, index: 3, byte: 4)   // HP → byte 4 (Mixer 1)
-                _ = self.directUSB.setRawByte(0x35, index: 0, byte: 1)   // Main muted
+                _ = self!.directUSB.setRawByte(0x53, index: 3, byte: 4)   // HP → byte 4 (Mixer 1)
+                _ = self!.directUSB.setRawByte(0x35, index: 0, byte: 1)   // Main muted
                 setSlot(0, 4, 0x30, 0xA1)                                // the mic open, factory marker
                 QBLog.log("mix-probe: MUTE-HUNT stage 1 (+10 s) — baseline")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 speak("Stage one. Baseline. Talk.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 22) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 0, 4, 1)
                 speak("Stage two. Mute register, plane zero.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 34) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 0, 4, 0)
                 setReg(0x4f, 1, 4, 1)
                 speak("Stage three. Mute register, plane one.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 46) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 1, 4, 0)
                 setReg(0x4f, 2, 4, 1)
                 speak("Stage four. Mute register, plane two.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 58) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 2, 4, 0)
                 setReg(0x4f, 3, 4, 1)
                 speak("Stage five. Mute register, plane three.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 70) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 3, 4, 0)
                 setSlot(0, 4, 0x30, 0xA3)                                // marker bit 1
                 speak("Stage six. Marker bit one.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 82) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setSlot(0, 4, 0x30, 0xA5)                                // marker bit 2
                 speak("Stage seven. Marker bit two.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 94) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setSlot(0, 4, 0x30, 0x81)                                // clear marker bit 5
                 speak("Stage eight. Marker bit five cleared.")
             }
@@ -2105,22 +2073,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return self.directUSB.setInputFlag(reg, input: UInt16(i), on: on)
         }
         control.onDirectInputGain = { [weak self] i, v in
-            guard let self else { return false }
-            if self.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {
-                self.glue.setDouble(id: id, v); return true
+            guard self != nil else { return false }
+            if self!.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {
+                self!.glue.setDouble(id: id, v); return true
             }
-            let ok = self.directUSB.setInputGain(input: UInt16(i), db: v)
-            if !ok { QBLog.log("directUSB: input gain write failed: \(self.directUSB.lastError ?? "?")") }
+            let ok = self!.directUSB.setInputGain(input: UInt16(i), db: v)
+            if !ok { QBLog.log("directUSB: input gain write failed: \(self!.directUSB.lastError)") }
             return ok
         }
         control.onDirectInputType = { [weak self] i, v in
-            guard let self else { return false }
+            guard self != nil else { return false }
             // Line modes (+4/−10): the device register is untouched (pending decode)
             guard let raw = DirectUSBClient.deviceByte(forAppMode: Int(v)) else {
                 QBLog.log("transport: input \(i + 1) mode \(v) = Line — 0x36 not involved (pending)")
                 return true
             }
-            let ok = self.directUSB.setInputType(input: UInt16(i), raw: raw)
+            let ok = self!.directUSB.setInputType(input: UInt16(i), raw: raw)
             QBLog.log("transport: directUSB input \(i + 1) mode \(v) → 0x36=\(raw) \(ok ? "ok" : "FAILED")")
             return ok
         }
@@ -2429,19 +2397,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // analog pairs = out−2 on BOTH strips. The state = the app's saved
         // value (the device's 0x53 read-back doesn't parse as the index).
         settingsWindow.readHwoutRouting = { [weak self] in
-            guard let self else { return [] }
+            guard self != nil else { return [] }
             return (0..<4).map { slot in
                 let v = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int
                 return v ?? (slot == 3 ? 3 : slot)   // the HP's default = PB 7-8; the pairs = their own PB
             }
         }
         settingsWindow.writeHwoutRouting = { [weak self] slot, source in
-            guard let self else { return }
+            guard self != nil else { return }
             // the PAIR slots (the user's live mapping): 0=Out1-2(Main),
             // 1=Out3-4, 2=Out5-6, 3=Headphones — ONE write per pair
             let indexes: [UInt16] = [UInt16(slot)]
             for wI in indexes {
-                let ok = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+                let ok = self!.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
                 QBLog.log("settings: routing slot \(slot) → 0x53 wI=\(wI) =\(source) \(ok ? "ok" : "FAILED")")
             }
             UserDefaults.standard.set(source, forKey: "hwout.route.\(slot)")

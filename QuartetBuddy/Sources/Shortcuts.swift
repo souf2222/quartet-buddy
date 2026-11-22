@@ -254,9 +254,7 @@ enum ShortcutAction: String, CaseIterable {
 ///   • APP-ONLY bindings are matched by AppDelegate's local event monitor
 ///     while the Quartet Control window is key (see matchLocal).
 ///
-/// Bindings persist as one JSON dictionary in UserDefaults. The legacy
-/// per-feature keys ("hotkeyCombo" talkback, "hotkeySwitchCombo" output
-/// switch) migrate in on first launch.
+/// Bindings persist as one JSON dictionary in UserDefaults.
 final class ShortcutManager {
 
     /// Current layout of the DESIGNED defaults. Bump when the default
@@ -326,8 +324,8 @@ final class ShortcutManager {
     }
     /// Fine per-press volume step (dB).
     var fineStep: Double {
-        get { Self.positiveStep("fineStep", 0.5) }
-        set { UserDefaults.standard.set(newValue, forKey: "fineStep") }
+        get { Self.positiveStep(UserDefaultsKeys.fineStep, 0.5) }
+        set { UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.fineStep) }
     }
     private static func positiveStep(_ key: String, _ def: Double) -> Double {
         let v = UserDefaults.standard.double(forKey: key)
@@ -428,7 +426,7 @@ final class ShortcutManager {
     }
 
     private func fire(_ action: ShortcutAction, keyDown: Bool) {
-        QBLog.log("shortcut: \(action.rawValue) \(keyDown ? "↓" : "↑")")
+        QBLog.log("shortcut: \(action) \(keyDown ? "↓" : "↑")")
         perform?(action, keyDown)
     }
 
@@ -458,20 +456,7 @@ final class ShortcutManager {
             persist()
             return
         }
-        // One-time migration from the old per-feature hotkeys:
-        //   talkback hotkey → Talkback (toggle), switch-output → Switch Target.
-        if let data = UserDefaults.standard.data(forKey: "hotkeyCombo"),
-           let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: data) {
-            bindings[.talkbackToggle] = Binding(combo: combo, isGlobal: true)
-        }
-        if let data = UserDefaults.standard.data(forKey: "hotkeySwitchCombo"),
-           let combo = try? JSONDecoder().decode(HotKeyManager.Combo.self, from: data) {
-            bindings[.switchTarget] = Binding(combo: combo, isGlobal: true)
-        }
-        UserDefaults.standard.removeObject(forKey: "hotkeyCombo")
-        UserDefaults.standard.removeObject(forKey: "hotkeySwitchCombo")
-        // Seed the designed defaults only when nothing was migrated —
-        // first-launch out-of-box experience.
+        // Seed the designed defaults — first-launch out-of-box experience.
         if bindings.isEmpty { restoreDefaults() }
         persist()
     }

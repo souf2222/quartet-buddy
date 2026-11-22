@@ -57,7 +57,6 @@ swiftc -O \
     "$SRC/GlueProtocol.swift" \
     "$SRC/GlueClient.swift" \
     "$SRC/DirectUSBClient.swift" \
-    "$SRC/PathIdSetup.swift" \
     "$SRC/DefaultDeviceMonitor.swift" \
     "$SRC/HotKey.swift" \
     "$SRC/HotKeyRecorder.swift" \
@@ -76,6 +75,7 @@ swiftc -O \
     "$SRC/SettingsUI.swift" \
     "$SRC/SettingsWindow.swift" \
     "$SRC/MixerUI.swift" \
+    "$SRC/UserDefaultsKeys.swift" \
     -framework AppKit -framework CoreAudio -framework CoreMIDI \
     -framework Carbon -framework Foundation -framework IOKit \
     -o "$BUNDLE/Contents/MacOS/$APPNAME"

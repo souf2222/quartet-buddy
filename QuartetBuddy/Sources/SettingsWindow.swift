@@ -665,8 +665,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
                              .font: NSFont.systemFont(ofSize: 13)])
             button.toolTip = "\"\(binding.combo.displayString)\" is also assigned to " +
                 "\"\(other.title)\" in the same scope."
-            QBLog.log("shortcuts: conflict — \(action.rawValue) shares \(binding.combo.displayString) " +
-                      "with \(other.rawValue) (same scope)")
+            QBLog.log("shortcuts: conflict — \(action) shares \(binding.combo.displayString) " +
+                      "with \(other) (same scope)")
         } else {
             button.title = binding.combo.displayString
             button.toolTip = nil

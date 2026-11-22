@@ -3163,9 +3163,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !autoGainRefreshQueued else { return }
         autoGainRefreshQueued = true
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.autoGainRefreshQueued = false
-            self.refresh()
+            guard self != nil else { return }
+            self!.autoGainRefreshQueued = false
+            self!.refresh()
         }
     }
 
@@ -3222,18 +3222,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// orderOut only — nothing quits and audio processing is untouched.
     func windowDidResignKey(_ notification: Notification) {        guard !pinned, window?.isVisible == true else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard self != nil else { return }
             // focus came BACK (menu tracking closed, popover dismissed
             // back to us) — keep the panel up
-            guard self.window?.isKeyWindow != true else { return }
+            guard self!.window?.isKeyWindow != true else { return }
             // ANOTHER of our own windows took the key (settings, popover,
             // a plug-in editor) — that's the app workflow, not an
             // outside click: stay visible
-            if let key = NSApp.keyWindow, key !== self.window { return }
+            if let key = NSApp.keyWindow, key !== self!.window { return }
             // nothing of ours holds the key → the click (or app switch)
             // went outside: quietly hide
-            self.window?.orderOut(nil)
-            self.AdatVisibility(false)
+            self!.window?.orderOut(nil)
+            self!.AdatVisibility(false)
         }
     }
 
@@ -3265,9 +3265,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !refreshScheduled else { return }
         refreshScheduled = true
         Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            self.refreshScheduled = false
-            self.refreshNow()
+            guard self != nil else { return }
+            self!.refreshScheduled = false
+            self!.refreshNow()
         }
     }
 
@@ -6037,23 +6037,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainKind = .activity
             refresh()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 let value = gain.map { String(format: "%.1f dB", $0) } ?? "the new value"
-                self.autoGainStatus = "Auto Gain · Gain set to \(value)."
-                self.autoGainKind = .success
-                self.refresh()
+                self!.autoGainStatus = "Auto Gain · Gain set to \(value)."
+                self!.autoGainKind = .success
+                self!.refresh()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                     // …and the result line lingers a while (with a Dismiss
                     // action) before it clears
-                    guard let self else { return }
-                    self.autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
+                    guard self != nil else { return }
+                    self!.autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
                                                                      repeats: false) { [weak self] _ in
                         self?.autoGainStatus = nil
                         self?.autoGainDetail = nil
                         self?.autoGainStatusTimer = nil
                         self?.refresh()
                     }
-                    self.refresh()
+                    self!.refresh()
                 }
             }
 
@@ -6234,7 +6234,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func presentPluginMenu(for slot: PluginSlotView) {
         let pair = slot.pairIndex
         let menu = NSMenu()
-        let current = UserDefaults.standard.string(forKey: "insertPair.\(pair).plugin") ?? ""
+        let current = UserDefaults.standard.string(forKey: UserDefaultsKeys.insertPairPlugin(pair)) ?? ""
         func add(_ title: String, _ key: String) {
             let item = NSMenuItem(title: title,
                                    action: #selector(pluginMenuItemChosen(_:)),

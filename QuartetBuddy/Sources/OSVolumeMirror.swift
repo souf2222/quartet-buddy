@@ -91,8 +91,6 @@ final class OSVolumeMirror {
     /// Headphones.
     private var absorbNextMuteChange = false
     private var systemListenerProc: AudioObjectPropertyListenerProc?
-    private var retryTimer: Timer?
-    private var retryCount = 0
     /// While one of OUR OWN enforce() volume writes lands on a MUTED
     /// device, macOS AUTO-UNMUTES it (observed Oct 19). The "OS mute off"
     /// notification that follows is our echo, never a real F10 — and with
@@ -184,7 +182,7 @@ final class OSVolumeMirror {
         lastEnforcedDB = db
         guard let dev = device() else {
             QBLog.log("slider sync: no Quartet in CoreAudio yet — will retry")
-            scheduleRetry()
+            scheduleRetry(db)
             return
         }
         cancelRetry()
@@ -234,7 +232,7 @@ final class OSVolumeMirror {
             // slammed that onto the fader (Nov 13, four sessions in a row:
             // "slider write failed" at connect, no retry, then the jump).
             // Retry on the same ladder as the no-device case above.
-            scheduleRetry()
+            scheduleRetry(db)
         }
     }
 
@@ -260,21 +258,22 @@ final class OSVolumeMirror {
 
     // MARK: - retry (device not yet enumerated when presence beat CoreAudio)
 
-    private func scheduleRetry() {
-        guard retryCount < 4 else { return }   // the devices listener re-triggers anyway
+    private func scheduleRetry(_ db: Double) {
+        // The devices listener re-triggers anyway after 4 retries
+        guard Self.recoveryTries < 4 else { return }
         let delays: [TimeInterval] = [0.5, 1, 2, 4]
-        retryTimer = Timer.scheduledTimer(withTimeInterval: delays[retryCount], repeats: false) { [weak self] _ in
-            self?.retryTimer = nil
-            guard let self, let db = self.lastEnforcedDB else { return }
-            self.retryCount += 1
-            self.enforce(db)
+        Self.recoveryTimer = Timer.scheduledTimer(withTimeInterval: delays[Self.recoveryTries], repeats: false) { [weak self] _ in
+            Self.recoveryTimer = nil
+            guard self != nil else { return }
+            Self.recoveryTries += 1
+            self!.enforce(db)
         }
     }
 
     private func cancelRetry() {
-        retryCount = 0
-        retryTimer?.invalidate()
-        retryTimer = nil
+        Self.recoveryTries = 0
+        Self.recoveryTimer?.invalidate()
+        Self.recoveryTimer = nil
     }
 
     /// The MISSING-CONTROL re-probe: re-run enforce() every 2 s so a
@@ -287,10 +286,10 @@ final class OSVolumeMirror {
         guard Self.recoveryTries < 60 else { return }
         Self.recoveryTimer?.invalidate()
         Self.recoveryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-            guard let self else { return }
+            guard self != nil else { return }
             Self.recoveryTimer = nil
             Self.recoveryTries += 1
-            self.enforce(db)
+            self!.enforce(db)
         }
     }
 
