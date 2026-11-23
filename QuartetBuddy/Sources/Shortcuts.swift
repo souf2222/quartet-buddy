@@ -319,8 +319,8 @@ final class ShortcutManager {
 
     /// Coarse per-press volume step (dB).
     var volumeStep: Double {
-        get { Self.positiveStep("volumeStep", 2) }
-        set { UserDefaults.standard.set(newValue, forKey: "volumeStep") }
+        get { Self.positiveStep(UserDefaultsKeys.volumeStep, 2) }
+        set { UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.volumeStep) }
     }
     /// Fine per-press volume step (dB).
     var fineStep: Double {

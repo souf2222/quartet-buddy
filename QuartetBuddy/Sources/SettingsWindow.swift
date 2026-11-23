@@ -690,7 +690,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     private func makeStepStepper(_ tag: Int) -> NSStepper {
-        let key = tag == 2 ? "fineStep" : "volumeStep"
+        let key = tag == 2 ? UserDefaultsKeys.fineStep : UserDefaultsKeys.volumeStep
         let s = NSStepper()
         s.minValue = 0.5
         s.maxValue = 6
@@ -729,7 +729,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTextFieldDel
     }
 
     @objc private func stepChanged(_ sender: NSStepper) {
-        let key = sender.tag == 2 ? "fineStep" : "volumeStep"
+        let key = sender.tag == 2 ? UserDefaultsKeys.fineStep : UserDefaultsKeys.volumeStep
         UserDefaults.standard.set(sender.doubleValue, forKey: key)
         (sender.tag == 2 ? fineStepLabel : volStepLabel)?
             .stringValue = String(format: "%.1f dB", sender.doubleValue)

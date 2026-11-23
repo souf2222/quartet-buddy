@@ -2312,7 +2312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             self.pushedHardwareTrims[pair] = db
-            UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+            UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(pair))
             QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
         }
         // Settings ▸ Quartet ▸ Channel Names — hardware inputs/outputs

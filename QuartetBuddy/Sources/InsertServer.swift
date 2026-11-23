@@ -286,7 +286,7 @@ final class InsertServer: NSObject {
                 UserDefaults.standard.set(true, forKey: "hwout.trim.migratedFromKnobs")
                 for j in 1...3 where UserDefaults.standard.object(forKey: Self.trimKey(j)) != nil {
                     let db = UserDefaults.standard.double(forKey: Self.trimKey(j))
-                    UserDefaults.standard.set(db, forKey: "hwout.trim.\(j)")
+                    UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(j))
                     UserDefaults.standard.set(0.0, forKey: Self.trimKey(j))
                     QBLog.log(String(format: "migrate: knob trim pair %d %.1f dB → hwout.trim.%d (settings)", j, db, j))
                 }

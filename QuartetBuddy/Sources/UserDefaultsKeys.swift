@@ -28,5 +28,6 @@ enum UserDefaultsKeys {
     static func insertPairPlugin(_ pair: Int) -> String { "insertPair.\(pair).plugin" }
 
     // Shortcuts
+    static let volumeStep = "volumeStep"
     static let fineStep = "fineStep"
 }
