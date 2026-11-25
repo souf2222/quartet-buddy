@@ -697,25 +697,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         let target = selectedOutput
-        let current = muted[target] ?? false
-        guard m != current else { return }
         // THE MAIN-OUT MUTE REFLECTION (Nov 25): the OS mute property
-        // follows the MAIN OUT's hardware mute. Absorb what the Main Out
-        // explains — our own chip write's echo, or a touchscreen mute the
-        // OS flag just followed — never apply it to the selected target.
+        // follows the MAIN OUT's hardware mute — our own chip write's echo
+        // is absorbed outright.
         if isMainOutMuteEcho(m) {
             QBLog.log("mute sync: absorbed OS mute \(m ? "on" : "off") — the Main Out mute write's own echo")
             return
         }
-        if let mOut = speakerMuteFromDevice(), mOut == m {
+        // THE REGISTER-DELTA TELL (Nov 25c): the first cut absorbed ANY
+        // event matching the Main Out's hardware mute — which ate every
+        // real F10 whose flipped state coincided with it (the user's
+        // report: with Headphones selected the first F10 muted, then the
+        // unmute matched the unmuted SPEAKERS' register and was absorbed
+        // — the HP stuck muted; with the speakers muted, BOTH directions
+        // died). A driver push (touchscreen / Control 2) is the register
+        // CHANGING to the pushed state; an F10 leaves the register alone.
+        if let mOut = speakerMuteFromDevice(), mOut == m, muted[.mainOut] != m {
             muted[.mainOut] = m      // the touchscreen moved it — keep the menu truthful
-            QBLog.log("mute sync: OS mute \(m ? "on" : "off") is the Main Out fader's own mute — \(target.rawValue) untouched")
+            QBLog.log("mute sync: OS mute \(m ? "on" : "off") is the Main Out fader's own mute (register changed) — \(target.rawValue) untouched")
             refreshMenu()
             return
         }
-        QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
-        guard writeMute(target, m) else { return }
-        muted[target] = m
+        // A REAL F10 (Nov 25c): the OS mute property is slaved to the MAIN
+        // OUT's hardware mute, so macOS inverts the PROPERTY's drifted
+        // state — with Headphones selected the flip's direction is slaving
+        // noise (the drift case: the property shows the speakers' mute).
+        // The user's intent is always TOGGLE THE SELECTED OUTPUT; the
+        // no-drift case is identical (m == !current there).
+        let new = !(muted[target] ?? false)
+        QBLog.log("mute sync: OS mute key -> toggle Quartet \(target.rawValue) → \(new ? "on" : "off")")
+        guard writeMute(target, new) else { return }
+        muted[target] = new
         refreshMenu()
     }
 
@@ -1996,6 +2008,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (0x40, 1): headphoneDim = on
         case (0x46, 0): speakerSum = on
         case (0x46, 1): headphoneSum = on
+        // the sweep's mute reads keep muted[] = the register's truth —
+        // the register-delta tell in osMuteChanged compares against it
+        case (0x35, 0): muted[.mainOut] = on
+        case (0x35, 1): muted[.headphones] = on
         default: break
         }
         refreshMenu()

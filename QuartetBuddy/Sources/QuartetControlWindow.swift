@@ -3068,7 +3068,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                     if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true; onMonitorGain?(o, db) }
                 case 0x35:
                     let m = (v != 0)
-                    if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true }
+                    if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true; onMonitorFlag?(o, 0x35, m) }
                 case 0x40:
                     let d = (v != 0)
                     if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true; onMonitorFlag?(o, 0x40, d) }
