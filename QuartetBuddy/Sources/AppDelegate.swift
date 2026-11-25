@@ -425,6 +425,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
             return
         }
+        // The property's previous value — the grid-walk check below reads
+        // it. Every valid event updates it (absorbed ones included: the
+        // property really sat there).
+        let prevProperty = lastPropertyDB
+        lastPropertyDB = db
         // THE FIRST-PRESS GUARD: until one enforce() write has landed, the
         // macOS slider is at macOS's own remembered position (often 0 dB
         // right after connect — the connect-time pin write fails while the
@@ -464,12 +469,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1.0 dB (not the own-echo 0.5): a knob mid-turn keeps moving
         // between the driver's push and this read — the live fader sits a
         // few tenths of a dB past the pushed value.
+        //
+        // THE GRID-WALK EXEMPTION (Nov 25c): the macOS keys always land
+        // ONE grid step from the property's previous value, while a fader
+        // reflection jumps arbitrarily. Without this, every key press
+        // landing on the SPEAKER fader's parked value was eaten as a
+        // "reflection" (the live log: the HP sweep's 16th press — 0.0 dB —
+        // absorbed because the speaker sat parked at 0 dB; the HP stuck at
+        // -2 while the OS showed 100 %). A physical one-step nudge is
+        // rescued by the HID tie-breaker instead.
         let speaker = currentSpeakerLevel()
         if let speaker, abs(db - speaker) <= 1.0 {
-            QBLog.log(String(format: "mirror: driver push %.1f dB is the Main Out fader — %@ untouched", db, target.rawValue))
-            gain[.mainOut] = speaker
-            refreshMenu()
-            return
+            let continuesKeyWalk = prevProperty.map {
+                abs(Self.gridStep($0) - Self.gridStep(db)) == 1
+            } ?? false
+            let physicalConfirmed = Date().timeIntervalSince(lastPhysicalMove) < 0.2
+            if !continuesKeyWalk || physicalConfirmed {
+                QBLog.log(String(format: "mirror: driver push %.1f dB is the Main Out fader — %@ untouched", db, target.rawValue))
+                gain[.mainOut] = speaker
+                refreshMenu()
+                return
+            }
+            QBLog.log(String(format: "mirror: %.1f dB matches the parked Main Out fader but continues the key walk — applying to %@", db, target.rawValue))
         }
         QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
                          db, target.rawValue, current))
@@ -508,16 +529,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// driver's pushes of the EARLIER ticks arrive late (the live log:
     /// write -53 then -33, then the -53 push slipped past the -33 guard
     /// and slammed the HEADPHONES to -53). Absorb a push matching ANY
-    /// level written in the last 2 s.
+    /// level written in the window.
+    ///
+    /// Nov 25c — the window is 0.35 s, NOT 2 s: the drag pushes lag by
+    /// tens of ms (one knob tick), but a USER key press that steps BACK
+    /// onto a recently-written value — reversing at 0 %/100 % — arrives
+    /// ~1 s after the write. The 2 s window ate exactly those (the live
+    /// log: at max, the down-press's -2 push absorbed because -2 was
+    /// written one press earlier; "one press nothing, the next changes
+    /// twice"). 0.35 s covers the lag with ~7× margin and expires before
+    /// a human reversal.
     private var speakerWrites: [(value: Double, until: Date)] = []
 
     /// Record the level `db` the app just wrote to the Main Out fader.
-    /// The driver's HAL push follows within ~10 ms; 2 s covers the whole
-    /// write→reflect→listener round trip (and drag-sized push lag).
     private func armSpeakerWriteGuard(_ db: Double) {
         let now = Date()
         speakerWrites.removeAll { $0.until <= now }
-        speakerWrites.append((value: db, until: now.addingTimeInterval(2)))
+        speakerWrites.append((value: db, until: now.addingTimeInterval(0.35)))
     }
 
     /// True when `db` matches a level the app wrote to the Main Out fader
@@ -537,7 +565,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func armMainOutMuteGuard(_ m: Bool) {
         let now = Date()
         mainOutMuteWrites.removeAll { $0.until <= now }
-        mainOutMuteWrites.append((value: m, until: now.addingTimeInterval(2)))
+        // 0.35 s, same reasoning as the gain guard: the echo lag is tens
+        // of ms; a real F10 within 2 s of a chip write landing on the same
+        // state was being eaten.
+        mainOutMuteWrites.append((value: m, until: now.addingTimeInterval(0.35)))
     }
 
     private func isMainOutMuteEcho(_ m: Bool) -> Bool {
@@ -553,6 +584,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let v = directUSB.readInput(input: 0, bRequest: 0x35) else { return nil }
         return v != 0
     }
+
+    /// The driver's key-grid step for a dB value: the macOS keys write the
+    /// scalar k/16 and the driver maps it to dB = -64 + 64·√(k/16), rounded
+    /// to whole dB (verified against the live property — k=0…16 → -64, -48,
+    /// -41, -36, -32, -28, -25, -22, -19, -16, -13, -11, -9, -6, -4, -2, 0;
+    /// the round-trip through this helper reproduces every k exactly).
+    static func gridStep(_ db: Double) -> Int {
+        let norm = (db - Self.minDB) / (Self.maxDB - Self.minDB)
+        return Int((16.0 * norm * norm).rounded())
+    }
+
+    /// The property's previous value (every delivered event updates it,
+    /// absorbed ones included — the property really sat there). The
+    /// classification's grid-walk check reads it.
+    private var lastPropertyDB: Double?
+
+    /// The last HID-reported physical move (encoder/touchscreen). A property
+    /// push within 0.2 s of a HID report is a fader reflection even when it
+    /// continues the key walk (the one-step physical nudge).
+    private var lastPhysicalMove = Date.distantPast
 
     /// The device's CURRENT Main Out fader level (direct-USB mode only —
     /// the glue path keeps gain[.mainOut] truthful via its events). Reads
@@ -2248,7 +2299,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // the HID push: the encoder/touchscreen events → the instant sweep
         // (control = this function's local — the shared singleton)
-        directUSB.startHIDWatcher { [weak control] in
+        directUSB.startHIDWatcher { [weak self, weak control] in
+            DispatchQueue.main.async { self?.lastPhysicalMove = Date() }
             control?.triggerDeviceSweep()
         }
         control.readInputDirect = { [weak self] i, bReq in
