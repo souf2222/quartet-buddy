@@ -382,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeGain(_ target: OutputTarget, _ db: Double) -> Bool {
         if case .connected = glue.state {
             glue.setDouble(id: target.gainId, db)
+            if target == .mainOut { armSpeakerWriteGuard(db) }
             return true
         }
         guard ensureDirectUSB() else {
@@ -393,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let whole = Int(db.rounded())
         let ok = directUSB.setGain(channel: target.usbChannel, minusDB: whole)
         if ok { QBLog.log(String(format: "transport: directUSB gain %@ %.0f dB", target.rawValue, db)) }
+        if ok, target == .mainOut { armSpeakerWriteGuard(db) }
         return ok
     }
 
@@ -401,11 +403,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeMute(_ target: OutputTarget, _ m: Bool) -> Bool {
         if case .connected = glue.state {
             glue.setBool(id: target.muteId, m)
+            if target == .mainOut { armMainOutMuteGuard(m) }
             return true
         }
         guard ensureDirectUSB() else { return false }
         let ok = directUSB.setMute(channel: target.usbChannel, on: m)
         if ok { QBLog.log("transport: directUSB mute \(target.rawValue) \(m ? "on" : "off")") }
+        if ok, target == .mainOut { armMainOutMuteGuard(m) }
         return ok
     }
 
@@ -433,6 +437,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "mirror: dropped %.1f dB — the macOS slider isn't pinned to the card yet", db))
             return
         }
+        // THE SPEAKER-WRITE GUARD (Nov 23, value-matched Nov 25): the app
+        // itself just wrote the Main Out fader — the driver's HAL push of
+        // THAT level is not a user input (it would corrupt the headphones
+        // when they are the selected target). A DIFFERENT level inside the
+        // window is the user's next key press — it must pass.
+        if isSpeakerWriteEcho(db) {
+            QBLog.log(String(format: "mirror: skipped %.1f dB — driver echo of our own Main Out write", db))
+            return
+        }
         let target = selectedOutput
         let current = gain[target] ?? 0
         if abs(db - current) <= 0.5 {
@@ -441,6 +454,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "mirror: osSliderMoved %.1f dB → target %@ (was %.1f)", db, target.rawValue, current))
         }
         guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding
+        // THE DRIVER-PUSH GUARD (Nov 23): the HAL property reflects the
+        // HARDWARE SPEAKER fader — a driver push (physical knob, touchscreen)
+        // delivers the SPEAKER level, never the user's macOS selection.
+        // Applying it to the Headphones fader corrupted the headphone level
+        // ("change the speaker volume → headphone volume changes"). Classify
+        // by reading the device's real speaker fader — the only race-free
+        // discriminator (the HAL push lands before any glue/sweep echo).
+        // 1.0 dB (not the own-echo 0.5): a knob mid-turn keeps moving
+        // between the driver's push and this read — the live fader sits a
+        // few tenths of a dB past the pushed value.
+        let speaker = currentSpeakerLevel()
+        if let speaker, abs(db - speaker) <= 1.0 {
+            QBLog.log(String(format: "mirror: driver push %.1f dB is the Main Out fader — %@ untouched", db, target.rawValue))
+            gain[.mainOut] = speaker
+            refreshMenu()
+            return
+        }
         QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
                          db, target.rawValue, current))
         guard writeGain(target, db) else { return }
@@ -457,6 +487,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// settings must re-apply, but tree arrivals triggered by other
     /// clients' hellos must not spam identical writes.
     private var pushedHardwareTrims: [Int: Double] = [:]
+
+    /// Speaker-write guard (Nov 23): armed whenever the app itself writes the
+    /// Main Out fader. The driver reflects the fader move onto the macOS
+    /// volume property, so the mirror's listener fires with the SPEAKER level —
+    /// and when Headphones are the selected target, osSliderMoved would apply
+    /// that level to the HEADPHONES fader and corrupt it.
+    ///
+    /// Nov 25 — VALUE-MATCHED, not a blanket window: the first cut skipped
+    /// every HAL event for 2 s after the write, which ate the user's NEXT
+    /// REAL KEY PRESSES (each Main-Out key press writes the fader, arming
+    /// the guard; rapid presses all landed inside the window → "volume
+    /// changes 1 every 2 presses", the fader stuck at -48/muted at the OS
+    /// bottom, "unmutes but the level doesn't change", and a max that
+    /// stopped at -1). The driver's echo of OUR write carries the level we
+    /// wrote; a user press carries a DIFFERENT level.
+    ///
+    /// Nov 25b — a SET, not the single latest value: during an app knob
+    /// drag each tick re-arms the guard with the newest level, and the
+    /// driver's pushes of the EARLIER ticks arrive late (the live log:
+    /// write -53 then -33, then the -53 push slipped past the -33 guard
+    /// and slammed the HEADPHONES to -53). Absorb a push matching ANY
+    /// level written in the last 2 s.
+    private var speakerWrites: [(value: Double, until: Date)] = []
+
+    /// Record the level `db` the app just wrote to the Main Out fader.
+    /// The driver's HAL push follows within ~10 ms; 2 s covers the whole
+    /// write→reflect→listener round trip (and drag-sized push lag).
+    private func armSpeakerWriteGuard(_ db: Double) {
+        let now = Date()
+        speakerWrites.removeAll { $0.until <= now }
+        speakerWrites.append((value: db, until: now.addingTimeInterval(2)))
+    }
+
+    /// True when `db` matches a level the app wrote to the Main Out fader
+    /// within the guard window — the driver's echo of our own write.
+    private func isSpeakerWriteEcho(_ db: Double) -> Bool {
+        let now = Date()
+        return speakerWrites.contains { $0.until > now && abs(db - $0.value) <= 0.5 }
+    }
+
+    /// The Main Out MUTE mirror of the guard above (Nov 25): the OS mute
+    /// property follows the MAIN OUT's hardware mute, so muting the
+    /// speakers — app chip, touchscreen — pushes an OS mute change that
+    /// used to be applied to the selected (headphone) output. Same
+    /// set-not-single-value rule: chip clicks can alternate quickly.
+    private var mainOutMuteWrites: [(value: Bool, until: Date)] = []
+
+    private func armMainOutMuteGuard(_ m: Bool) {
+        let now = Date()
+        mainOutMuteWrites.removeAll { $0.until <= now }
+        mainOutMuteWrites.append((value: m, until: now.addingTimeInterval(2)))
+    }
+
+    private func isMainOutMuteEcho(_ m: Bool) -> Bool {
+        let now = Date()
+        return mainOutMuteWrites.contains { $0.until > now && $0.value == m }
+    }
+
+    /// The Main Out fader's CURRENT hardware mute (0x35, ch 0) — the
+    /// touchscreen's mute lands here before the OS flag does. Nil when the
+    /// device is unreachable.
+    private func speakerMuteFromDevice() -> Bool? {
+        guard glue.state != .connected, directUSB.opened else { return nil }
+        guard let v = directUSB.readInput(input: 0, bRequest: 0x35) else { return nil }
+        return v != 0
+    }
+
+    /// The device's CURRENT Main Out fader level (direct-USB mode only —
+    /// the glue path keeps gain[.mainOut] truthful via its events). Reads
+    /// the real fader (0x33, ch 0) so a HAL push can be classified as the
+    /// driver's reflection of the hardware speaker fader rather than the
+    /// user's macOS selection. Nil when the device is unreachable.
+    private func speakerLevelFromDevice() -> Double? {
+        guard glue.state != .connected, directUSB.opened else { return nil }
+        guard let v = directUSB.readInput(input: 0, bRequest: 0x33) else { return nil }
+        return -Double(v)
+    }
+
+    /// The Main Out fader level to classify a HAL push against. ALWAYS the
+    /// real fader: the in-memory gain[.mainOut] lags a physical knob move
+    /// by up to one sweep (~0.3 s) while the window is open, and a mismatch
+    /// here misclassified the push and wrote the level onto the selected
+    /// (headphone) target — the corruption this guard exists to prevent.
+    /// Safe now that DirectUSBClient serializes every control transfer.
+    private func currentSpeakerLevel() -> Double? {
+        speakerLevelFromDevice() ?? gain[.mainOut]
+    }
 
     /// The DAC strips' firmware trim, pairs 0…2 — mono strips, so a pair
     /// is TWO hwout nodes. The strip numbering starts AT Main Out:
@@ -531,6 +648,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = selectedOutput
         let current = muted[target] ?? false
         guard m != current else { return }
+        // THE MAIN-OUT MUTE REFLECTION (Nov 25): the OS mute property
+        // follows the MAIN OUT's hardware mute. Absorb what the Main Out
+        // explains — our own chip write's echo, or a touchscreen mute the
+        // OS flag just followed — never apply it to the selected target.
+        if isMainOutMuteEcho(m) {
+            QBLog.log("mute sync: absorbed OS mute \(m ? "on" : "off") — the Main Out mute write's own echo")
+            return
+        }
+        if let mOut = speakerMuteFromDevice(), mOut == m {
+            muted[.mainOut] = m      // the touchscreen moved it — keep the menu truthful
+            QBLog.log("mute sync: OS mute \(m ? "on" : "off") is the Main Out fader's own mute — \(target.rawValue) untouched")
+            refreshMenu()
+            return
+        }
         QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
         guard writeMute(target, m) else { return }
         muted[target] = m
@@ -1403,7 +1534,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard writeGain(t, new) else { return }
         gain[t] = new
         syncMacSlider()
-        osSlider.noteLevel(new)
+        // Rebind/retries re-apply the SELECTED target's level onto the
+        // macOS slider — note the level only when it is that target.
+        // Noting the non-selected target's level here clobbered the
+        // mirror's pinned level (the speaker level with Headphones
+        // selected), so a rebind re-pinned the wrong fader onto the slider.
+        if t == selectedOutput { osSlider.noteLevel(new) }
     }
 
     /// Hardware mute toggle per output target.
@@ -1974,10 +2110,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let control = QuartetControlController.shared
         control.onWriteDouble = { [weak self] id, value in
             guard let self else { return }
-            if self.glue.state == .connected { self.glue.setDouble(id: id, value); return }
-            // offline: the known path-ids translate to the vendor requests
             let active = PathIds.active
-            if id == active.hwout0Gain { _ = self.writeGain(.mainOut, value); return }
+            let isSpeakerGain = id == active.hwout0Gain
+            if self.glue.state == .connected {
+                self.glue.setDouble(id: id, value)
+                // the driver echo of THIS write must not reach the headphones
+                if isSpeakerGain { self.armSpeakerWriteGuard(value) }
+                return
+            }
+            // offline: the known path-ids translate to the vendor requests
+            // (writeGain arms the guard itself for the Main Out target)
+            if isSpeakerGain {
+                _ = self.writeGain(.mainOut, value)
+                self.gain[.mainOut] = value
+                self.refreshMenu()
+                return
+            }
             if id == active.hwout1Gain { _ = self.writeGain(.headphones, value); return }
             // the input preamp gains: mic + instrument = the same vendor command
             for (input, ids) in active.hwinMicGain where ids == id {
@@ -2034,6 +2182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
+        // The sweep's monitor-fader reads keep the app's state truthful —
+        // the menu, the volume binding's driver-push classification.
+        control.onMonitorGain = { [weak self] o, db in
+            guard let self else { return }
+            let target = o == 0 ? OutputTarget.mainOut : .headphones
+            guard self.gain[target] != db else { return }
+            self.gain[target] = db
+            self.refreshMenu()
+        }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
         // Talkback chip in the monitor strip — same path as the hotkeys.
         control.onTalkback = { [weak self] on in self?.setTalkback(on) }

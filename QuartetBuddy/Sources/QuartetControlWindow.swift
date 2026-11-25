@@ -2915,6 +2915,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Fired at the end of every refresh() — the quick panel re-syncs its
     /// knobs, chips and markers from the live state.
     var onRefreshed: (() -> Void)?
+    /// Fired when a monitor fader's gain changes via the hardware sweep —
+    /// (slot 0/1, the level in dB). Lets the app keep its state truthful
+    /// (the menu, the volume binding's driver-push classification).
+    var onMonitorGain: ((Int, Double) -> Void)?
     /// The monitor outputs' live state (gain/mute/dim/sum ×2) — read by
     /// the quick panel; the bar's own knobs keep their state privately.
     func monitorStates() -> [MonitorState] { monitors }
@@ -3041,7 +3045,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 switch bReq {
                 case 0x33:
                     let db = -Double(v)
-                    if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true }
+                    if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true; onMonitorGain?(o, db) }
                 case 0x35:
                     let m = (v != 0)
                     if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true }
@@ -3168,6 +3172,11 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             self!.refresh()
         }
     }
+
+    /// True while the window is on screen — the hardware sweep only runs
+    /// then (the poll is visibility-gated), so the in-memory monitor state
+    /// is fresh. When hidden, the app can safely read the device itself.
+    var isVisible: Bool { window?.isVisible == true }
 
     func show() {
         if window == nil { build() }

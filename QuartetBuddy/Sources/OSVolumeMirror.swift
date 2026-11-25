@@ -483,7 +483,13 @@ final class OSVolumeMirror {
     /// does not always propagate a decibels write to it (observed live
     /// Oct 20 2026: after a volume-target switch the macOS slider stayed at
     /// the previous output's level until the scalar was written directly).
-    /// The scalar uses the HAL's square-law taper: scalar = (normalized dB)².
+    /// The scalar uses the DRIVER'S OWN dB→scalar conversion
+    /// (kAudioDevicePropertyVolumeDecibelsToScalar — AudioHardware.h: "on
+    /// input contains a dB volume value, on exit the equivalent scalar"),
+    /// so the slider lands on the same grid the driver's scalar→dB
+    /// readback uses. A hand-rolled taper can sit a whole key step off at
+    /// the ends. Fallback: the square-law taper (scalar = norm²), which
+    /// matches the driver's observed grid (k/16 → -64, -48, -41, -36 … -2, 0).
     static func write(decibels db: Double, to dev: AudioDeviceID) -> Bool {
         var dbAddr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeDecibels,
                                                 mScope: kAudioDevicePropertyScopeOutput,
@@ -513,11 +519,31 @@ final class OSVolumeMirror {
             lo = Double(range.mMinimum)
             hi = Double(range.mMaximum)
         }
-        let norm = min(1, max(0, (db - lo) / (hi - lo)))
-        var s = Float32(norm * norm)
+        var s = Self.scalarForDecibels(db, dev: dev, lo: lo, hi: hi)
         var sAddr = volumeAddress()
         let scalarOK = AudioObjectSetPropertyData(dev, &sAddr, 0, nil,
                                                   UInt32(MemoryLayout<Float32>.size), &s) == noErr
         return wroteDecibels || scalarOK
+    }
+
+    /// The driver's own dB→scalar conversion ('db2v'): put the dB value in
+    /// the buffer, the driver replaces it with the equivalent scalar.
+    /// Falls back to the square-law taper (scalar = norm² over the range)
+    /// when the driver doesn't implement the conversion or answers nonsense.
+    /// (The reverse direction needs no helper: readDecibels reads
+    /// kAudioDevicePropertyVolumeDecibels directly — the driver converts.)
+    private static func scalarForDecibels(_ db: Double, dev: AudioDeviceID,
+                                          lo: Double, hi: Double) -> Float32 {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyVolumeDecibelsToScalar,
+                                              mScope: kAudioDevicePropertyScopeOutput,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var v = Float32(db)
+        var size = UInt32(MemoryLayout<Float32>.size)
+        if AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &v) == noErr,
+           v.isFinite, v >= 0, v <= 1 {
+            return v
+        }
+        let norm = min(1, max(0, (db - lo) / (hi - lo)))
+        return Float32(norm * norm)
     }
 }
