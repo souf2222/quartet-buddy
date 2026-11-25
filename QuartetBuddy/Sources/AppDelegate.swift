@@ -12,9 +12,8 @@ import ServiceManagement
 // on every unit.
 //
 // The app picks the table by the serial found in the glue tree (see
-// AppDelegate.setupGlue). For a NEW Quartet, run the built-in wizard
-// (menubar → "Setup New Quartet…"): it captures the ids live and stores
-// them in preferences — no code change needed.
+// AppDelegate.setupGlue). Path-ids are computed from the hash formula,
+// so every Quartet works out of the box — no setup wizard needed.
 enum PathIds {
     struct DeviceTable: Codable {
         var hwout0Gain: [UInt8]   // Main Out fader (double)
@@ -73,7 +72,7 @@ enum PathIds {
         hwout1Mute: [0xfe, 0x81, 0x75, 0xb7],
         hwout0Dim:  [0x82, 0x2c, 0x69, 0x37])
 
-    // MARK: - The descriptor hash (CRACKED — see tools/crack_id_hash.py)
+    // MARK: - The descriptor hash
     //
     // The path-id of a property is a Java string hash (h = h·31 + UTF-8
     // byte, 32-bit wrapping) of its slash path from the tree root, sent as
@@ -162,13 +161,11 @@ enum PathIds {
         }
     }
 
-    /// Wizard-capture endpoint. The hash formula computes every id now, so
-    /// captured tables are no longer stored or consulted — keep the entry
-    /// point (PathIdSetup still calls it) but make it a no-op re-select.
+    /// Legacy capture endpoint. The hash formula computes every id now, so
+    /// captured tables are never stored or consulted — this is a no-op
+    /// re-select kept for the one internal `learn` caller.
     static func adopt(table: DeviceTable, for serial: String) {
-        activeSerial = nil   // force a fresh computed pick below
-        select(serial: serial)
-        QBLog.log("path-ids: wizard table for \(serial) ignored — computed table is authoritative")
+        select(serial: serial)  // computed tables ignore the passed table anyway
     }
 
     /// Assign a newly captured id to a console-window control and persist it
@@ -283,7 +280,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// True once a tree has given us real hardware gain values (never
     /// enforce the macOS slider from the pre-tree defaults).
     private var gainKnown = false
-    private var lastSliderDB: Double?
+    /// Last level enforced per output — the glue stream echoes BOTH
+    /// outputs' gains every tree (2 s), and a single scalar dedupe made
+    /// the non-selected target's echo differ every time, re-firing
+    /// enforce() (a CoreAudio write) on EVERY tree — the write storm that
+    /// kept poking a wedged driver (Nov 13, one "slider write failed"
+    /// every 2 s for minutes).
+    private var lastSliderDB: [OutputTarget: Double] = [:]
 
     /// Copy the selected output's real level onto the macOS volume slider —
     /// the Quartet → macOS half of the binding (see OSVolumeMirror).
@@ -291,13 +294,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// must not be pushed onto the slider and re-read back into the fader.
     private func syncMacSlider(force: Bool = false) {
         guard gainKnown else { return }
-        let db = gain[selectedOutput] ?? 0
-        guard force || lastSliderDB != db else { return }
+        let target = selectedOutput
+        let db = gain[target] ?? 0
+        guard force || lastSliderDB[target] != db else { return }
         guard Self.isValidDB(db) else {
             QBLog.log(String(format: "slider sync: IGNORED bogus hardware level %.1f dB", db))
             return
         }
-        lastSliderDB = db
+        lastSliderDB[target] = db
         osSlider.enforce(db)
     }
 
@@ -334,7 +338,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// would silently leave the 0 dB defaults and pin THOSE onto the macOS
     /// slider ("it starts at 0 dB"). So: every read is logged, a failed
     /// read re-arms up to twice (1 s apart), and the slider pin waits for a
-    /// complete read (or the last attempt, best effort).
+    /// complete read.
+    ///
+    /// 11.9 — NO PIN OF A GUESSED VALUE, EVER. The old "best effort" pin
+    /// after three failed reads pinned the app's 0 dB DEFAULT onto the
+    /// macOS slider (14:47:35, twice) — macOS REMEMBERS that per device,
+    /// and with the OS mute later dropped (macOS auto-unmutes on volume
+    /// activity) the next interaction ran the speakers at FULL. Now the
+    /// pin happens ONLY on a complete read; failed reads keep retrying in
+    /// the background (2 s apart, ~1 min) and the macOS slider simply
+    /// stays wherever macOS left it until a real level lands.
     private func armMirrorFromDevice(attempt: Int = 1) {
         var anyReadFailed = false
         for (target, ch) in [(OutputTarget.mainOut, 0), (.headphones, 1)] {
@@ -346,15 +359,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("mirror: \(target.rawValue) fader read (0x33) FAILED — device briefly busy after the session open?")
             }
         }
-        gainKnown = true
-        if !anyReadFailed || attempt >= 3 {
-            syncMacSlider(force: true)   // pin the macOS slider to the card's real level
+        if !anyReadFailed {
+            gainKnown = true
+            syncMacSlider(force: true)   // pin the macOS slider to the card's REAL level
+            return
         }
-        if anyReadFailed && attempt < 3 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        gainKnown = false                // no real values yet — never enforce defaults
+        if attempt < 30 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 guard let self, self.directUSB.opened else { return }
                 self.armMirrorFromDevice(attempt: attempt + 1)
             }
+        } else {
+            QBLog.log("mirror: fader reads still failing after \(attempt) attempts — macOS slider left UNPINNED (no guessed 0 dB)")
         }
     }
 
@@ -365,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeGain(_ target: OutputTarget, _ db: Double) -> Bool {
         if case .connected = glue.state {
             glue.setDouble(id: target.gainId, db)
+            if target == .mainOut { armSpeakerWriteGuard(db) }
             return true
         }
         guard ensureDirectUSB() else {
@@ -376,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let whole = Int(db.rounded())
         let ok = directUSB.setGain(channel: target.usbChannel, minusDB: whole)
         if ok { QBLog.log(String(format: "transport: directUSB gain %@ %.0f dB", target.rawValue, db)) }
+        if ok, target == .mainOut { armSpeakerWriteGuard(db) }
         return ok
     }
 
@@ -384,11 +403,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func writeMute(_ target: OutputTarget, _ m: Bool) -> Bool {
         if case .connected = glue.state {
             glue.setBool(id: target.muteId, m)
+            if target == .mainOut { armMainOutMuteGuard(m) }
             return true
         }
         guard ensureDirectUSB() else { return false }
         let ok = directUSB.setMute(channel: target.usbChannel, on: m)
         if ok { QBLog.log("transport: directUSB mute \(target.rawValue) \(m ? "on" : "off")") }
+        if ok, target == .mainOut { armMainOutMuteGuard(m) }
         return ok
     }
 
@@ -398,13 +419,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// loop — an out-of-range write that took the whole unit down (dark
     /// touchscreen). Never forward anything outside the fader's -64…0 dB.
     private func osSliderMoved(to db: Double) {
-        guard !PathIdSetupController.shared.sessionActive,
-              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
+        guard !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         guard Self.isValidDB(db) else {
             QBLog.log(String(format: "slider sync: IGNORED bogus slider level %.1f dB (driver wedge?)", db))
             return
         }
+        // The property's previous value — the grid-walk check below reads
+        // it. Every valid event updates it (absorbed ones included: the
+        // property really sat there).
+        let prevProperty = lastPropertyDB
+        lastPropertyDB = db
         // THE FIRST-PRESS GUARD: until one enforce() write has landed, the
         // macOS slider is at macOS's own remembered position (often 0 dB
         // right after connect — the connect-time pin write fails while the
@@ -417,6 +442,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "mirror: dropped %.1f dB — the macOS slider isn't pinned to the card yet", db))
             return
         }
+        // THE SPEAKER-WRITE GUARD (Nov 23, value-matched Nov 25): the app
+        // itself just wrote the Main Out fader — the driver's HAL push of
+        // THAT level is not a user input (it would corrupt the headphones
+        // when they are the selected target). A DIFFERENT level inside the
+        // window is the user's next key press — it must pass.
+        if isSpeakerWriteEcho(db) {
+            QBLog.log(String(format: "mirror: skipped %.1f dB — driver echo of our own Main Out write", db))
+            return
+        }
         let target = selectedOutput
         let current = gain[target] ?? 0
         if abs(db - current) <= 0.5 {
@@ -425,11 +459,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             QBLog.log(String(format: "mirror: osSliderMoved %.1f dB → target %@ (was %.1f)", db, target.rawValue, current))
         }
         guard abs(db - current) > 0.5 else { return }        // own writes / driver rounding
+        // THE DRIVER-PUSH GUARD (Nov 23): the HAL property reflects the
+        // HARDWARE SPEAKER fader — a driver push (physical knob, touchscreen)
+        // delivers the SPEAKER level, never the user's macOS selection.
+        // Applying it to the Headphones fader corrupted the headphone level
+        // ("change the speaker volume → headphone volume changes"). Classify
+        // by reading the device's real speaker fader — the only race-free
+        // discriminator (the HAL push lands before any glue/sweep echo).
+        // 1.0 dB (not the own-echo 0.5): a knob mid-turn keeps moving
+        // between the driver's push and this read — the live fader sits a
+        // few tenths of a dB past the pushed value.
+        //
+        // THE GRID-WALK EXEMPTION (Nov 25c): the macOS keys always land
+        // ONE grid step from the property's previous value, while a fader
+        // reflection jumps arbitrarily. Without this, every key press
+        // landing on the SPEAKER fader's parked value was eaten as a
+        // "reflection" (the live log: the HP sweep's 16th press — 0.0 dB —
+        // absorbed because the speaker sat parked at 0 dB; the HP stuck at
+        // -2 while the OS showed 100 %). A physical one-step nudge is
+        // rescued by the HID tie-breaker instead.
+        let speaker = currentSpeakerLevel()
+        if let speaker, abs(db - speaker) <= 1.0 {
+            let continuesKeyWalk = prevProperty.map {
+                abs(Self.gridStep($0) - Self.gridStep(db)) == 1
+            } ?? false
+            let physicalConfirmed = Date().timeIntervalSince(lastPhysicalMove) < 0.2
+            if !continuesKeyWalk || physicalConfirmed {
+                QBLog.log(String(format: "mirror: driver push %.1f dB is the Main Out fader — %@ untouched", db, target.rawValue))
+                gain[.mainOut] = speaker
+                refreshMenu()
+                return
+            }
+            QBLog.log(String(format: "mirror: %.1f dB matches the parked Main Out fader but continues the key walk — applying to %@", db, target.rawValue))
+        }
         QBLog.log(String(format: "slider sync: slider %.1f dB -> Quartet %@ (was %.1f)",
                          db, target.rawValue, current))
         guard writeGain(target, db) else { return }
         gain[target] = db
-        lastSliderDB = db
+        lastSliderDB[target] = db
         osSlider.noteLevel(db)      // rebind/retries must re-apply THIS level, not a stale snapshot
         refreshMenu()
     }
@@ -441,6 +508,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// settings must re-apply, but tree arrivals triggered by other
     /// clients' hellos must not spam identical writes.
     private var pushedHardwareTrims: [Int: Double] = [:]
+
+    /// Speaker-write guard (Nov 23): armed whenever the app itself writes the
+    /// Main Out fader. The driver reflects the fader move onto the macOS
+    /// volume property, so the mirror's listener fires with the SPEAKER level —
+    /// and when Headphones are the selected target, osSliderMoved would apply
+    /// that level to the HEADPHONES fader and corrupt it.
+    ///
+    /// Nov 25 — VALUE-MATCHED, not a blanket window: the first cut skipped
+    /// every HAL event for 2 s after the write, which ate the user's NEXT
+    /// REAL KEY PRESSES (each Main-Out key press writes the fader, arming
+    /// the guard; rapid presses all landed inside the window → "volume
+    /// changes 1 every 2 presses", the fader stuck at -48/muted at the OS
+    /// bottom, "unmutes but the level doesn't change", and a max that
+    /// stopped at -1). The driver's echo of OUR write carries the level we
+    /// wrote; a user press carries a DIFFERENT level.
+    ///
+    /// Nov 25b — a SET, not the single latest value: during an app knob
+    /// drag each tick re-arms the guard with the newest level, and the
+    /// driver's pushes of the EARLIER ticks arrive late (the live log:
+    /// write -53 then -33, then the -53 push slipped past the -33 guard
+    /// and slammed the HEADPHONES to -53). Absorb a push matching ANY
+    /// level written in the window.
+    ///
+    /// Nov 25c — the window is 0.35 s, NOT 2 s: the drag pushes lag by
+    /// tens of ms (one knob tick), but a USER key press that steps BACK
+    /// onto a recently-written value — reversing at 0 %/100 % — arrives
+    /// ~1 s after the write. The 2 s window ate exactly those (the live
+    /// log: at max, the down-press's -2 push absorbed because -2 was
+    /// written one press earlier; "one press nothing, the next changes
+    /// twice"). 0.35 s covers the lag with ~7× margin and expires before
+    /// a human reversal.
+    private var speakerWrites: [(value: Double, until: Date)] = []
+
+    /// Record the level `db` the app just wrote to the Main Out fader.
+    private func armSpeakerWriteGuard(_ db: Double) {
+        let now = Date()
+        speakerWrites.removeAll { $0.until <= now }
+        speakerWrites.append((value: db, until: now.addingTimeInterval(0.35)))
+    }
+
+    /// True when `db` matches a level the app wrote to the Main Out fader
+    /// within the guard window — the driver's echo of our own write.
+    private func isSpeakerWriteEcho(_ db: Double) -> Bool {
+        let now = Date()
+        return speakerWrites.contains { $0.until > now && abs(db - $0.value) <= 0.5 }
+    }
+
+    /// The Main Out MUTE mirror of the guard above (Nov 25): the OS mute
+    /// property follows the MAIN OUT's hardware mute, so muting the
+    /// speakers — app chip, touchscreen — pushes an OS mute change that
+    /// used to be applied to the selected (headphone) output. Same
+    /// set-not-single-value rule: chip clicks can alternate quickly.
+    private var mainOutMuteWrites: [(value: Bool, until: Date)] = []
+
+    private func armMainOutMuteGuard(_ m: Bool) {
+        let now = Date()
+        mainOutMuteWrites.removeAll { $0.until <= now }
+        // 0.35 s, same reasoning as the gain guard: the echo lag is tens
+        // of ms; a real F10 within 2 s of a chip write landing on the same
+        // state was being eaten.
+        mainOutMuteWrites.append((value: m, until: now.addingTimeInterval(0.35)))
+    }
+
+    private func isMainOutMuteEcho(_ m: Bool) -> Bool {
+        let now = Date()
+        return mainOutMuteWrites.contains { $0.until > now && $0.value == m }
+    }
+
+    /// The Main Out fader's CURRENT hardware mute (0x35, ch 0) — the
+    /// touchscreen's mute lands here before the OS flag does. Nil when the
+    /// device is unreachable.
+    private func speakerMuteFromDevice() -> Bool? {
+        guard glue.state != .connected, directUSB.opened else { return nil }
+        guard let v = directUSB.readInput(input: 0, bRequest: 0x35) else { return nil }
+        return v != 0
+    }
+
+    /// The driver's key-grid step for a dB value: the macOS keys write the
+    /// scalar k/16 and the driver maps it to dB = -64 + 64·√(k/16), rounded
+    /// to whole dB (verified against the live property — k=0…16 → -64, -48,
+    /// -41, -36, -32, -28, -25, -22, -19, -16, -13, -11, -9, -6, -4, -2, 0;
+    /// the round-trip through this helper reproduces every k exactly).
+    static func gridStep(_ db: Double) -> Int {
+        let norm = (db - Self.minDB) / (Self.maxDB - Self.minDB)
+        return Int((16.0 * norm * norm).rounded())
+    }
+
+    /// The property's previous value (every delivered event updates it,
+    /// absorbed ones included — the property really sat there). The
+    /// classification's grid-walk check reads it.
+    private var lastPropertyDB: Double?
+
+    /// The last HID-reported physical move (encoder/touchscreen). A property
+    /// push within 0.2 s of a HID report is a fader reflection even when it
+    /// continues the key walk (the one-step physical nudge).
+    private var lastPhysicalMove = Date.distantPast
+
+    /// The device's CURRENT Main Out fader level (direct-USB mode only —
+    /// the glue path keeps gain[.mainOut] truthful via its events). Reads
+    /// the real fader (0x33, ch 0) so a HAL push can be classified as the
+    /// driver's reflection of the hardware speaker fader rather than the
+    /// user's macOS selection. Nil when the device is unreachable.
+    private func speakerLevelFromDevice() -> Double? {
+        guard glue.state != .connected, directUSB.opened else { return nil }
+        guard let v = directUSB.readInput(input: 0, bRequest: 0x33) else { return nil }
+        return -Double(v)
+    }
+
+    /// The Main Out fader level to classify a HAL push against. ALWAYS the
+    /// real fader: the in-memory gain[.mainOut] lags a physical knob move
+    /// by up to one sweep (~0.3 s) while the window is open, and a mismatch
+    /// here misclassified the push and wrote the level onto the selected
+    /// (headphone) target — the corruption this guard exists to prevent.
+    /// Safe now that DirectUSBClient serializes every control transfer.
+    private func currentSpeakerLevel() -> Double? {
+        speakerLevelFromDevice() ?? gain[.mainOut]
+    }
 
     /// The DAC strips' firmware trim, pairs 0…2 — mono strips, so a pair
     /// is TWO hwout nodes. The strip numbering starts AT Main Out:
@@ -483,11 +667,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .connected = glue.state, PathIds.activeSerial != nil else { return }
         var pushedAny = false
         for pair in Self.hwoutTrimNodes.keys {
-            guard UserDefaults.standard.object(forKey: "hwout.trim.\(pair)") != nil else { continue }
-            let raw = UserDefaults.standard.double(forKey: "hwout.trim.\(pair)")
+            guard UserDefaults.standard.object(forKey: UserDefaultsKeys.hwoutTrim(pair)) != nil else { continue }
+            let raw = UserDefaults.standard.double(forKey: UserDefaultsKeys.hwoutTrim(pair))
             let db = min(Self.hwoutTrimMax, max(Self.hwoutTrimMin, raw))
             if raw != db {
-                UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+                UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(pair))
                 QBLog.log(String(format: "trim: pair %d saved %.1f dB out of range — clamped to %.1f", pair, raw, db))
             }
             guard pushedHardwareTrims[pair] != db else { continue }
@@ -510,15 +694,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// header); the one exception is a target switch, where the OS mute is
     /// written once so the macOS display matches the newly selected output.
     private func osMuteChanged(to m: Bool) {
-        guard !PathIdSetupController.shared.sessionActive,
-              !QuartetControlController.shared.isLearning else { return }   // a capture is listening
+        guard !QuartetControlController.shared.isLearning else { return }   // a capture is listening
         guard gainKnown || directUSB.opened || ensureDirectUSB() else { return }
         let target = selectedOutput
-        let current = muted[target] ?? false
-        guard m != current else { return }
-        QBLog.log("mute sync: OS mute \(m ? "on" : "off") -> Quartet \(target.rawValue)")
-        guard writeMute(target, m) else { return }
-        muted[target] = m
+        // THE MAIN-OUT MUTE REFLECTION (Nov 25): the OS mute property
+        // follows the MAIN OUT's hardware mute — our own chip write's echo
+        // is absorbed outright.
+        if isMainOutMuteEcho(m) {
+            QBLog.log("mute sync: absorbed OS mute \(m ? "on" : "off") — the Main Out mute write's own echo")
+            return
+        }
+        // THE REGISTER-DELTA TELL (Nov 25c): the first cut absorbed ANY
+        // event matching the Main Out's hardware mute — which ate every
+        // real F10 whose flipped state coincided with it (the user's
+        // report: with Headphones selected the first F10 muted, then the
+        // unmute matched the unmuted SPEAKERS' register and was absorbed
+        // — the HP stuck muted; with the speakers muted, BOTH directions
+        // died). A driver push (touchscreen / Control 2) is the register
+        // CHANGING to the pushed state; an F10 leaves the register alone.
+        if let mOut = speakerMuteFromDevice(), mOut == m, muted[.mainOut] != m {
+            muted[.mainOut] = m      // the touchscreen moved it — keep the menu truthful
+            QBLog.log("mute sync: OS mute \(m ? "on" : "off") is the Main Out fader's own mute (register changed) — \(target.rawValue) untouched")
+            refreshMenu()
+            return
+        }
+        // A REAL F10 (Nov 25c): the OS mute property is slaved to the MAIN
+        // OUT's hardware mute, so macOS inverts the PROPERTY's drifted
+        // state — with Headphones selected the flip's direction is slaving
+        // noise (the drift case: the property shows the speakers' mute).
+        // The user's intent is always TOGGLE THE SELECTED OUTPUT; the
+        // no-drift case is identical (m == !current there).
+        let new = !(muted[target] ?? false)
+        QBLog.log("mute sync: OS mute key -> toggle Quartet \(target.rawValue) → \(new ? "on" : "off")")
+        guard writeMute(target, new) else { return }
+        muted[target] = new
         refreshMenu()
     }
 
@@ -678,10 +887,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // the menubar icon + the offline transport are ready before
                 // the first write. When ApogeeGlue is running it wins the
                 // exclusive open and the glue path stays primary.
+                //
+                // 11.9: EVERY replug re-enumerates the device — a session
+                // opened before it is a STALE IOUSBHostDevice whose every
+                // control request fails ("Unable to send device request";
+                // the Nov 13 power-cycle left the whole offline UI dead
+                // because even the 0x33 fader reads failed). So CLOSE the
+                // old session and force a fresh one on every arrival —
+                // open() re-reads the faders and re-pins the macOS slider
+                // to the card's real level.
                 DispatchQueue.main.async { [weak self] in
-                    _ = self?.ensureDirectUSB()   // opens + re-pushes the saved routing
-                    self?.refreshMenu()
+                    guard let self else { return }
+                    self.directUSB.close()
+                    _ = self.ensureDirectUSB()
+                    self.refreshMenu()
                 }
+            } else {
+                // release the dead claim right away — the handle is stale
+                // the moment the device leaves the bus
+                DispatchQueue.main.async { [weak self] in self?.directUSB.close() }
             }
             if !connected, self?.talkbackOn == true {
                 // the TalkbackHelper resets talkback when the device goes away
@@ -718,31 +942,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Glue
 
-    // MARK: - the tree snapshot (the offline boot + the state recovery)
-
-    private static var treeSnapshotURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("QuartetBuddy/lastTree.json", isDirectory: true)
-    }
-
-    /// Persist the full tree so an offline boot can populate the UI.
-    private func saveTreeSnapshot(_ tree: [String: Any]) {
-        do {
-            let url = Self.treeSnapshotURL
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: tree)
-            try data.write(to: url)
-        } catch {
-            QBLog.log("tree snapshot save failed: \(error)")
-        }
-    }
-
-    private static func loadTreeSnapshot() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: treeSnapshotURL),
-              let tree = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return tree
-    }
+    // MARK: - the tree (offline boot + state recovery)
 
     /// Apply a tree (live or the saved snapshot) to the app's state model.
     private func applyTree(_ tree: [String: Any]) {
@@ -793,11 +993,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the offline branches never fired (the talkback picker's grey +
         // the dropped writes). lastTree = the LIVE glue tree only (the
         // connected-era path); offline = nil = the offline branches own it.
-        try? FileManager.default.removeItem(at: Self.treeSnapshotURL)
         glue.onSetProperty = { [weak self] event in
             guard let self else { return }
-            // the setup wizard listens to the same stream (capture steps)
-            PathIdSetupController.shared.handle(event)
             // so does the Quartet Control window (live updates + Learn mode)
             QuartetControlController.shared.handle(event)
             switch event.id {
@@ -920,14 +1117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .speakerMute: toggleMute(.mainOut)
         case .speakerDim:
             let on = !speakerDim
-            glue.setBool(id: PathIds.active.hwout0Dim, on)
-            speakerDim = on
+            if writeMonitorFlag(reg: 0x40, output: 0, on: on) { speakerDim = on }
         case .speakerSum:
-            if let id = PathIds.active.hwout0Sum {
-                let on = !speakerSum
-                glue.setBool(id: id, on)
-                speakerSum = on
-            }
+            let on = !speakerSum
+            if writeMonitorFlag(reg: 0x46, output: 0, on: on) { speakerSum = on }
         case .speakerVolumeUp: adjust(.mainOut, shortcuts.volumeStep)
         case .speakerVolumeDown: adjust(.mainOut, -shortcuts.volumeStep)
         case .speakerFineUp: adjust(.mainOut, shortcuts.fineStep)
@@ -936,17 +1129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Headphones (monitor 1)
         case .headphoneMute: toggleMute(.headphones)
         case .headphoneDim:
-            if let id = PathIds.active.hwout1Dim {
-                let on = !headphoneDim
-                glue.setBool(id: id, on)
-                headphoneDim = on
-            }
+            let on = !headphoneDim
+            if writeMonitorFlag(reg: 0x40, output: 1, on: on) { headphoneDim = on }
         case .headphoneSum:
-            if let id = PathIds.active.hwout1Sum {
-                let on = !headphoneSum
-                glue.setBool(id: id, on)
-                headphoneSum = on
-            }
+            let on = !headphoneSum
+            if writeMonitorFlag(reg: 0x46, output: 1, on: on) { headphoneSum = on }
         case .headphoneVolumeUp: adjust(.headphones, shortcuts.volumeStep)
         case .headphoneVolumeDown: adjust(.headphones, -shortcuts.volumeStep)
         case .headphoneFineUp: adjust(.headphones, shortcuts.fineStep)
@@ -1219,53 +1406,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 QBLog.log("mix-probe: block \(blockWI) slot \(slot) ← g\(gain) m\(marker) — \(ok ? "ok" : "FAILED") rb \(rb)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 speaker = NSSpeechSynthesizer()   // main thread
-                _ = self.directUSB.setRawByte(0x53, index: 3, byte: 4)   // HP → byte 4 (Mixer 1)
-                _ = self.directUSB.setRawByte(0x35, index: 0, byte: 1)   // Main muted
+                _ = self!.directUSB.setRawByte(0x53, index: 3, byte: 4)   // HP → byte 4 (Mixer 1)
+                _ = self!.directUSB.setRawByte(0x35, index: 0, byte: 1)   // Main muted
                 setSlot(0, 4, 0x30, 0xA1)                                // the mic open, factory marker
                 QBLog.log("mix-probe: MUTE-HUNT stage 1 (+10 s) — baseline")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 speak("Stage one. Baseline. Talk.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 22) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 0, 4, 1)
                 speak("Stage two. Mute register, plane zero.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 34) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 0, 4, 0)
                 setReg(0x4f, 1, 4, 1)
                 speak("Stage three. Mute register, plane one.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 46) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 1, 4, 0)
                 setReg(0x4f, 2, 4, 1)
                 speak("Stage four. Mute register, plane two.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 58) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 2, 4, 0)
                 setReg(0x4f, 3, 4, 1)
                 speak("Stage five. Mute register, plane three.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 70) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setReg(0x4f, 3, 4, 0)
                 setSlot(0, 4, 0x30, 0xA3)                                // marker bit 1
                 speak("Stage six. Marker bit one.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 82) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setSlot(0, 4, 0x30, 0xA5)                                // marker bit 2
                 speak("Stage seven. Marker bit two.")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 94) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 setSlot(0, 4, 0x30, 0x81)                                // clear marker bit 5
                 speak("Stage eight. Marker bit five cleared.")
             }
@@ -1400,7 +1587,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard writeGain(t, new) else { return }
         gain[t] = new
         syncMacSlider()
-        osSlider.noteLevel(new)
+        // Rebind/retries re-apply the SELECTED target's level onto the
+        // macOS slider — note the level only when it is that target.
+        // Noting the non-selected target's level here clobbered the
+        // mirror's pinned level (the speaker level with Headphones
+        // selected), so a rebind re-pinned the wrong fader onto the slider.
+        if t == selectedOutput { osSlider.noteLevel(new) }
     }
 
     /// Hardware mute toggle per output target.
@@ -1772,8 +1964,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleDim(_ sender: NSMenuItem) {
         let new = !speakerDim
         QBLog.log("dim: speakers \(new ? "on" : "off")")
-        glue.setBool(id: PathIds.active.hwout0Dim, new)
-        speakerDim = new
+        if writeMonitorFlag(reg: 0x40, output: 0, on: new) { speakerDim = new }
+        refreshMenu()
+    }
+
+    // MARK: - Monitor dim/sum transport (glue property or device register)
+
+    /// One DIM/SUM write for both transports: glue online → the property by
+    /// path-id; offline → the sweep-verified register (dim = 0x40, sum =
+    /// 0x46, wIndex = the output). The offline branch needs NO path-id —
+    /// the sum/HP-dim ids can't be computed without the tree's serial, and
+    /// the old glue-only writes are the "WRITE FAILED: Connection refused"
+    /// entries in the log. Returns success.
+    @discardableResult
+    private func writeMonitorFlag(reg: UInt8, output: Int, on: Bool) -> Bool {
+        if case .connected = glue.state {
+            let active = PathIds.active
+            let id: [UInt8]? = reg == 0x40
+                ? (output == 0 ? active.hwout0Dim : active.hwout1Dim)
+                : (output == 0 ? active.hwout0Sum : active.hwout1Sum)
+            guard let id else { return false }
+            glue.setBool(id: id, on)
+            return true
+        }
+        guard ensureDirectUSB() else { return false }
+        let ok = directUSB.setOutputFlag(reg, output: UInt16(output), on: on)
+        QBLog.log("transport: directUSB output flag 0x\(String(reg, radix: 16)) out\(output) \(on ? "on" : "off") \(ok ? "ok" : "FAILED")")
+        if ok {
+            noteMonitorFlag(reg: reg, output: output, on: on)
+            // force a sweep so the window/panel pick the device's truth now
+            // (the cold dim/sum registers ride every 8th sweep otherwise)
+            QuartetControlController.shared.triggerDeviceSweep()
+        }
+        return ok
+    }
+
+    /// Keep the app-side dim/sum copies (the menubar checkmark + the
+    /// shortcuts' toggle direction) in step with a direct-register write —
+    /// the glue property echo that normally syncs them doesn't exist offline.
+    private func noteMonitorFlag(reg: UInt8, output: Int, on: Bool) {
+        switch (reg, output) {
+        case (0x40, 0): speakerDim = on
+        case (0x40, 1): headphoneDim = on
+        case (0x46, 0): speakerSum = on
+        case (0x46, 1): headphoneSum = on
+        // the sweep's mute reads keep muted[] = the register's truth —
+        // the register-delta tell in osMuteChanged compares against it
+        case (0x35, 0): muted[.mainOut] = on
+        case (0x35, 1): muted[.headphones] = on
+        default: break
+        }
         refreshMenu()
     }
 
@@ -1971,10 +2211,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let control = QuartetControlController.shared
         control.onWriteDouble = { [weak self] id, value in
             guard let self else { return }
-            if self.glue.state == .connected { self.glue.setDouble(id: id, value); return }
-            // offline: the known path-ids translate to the vendor requests
             let active = PathIds.active
-            if id == active.hwout0Gain { _ = self.writeGain(.mainOut, value); return }
+            let isSpeakerGain = id == active.hwout0Gain
+            if self.glue.state == .connected {
+                self.glue.setDouble(id: id, value)
+                // the driver echo of THIS write must not reach the headphones
+                if isSpeakerGain { self.armSpeakerWriteGuard(value) }
+                return
+            }
+            // offline: the known path-ids translate to the vendor requests
+            // (writeGain arms the guard itself for the Main Out target)
+            if isSpeakerGain {
+                _ = self.writeGain(.mainOut, value)
+                self.gain[.mainOut] = value
+                self.refreshMenu()
+                return
+            }
             if id == active.hwout1Gain { _ = self.writeGain(.headphones, value); return }
             // the input preamp gains: mic + instrument = the same vendor command
             for (input, ids) in active.hwinMicGain where ids == id {
@@ -1999,10 +2251,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if id == active.hwout1Mute { _ = self.writeMute(.headphones, value); return }
             if id == PathIds.dev("identify") { _ = self.tryDirectIdentify(on: value); return }
             // 11.7 sweep-verified: dim = 0x40, sum = 0x46 (wIndex = the output)
-            if id == active.hwout0Dim { _ = self.directUSB.setOutputFlag(0x40, output: 0, on: value); return }
-            if id == active.hwout1Dim { _ = self.directUSB.setOutputFlag(0x40, output: 1, on: value); return }
-            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.directUSB.setOutputFlag(0x46, output: 0, on: value); return }
-            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.directUSB.setOutputFlag(0x46, output: 1, on: value); return }
+            // — through writeMonitorFlag so the app copies + the window sweep
+            // stay in step (no glue echo exists offline)
+            if id == active.hwout0Dim { _ = self.writeMonitorFlag(reg: 0x40, output: 0, on: value); return }
+            if id == active.hwout1Dim { _ = self.writeMonitorFlag(reg: 0x40, output: 1, on: value); return }
+            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.writeMonitorFlag(reg: 0x46, output: 0, on: value); return }
+            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.writeMonitorFlag(reg: 0x46, output: 1, on: value); return }
             // the input-side bools — sweep-verified registers, no ids needed:
             for (input, ids) in active.hwinPhantom where ids == id {
                 _ = self.directUSB.setInputFlag(0x15, input: UInt16(input), on: value); return
@@ -2031,6 +2285,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onWriteString = { [weak self] id, value in self?.glue.setString(id: id, value) }
         control.onRequestTree = { [weak self] in self?.glue.requestTree() }
         control.onSeedTree = { [weak self] in self?.lastTree }
+        // The sweep's monitor-fader reads keep the app's state truthful —
+        // the menu, the volume binding's driver-push classification.
+        control.onMonitorGain = { [weak self] o, db in
+            guard let self else { return }
+            let target = o == 0 ? OutputTarget.mainOut : .headphones
+            guard self.gain[target] != db else { return }
+            self.gain[target] = db
+            self.refreshMenu()
+        }
         control.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
         // Talkback chip in the monitor strip — same path as the hotkeys.
         control.onTalkback = { [weak self] on in self?.setTalkback(on) }
@@ -2044,9 +2307,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control.readStatusDirect = { [weak self] in self?.directUSB.readStatus() }
         control.readChangeBitmapDirect = { [weak self] in self?.directUSB.readChangeBitmap() }
+        // the sweep's dim/sum read-backs → the app's copies (no glue echo
+        // exists offline; the touchscreen's own toggles must reach the
+        // menubar checkmarks + the shortcuts' toggle direction)
+        control.onMonitorFlag = { [weak self] o, reg, on in
+            self?.noteMonitorFlag(reg: reg, output: o, on: on)
+        }
         // the HID push: the encoder/touchscreen events → the instant sweep
         // (control = this function's local — the shared singleton)
-        directUSB.startHIDWatcher { [weak control] in
+        directUSB.startHIDWatcher { [weak self, weak control] in
+            DispatchQueue.main.async { self?.lastPhysicalMove = Date() }
             control?.triggerDeviceSweep()
         }
         control.readInputDirect = { [weak self] i, bReq in
@@ -2069,23 +2339,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return false }
             return self.directUSB.setInputFlag(reg, input: UInt16(i), on: on)
         }
-        control.onDirectInputGain = { [weak self] i, v in
-            guard let self else { return false }
-            if self.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {
-                self.glue.setDouble(id: id, v); return true
+        // the DIM/∑ toggles offline: dim = 0x40, sum = 0x46 (wIndex = the
+        // output) — no path-id exists without the glue tree's serial
+        control.onDirectOutputFlag = { [weak self] reg, o, on in
+            guard let self, self.ensureDirectUSB() else { return false }
+            let ok = self.directUSB.setOutputFlag(reg, output: UInt16(o), on: on)
+            QBLog.log("transport: directUSB output flag 0x\(String(reg, radix: 16)) out\(o) \(on ? "on" : "off") \(ok ? "ok" : "FAILED")")
+            if ok {
+                self.noteMonitorFlag(reg: reg, output: o, on: on)
+                QuartetControlController.shared.triggerDeviceSweep()
             }
-            let ok = self.directUSB.setInputGain(input: UInt16(i), db: v)
-            if !ok { QBLog.log("directUSB: input gain write failed: \(self.directUSB.lastError ?? "?")") }
+            return ok
+        }
+        control.onDirectInputGain = { [weak self] i, v in
+            guard self != nil else { return false }
+            if self!.glue.state == .connected, let id = PathIds.active.hwinMicGain[i] {
+                self!.glue.setDouble(id: id, v); return true
+            }
+            let ok = self!.directUSB.setInputGain(input: UInt16(i), db: v)
+            if !ok { QBLog.log("directUSB: input gain write failed: \(self!.directUSB.lastError)") }
             return ok
         }
         control.onDirectInputType = { [weak self] i, v in
-            guard let self else { return false }
+            guard self != nil else { return false }
             // Line modes (+4/−10): the device register is untouched (pending decode)
             guard let raw = DirectUSBClient.deviceByte(forAppMode: Int(v)) else {
                 QBLog.log("transport: input \(i + 1) mode \(v) = Line — 0x36 not involved (pending)")
                 return true
             }
-            let ok = self.directUSB.setInputType(input: UInt16(i), raw: raw)
+            let ok = self!.directUSB.setInputType(input: UInt16(i), raw: raw)
             QBLog.log("transport: directUSB input \(i + 1) mode \(v) → 0x36=\(raw) \(ok ? "ok" : "FAILED")")
             return ok
         }
@@ -2309,7 +2591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             self.pushedHardwareTrims[pair] = db
-            UserDefaults.standard.set(db, forKey: "hwout.trim.\(pair)")
+            UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(pair))
             QBLog.log(String(format: "settings: hardware trim pair %d → %.1f dB", pair, db))
         }
         // Settings ▸ Quartet ▸ Channel Names — hardware inputs/outputs
@@ -2394,19 +2676,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // analog pairs = out−2 on BOTH strips. The state = the app's saved
         // value (the device's 0x53 read-back doesn't parse as the index).
         settingsWindow.readHwoutRouting = { [weak self] in
-            guard let self else { return [] }
+            guard self != nil else { return [] }
             return (0..<4).map { slot in
                 let v = UserDefaults.standard.object(forKey: "hwout.route.\(slot)") as? Int
                 return v ?? (slot == 3 ? 3 : slot)   // the HP's default = PB 7-8; the pairs = their own PB
             }
         }
         settingsWindow.writeHwoutRouting = { [weak self] slot, source in
-            guard let self else { return }
+            guard self != nil else { return }
             // the PAIR slots (the user's live mapping): 0=Out1-2(Main),
             // 1=Out3-4, 2=Out5-6, 3=Headphones — ONE write per pair
             let indexes: [UInt16] = [UInt16(slot)]
             for wI in indexes {
-                let ok = self.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
+                let ok = self!.directUSB.setRawByte(0x53, index: wI, byte: UInt8(source))
                 QBLog.log("settings: routing slot \(slot) → 0x53 wI=\(wI) =\(source) \(ok ? "ok" : "FAILED")")
             }
             UserDefaults.standard.set(source, forKey: "hwout.route.\(slot)")

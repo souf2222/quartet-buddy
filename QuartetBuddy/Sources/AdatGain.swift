@@ -63,26 +63,26 @@ final class AdatGainEngine {
     /// Target peak (dBFS) — the proposed default is −12.
     static var targetDBFS: Double {
         get {
-            let v = UserDefaults.standard.double(forKey: "adatAssistTargetDBFS")
+            let v = UserDefaults.standard.double(forKey: UserDefaultsKeys.adatAssistTargetDBFS)
             return targetOptions.contains(v) ? v : -12
         }
-        set { UserDefaults.standard.set(newValue, forKey: "adatAssistTargetDBFS") }
+        set { UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.adatAssistTargetDBFS) }
     }
     /// Measurement duration (s) — default 5.
     static var durationSeconds: Double {
         get {
-            let v = UserDefaults.standard.double(forKey: "adatAssistDurationSeconds")
+            let v = UserDefaults.standard.double(forKey: UserDefaultsKeys.adatAssistDurationSeconds)
             return durationOptions.contains(v) ? v : 5
         }
-        set { UserDefaults.standard.set(newValue, forKey: "adatAssistDurationSeconds") }
+        set { UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.adatAssistDurationSeconds) }
     }
     /// Acceptable range around the target (±dB) — default 2.
     static var toleranceDB: Double {
         get {
-            let v = UserDefaults.standard.double(forKey: "adatAssistToleranceDB")
+            let v = UserDefaults.standard.double(forKey: UserDefaultsKeys.adatAssistToleranceDB)
             return toleranceOptions.contains(v) ? v : 2
         }
-        set { UserDefaults.standard.set(newValue, forKey: "adatAssistToleranceDB") }
+        set { UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.adatAssistToleranceDB) }
     }
 
     /// The overlay's quiet settings summary (settings live in Settings,
@@ -188,12 +188,12 @@ final class AdatGainEngine {
     // MARK: per-channel names (app-side only; Settings ▸ Channel Names)
 
     static func adatName(_ i: Int) -> String {
-        UserDefaults.standard.string(forKey: "adatName.\(i)") ?? ""
+        UserDefaults.standard.string(forKey: UserDefaultsKeys.adatName(i)) ?? ""
     }
     static func setAdatName(_ i: Int, _ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { UserDefaults.standard.removeObject(forKey: "adatName.\(i)") }
-        else { UserDefaults.standard.set(trimmed, forKey: "adatName.\(i)") }
+        if trimmed.isEmpty { UserDefaults.standard.removeObject(forKey: UserDefaultsKeys.adatName(i)) }
+        else { UserDefaults.standard.set(trimmed, forKey: UserDefaultsKeys.adatName(i)) }
     }
 
     // MARK: level model for the UI

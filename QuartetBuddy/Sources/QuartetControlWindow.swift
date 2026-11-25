@@ -2883,6 +2883,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onDirectPhantom: ((Int, Bool) -> Bool)?
     /// 11.7: the per-input flag writes (0x11 = softLimit, 0x13 = polarity).
     var onDirectInputFlag: ((UInt8, Int, Bool) -> Bool)?
+    /// The per-OUTPUT flag writes for direct mode — 0x40 = dim, 0x46 = sum,
+    /// wIndex = the monitor slot (0 speakers, 1 headphones). The DIM/∑
+    /// toggles have no glue path-ids without the tree's serial (the device
+    /// exposes no USB serial, so the offline table can't compute them) —
+    /// in direct mode these registers ARE the control, the same ones the
+    /// sweep reads for the state display.
+    var onDirectOutputFlag: ((UInt8, Int, Bool) -> Bool)?
     /// 11.6 offline: write an input's preamp gain straight to the device
     /// (bRequest 0x34, wIndex = the input, |dB| byte). Returns false on failure.
     var onDirectInputGain: ((Int, Double) -> Bool)?
@@ -2915,6 +2922,14 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// Fired at the end of every refresh() — the quick panel re-syncs its
     /// knobs, chips and markers from the live state.
     var onRefreshed: (() -> Void)?
+    /// Fired when a monitor fader's gain changes via the hardware sweep —
+    /// (slot 0/1, the level in dB). Lets the app keep its state truthful
+    /// (the menu, the volume binding's driver-push classification).
+    var onMonitorGain: ((Int, Double) -> Void)?
+    /// Fired when the sweep reads a monitor DIM/SUM register change —
+    /// (slot 0/1, bRequest 0x40/0x46, the new value). The app's own dim/sum
+    /// copies have no glue echo to ride offline, so the sweep is their truth.
+    var onMonitorFlag: ((Int, UInt8, Bool) -> Void)?
     /// The monitor outputs' live state (gain/mute/dim/sum ×2) — read by
     /// the quick panel; the bar's own knobs keep their state privately.
     func monitorStates() -> [MonitorState] { monitors }
@@ -2924,13 +2939,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !isLearning else { return }
         let t = PathIds.active
         let id: [UInt8]?
+        // dim/sum's device registers — the direct-mode write when the glue
+        // path-id doesn't exist (offline, no serial to compute it from)
+        let reg: UInt8?
         switch which {
-        case .mute: id = o == 0 ? t.hwout0Mute : t.hwout1Mute
-        case .dim:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim
-        case .sum:  id = o == 0 ? t.hwout0Sum : t.hwout1Sum
+        case .mute: id = o == 0 ? t.hwout0Mute : t.hwout1Mute; reg = nil
+        case .dim:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim;   reg = 0x40
+        case .sum:  id = o == 0 ? t.hwout0Sum : t.hwout1Sum;   reg = 0x46
         }
-        guard let id, !id.isEmpty else { return }
-        onWriteBool?(id, on)
+        if let id, !id.isEmpty {
+            onWriteBool?(id, on)
+        } else if let reg, isDirectMode?() == true,
+                  onDirectOutputFlag?(reg, o, on) == true {
+            // register-backed dim/sum — no path-id exists offline
+        } else {
+            return
+        }
         if case .mute = which { monitors[o].mute = on }
         if case .dim = which { monitors[o].dim = on }
         if case .sum = which { monitors[o].sum = on }
@@ -3041,16 +3065,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 switch bReq {
                 case 0x33:
                     let db = -Double(v)
-                    if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true }
+                    if monitors[o].gain != db { monitors[o].gain = db; anyChanged = true; onMonitorGain?(o, db) }
                 case 0x35:
                     let m = (v != 0)
-                    if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true }
+                    if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true; onMonitorFlag?(o, 0x35, m) }
                 case 0x40:
                     let d = (v != 0)
-                    if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true }
+                    if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true; onMonitorFlag?(o, 0x40, d) }
                 case 0x46:
                     let s = (v != 0)
-                    if monitors[o].sum != s { monitors[o].sum = s; anyChanged = true }
+                    if monitors[o].sum != s { monitors[o].sum = s; anyChanged = true; onMonitorFlag?(o, 0x46, s) }
                 default: break
                 }
                 continue
@@ -3163,11 +3187,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !autoGainRefreshQueued else { return }
         autoGainRefreshQueued = true
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.autoGainRefreshQueued = false
-            self.refresh()
+            guard self != nil else { return }
+            self!.autoGainRefreshQueued = false
+            self!.refresh()
         }
     }
+
+    /// True while the window is on screen — the hardware sweep only runs
+    /// then (the poll is visibility-gated), so the in-memory monitor state
+    /// is fresh. When hidden, the app can safely read the device itself.
+    var isVisible: Bool { window?.isVisible == true }
 
     func show() {
         if window == nil { build() }
@@ -3222,18 +3251,18 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// orderOut only — nothing quits and audio processing is untouched.
     func windowDidResignKey(_ notification: Notification) {        guard !pinned, window?.isVisible == true else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard self != nil else { return }
             // focus came BACK (menu tracking closed, popover dismissed
             // back to us) — keep the panel up
-            guard self.window?.isKeyWindow != true else { return }
+            guard self!.window?.isKeyWindow != true else { return }
             // ANOTHER of our own windows took the key (settings, popover,
             // a plug-in editor) — that's the app workflow, not an
             // outside click: stay visible
-            if let key = NSApp.keyWindow, key !== self.window { return }
+            if let key = NSApp.keyWindow, key !== self!.window { return }
             // nothing of ours holds the key → the click (or app switch)
             // went outside: quietly hide
-            self.window?.orderOut(nil)
-            self.AdatVisibility(false)
+            self!.window?.orderOut(nil)
+            self!.AdatVisibility(false)
         }
     }
 
@@ -3265,9 +3294,9 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !refreshScheduled else { return }
         refreshScheduled = true
         Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            self.refreshScheduled = false
-            self.refreshNow()
+            guard self != nil else { return }
+            self!.refreshScheduled = false
+            self!.refreshNow()
         }
     }
 
@@ -3502,9 +3531,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // is stale, so it is not shown as if it were live
             monKnobs[o].valueKind = (connected && st.gain != nil) ? .live : .unknown
 
+            // DIM/∑ also work WITHOUT a path-id in direct mode — the
+            // registers (0x40 dim / 0x46 sum, wIndex = the output) carry
+            // them; the sweep reads the same registers, so the displayed
+            // state stays truthful. Gating on the nil ids alone kept these
+            // three greyed out whenever the glue tree (the serial's only
+            // source) never arrived.
+            let directOut = isDirectMode?() == true
             setToggle(muteToggles[o], st.mute, enabled: connected && !learning && !muteId.isEmpty)
-            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
-            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil)
+            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && (dimId != nil || directOut))
+            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && (sumId != nil || directOut))
 
             // Mute's clearest active state: the red M glyph itself — no
             // extra badge or dot. (Learn lives in the group-title menu.)
@@ -6037,23 +6073,23 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             autoGainKind = .activity
             refresh()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-                guard let self else { return }
+                guard self != nil else { return }
                 let value = gain.map { String(format: "%.1f dB", $0) } ?? "the new value"
-                self.autoGainStatus = "Auto Gain · Gain set to \(value)."
-                self.autoGainKind = .success
-                self.refresh()
+                self!.autoGainStatus = "Auto Gain · Gain set to \(value)."
+                self!.autoGainKind = .success
+                self!.refresh()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                     // …and the result line lingers a while (with a Dismiss
                     // action) before it clears
-                    guard let self else { return }
-                    self.autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
+                    guard self != nil else { return }
+                    self!.autoGainStatusTimer = Timer.scheduledTimer(withTimeInterval: 12,
                                                                      repeats: false) { [weak self] _ in
                         self?.autoGainStatus = nil
                         self?.autoGainDetail = nil
                         self?.autoGainStatusTimer = nil
                         self?.refresh()
                     }
-                    self.refresh()
+                    self!.refresh()
                 }
             }
 
@@ -6234,7 +6270,7 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private func presentPluginMenu(for slot: PluginSlotView) {
         let pair = slot.pairIndex
         let menu = NSMenu()
-        let current = UserDefaults.standard.string(forKey: "insertPair.\(pair).plugin") ?? ""
+        let current = UserDefaults.standard.string(forKey: UserDefaultsKeys.insertPairPlugin(pair)) ?? ""
         func add(_ title: String, _ key: String) {
             let item = NSMenuItem(title: title,
                                    action: #selector(pluginMenuItemChosen(_:)),
@@ -6328,14 +6364,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let o = tag % 100
         let t = PathIds.active
         let id: [UInt8]?
+        // dim/sum's device registers — the direct-mode write when the glue
+        // path-id doesn't exist (offline, no serial to compute it from)
+        let reg: UInt8?
         switch tag - o {
-        case 800: id = o == 0 ? t.hwout0Mute : t.hwout1Mute; monitors[o].mute = on
-        case 900: id = o == 0 ? t.hwout0Dim : t.hwout1Dim; monitors[o].dim = on
-        case 1000: id = o == 0 ? t.hwout0Sum : t.hwout1Sum; monitors[o].sum = on
-        default: id = nil
+        case 800:  id = o == 0 ? t.hwout0Mute : t.hwout1Mute; reg = nil
+        case 900:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim;   reg = 0x40
+        case 1000: id = o == 0 ? t.hwout0Sum : t.hwout1Sum;   reg = 0x46
+        default:   id = nil;                                  reg = nil
         }
-        guard !suppressActions, !isLearning, let id, !id.isEmpty else { return refresh() }
-        onWriteBool?(id, on)
+        guard !suppressActions, !isLearning else { return refresh() }
+        if let id, !id.isEmpty {
+            // the optimistic update the glue/USB echo confirms or reverts
+            if tag - o == 800 { monitors[o].mute = on }
+            if tag - o == 900 { monitors[o].dim = on }
+            if tag - o == 1000 { monitors[o].sum = on }
+            onWriteBool?(id, on)
+        } else if let reg, isDirectMode?() == true,
+                  onDirectOutputFlag?(reg, o, on) == true {
+            // register-backed dim/sum — no path-id exists offline
+            if tag - o == 900 { monitors[o].dim = on }
+            if tag - o == 1000 { monitors[o].sum = on }
+        } else {
+            return refresh()   // nothing written — the toggle snaps back
+        }
+        refresh()
     }
 
     /// Talkback chip — a LATCH toggle: one click latches it on (stays lit

@@ -99,10 +99,10 @@ final class MidiWatcher {
         }
         guard !messages.isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard self != nil else { return }
             for (event, trigger, isDown) in messages {
-                self.onAnyEvent?(event)
-                if let trigger { self.onTrigger?(trigger, isDown) }
+                self!.onAnyEvent?(event)
+                if let trigger { self!.onTrigger?(trigger, isDown) }
             }
         }
     }

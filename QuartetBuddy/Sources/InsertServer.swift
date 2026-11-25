@@ -286,7 +286,7 @@ final class InsertServer: NSObject {
                 UserDefaults.standard.set(true, forKey: "hwout.trim.migratedFromKnobs")
                 for j in 1...3 where UserDefaults.standard.object(forKey: Self.trimKey(j)) != nil {
                     let db = UserDefaults.standard.double(forKey: Self.trimKey(j))
-                    UserDefaults.standard.set(db, forKey: "hwout.trim.\(j)")
+                    UserDefaults.standard.set(db, forKey: UserDefaultsKeys.hwoutTrim(j))
                     UserDefaults.standard.set(0.0, forKey: Self.trimKey(j))
                     QBLog.log(String(format: "migrate: knob trim pair %d %.1f dB → hwout.trim.%d (settings)", j, db, j))
                 }
@@ -297,7 +297,7 @@ final class InsertServer: NSObject {
             }
             // migrate the v1 single-plugin settings to pair 0
             if i == 0, UserDefaults.standard.string(forKey: Self.pluginKey(0)) == nil,
-               let old = UserDefaults.standard.string(forKey: "insertPluginDesc") {
+               let old = UserDefaults.standard.string(forKey: UserDefaultsKeys.insertPluginDesc) {
                 UserDefaults.standard.set(old, forKey: Self.pluginKey(0))
                 if UserDefaults.standard.bool(forKey: "insertPluginBypass") {
                     UserDefaults.standard.set(false, forKey: Self.enabledKey(0))
@@ -1233,10 +1233,10 @@ final class InsertServer: NSObject {
     private func prefetchViewInfo(_ i: Int, unit: AudioUnit) {
         pairs[i].viewPrefetchState = 1
         Thread.detachNewThread { [weak self] in
-            guard let self else { return }
-            self.pairs[i].viewInfo = Self.readCocoaUIInfo(unit: unit)
-            self.pairs[i].viewPrefetchState = 2
-            DispatchQueue.main.async { self.onStateChange?() }
+            guard self != nil else { return }
+            self!.pairs[i].viewInfo = Self.readCocoaUIInfo(unit: unit)
+            self!.pairs[i].viewPrefetchState = 2
+            DispatchQueue.main.async { self!.onStateChange?() }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 4) { [weak self] in
             if self?.pairs[i].viewPrefetchState == 1 {

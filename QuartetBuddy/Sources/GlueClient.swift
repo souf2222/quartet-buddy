@@ -34,20 +34,20 @@ final class GlueClient: NSObject, StreamDelegate {
 
     func connect() {
         queue.async { [weak self] in
-            guard let self else { return }
-            self.setState(.connecting)
+            guard self != nil else { return }
+            self!.setState(.connecting)
             for port in GlueProtocol.candidatePorts {
-                if let (inp, out) = self.openSocket(port: port) {
-                    self.inputStream = inp
-                    self.outputStream = out
-                    inp.delegate = self
-                    out.delegate = self
+                if let (inp, out) = self!.openSocket(port: port) {
+                    self!.inputStream = inp
+                    self!.outputStream = out
+                    inp.delegate = self!
+                    out.delegate = self!
                     inp.schedule(in: .main, forMode: .default)
                     out.schedule(in: .main, forMode: .default)
                     inp.open()
                     out.open()
-                    self.treeRequested = false
-                    self.setState(.connected)
+                    self!.treeRequested = false
+                    self!.setState(.connected)
                     // hello (getEntireTree) is sent when the output stream
                     // first reports .hasSpaceAvailable — writing any earlier
                     // (right after open(), even at .openCompleted) returns -1
@@ -55,7 +55,7 @@ final class GlueClient: NSObject, StreamDelegate {
                     return
                 }
             }
-            self.setState(.disconnected)
+            self!.setState(.disconnected)
         }
     }
 
@@ -71,15 +71,15 @@ final class GlueClient: NSObject, StreamDelegate {
 
     func disconnect() {
         queue.async { [weak self] in
-            guard let self else { return }
-            self.inputStream?.close()
-            self.outputStream?.close()
-            self.inputStream = nil
-            self.outputStream = nil
-            self.inBuffer.removeAll()
-            self.treeRequested = false
-            self.sawMeter = false
-            self.setState(.disconnected)
+            guard self != nil else { return }
+            self!.inputStream?.close()
+            self!.outputStream?.close()
+            self!.inputStream = nil
+            self!.outputStream = nil
+            self!.inBuffer.removeAll()
+            self!.treeRequested = false
+            self!.sawMeter = false
+            self!.setState(.disconnected)
         }
     }
 

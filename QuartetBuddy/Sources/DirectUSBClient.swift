@@ -35,6 +35,19 @@ final class DirectUSBClient {
     private let queue = DispatchQueue(label: "quartetbuddy.directusb")
     private(set) var opened = false
 
+    /// EVERY control transfer funnels through this serial queue. Concurrent
+    /// __send calls on one IOUSBHostDevice race the device object
+    /// (EXC_BAD_ACCESS — the Nov 7 sweep crash): the window's sweep reads
+    /// arrive on a global queue while the main thread reads and writes.
+    /// Sync dispatch — every caller needs the result — so a call only waits
+    /// when a transfer is already in flight (~10 ms each).
+    private func sendSync(_ dev: IOUSBHostDevice, _ req: IOUSBDeviceRequest,
+                          data: NSMutableData, timeout: Double) throws {
+        try queue.sync {
+            try dev.__send(req, data: data, bytesTransferred: nil, completionTimeout: timeout)
+        }
+    }
+
     // MARK: - open / close
 
     /// Find the Quartet and open a session. Returns false (and logs) when
@@ -100,7 +113,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "identify: \(error.localizedDescription)"
@@ -121,7 +134,7 @@ final class DirectUSBClient {
         let clamped = Swift.max(0, Swift.min(255, abs(minusDB)))
         let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "gain: \(error.localizedDescription)"
@@ -141,7 +154,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "mute: \(error.localizedDescription)"
@@ -166,7 +179,7 @@ final class DirectUSBClient {
         let clamped = Swift.max(0, Swift.min(75, Int(db.rounded())))
         let d = NSMutableData(bytes: [UInt8(clamped)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "input gain: \(error.localizedDescription)"
@@ -244,7 +257,7 @@ final class DirectUSBClient {
         req.wLength = 7
         let d = NSMutableData(data: Data(repeating: 0, count: 7))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.3)
+            try sendSync(dev, req, data: d, timeout: 0.3)
             return (d as Data).map { $0 }
         } catch { return nil }
     }
@@ -260,7 +273,7 @@ final class DirectUSBClient {
         req.wLength = 60
         let d = NSMutableData(data: Data(repeating: 0, count: 60))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.3)
+            try sendSync(dev, req, data: d, timeout: 0.3)
             return (d as Data).map { $0 }
         } catch { return nil }
     }
@@ -278,7 +291,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [byte], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "raw \(reg): \(error.localizedDescription)"
@@ -301,7 +314,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [byte], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "raw \(reg): \(error.localizedDescription)"
@@ -323,7 +336,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "input flag \(reg): \(error.localizedDescription)"
@@ -346,7 +359,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "phantom: \(error.localizedDescription)"
@@ -369,7 +382,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [raw], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "input type: \(error.localizedDescription)"
@@ -390,7 +403,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(data: Data(repeating: 0, count: 1))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).first
         } catch {
             lastError = "input read: \(error.localizedDescription)"
@@ -410,7 +423,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(data: Data(repeating: 0, count: 1))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).first
         } catch {
             lastError = "cell read: \(error.localizedDescription)"
@@ -430,7 +443,7 @@ final class DirectUSBClient {
         req.wLength = UInt16(length)
         let d = NSMutableData(data: Data(repeating: 0, count: length))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).map { $0 }
         } catch {
             lastError = "block read: \(error.localizedDescription)"
@@ -451,7 +464,7 @@ final class DirectUSBClient {
         req.wLength = UInt16(bytes.count)
         let d = NSMutableData(bytes: bytes, length: bytes.count)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "block write: \(error.localizedDescription)"
@@ -476,7 +489,7 @@ final class DirectUSBClient {
         req.wLength = 1
         let d = NSMutableData(bytes: [on ? UInt8(1) : UInt8(0)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "output flag: \(error.localizedDescription)"
@@ -544,7 +557,7 @@ final class DirectUSBClient {
         let atten = Swift.max(0, Swift.min(240, Int((-db * 10).rounded())))
         let d = NSMutableData(bytes: [UInt8(atten)], length: 1)
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return true
         } catch {
             lastError = "output trim: \(error.localizedDescription)"
@@ -562,7 +575,7 @@ final class DirectUSBClient {
         req.wLength = 7
         let d = NSMutableData(data: Data(repeating: 0, count: 7))
         do {
-            try dev.__send(req, data: d, bytesTransferred: nil, completionTimeout: 0.5)
+            try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).map { $0 }
         } catch {
             lastError = "poll: \(error.localizedDescription)"
