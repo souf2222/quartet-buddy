@@ -2883,6 +2883,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onDirectPhantom: ((Int, Bool) -> Bool)?
     /// 11.7: the per-input flag writes (0x11 = softLimit, 0x13 = polarity).
     var onDirectInputFlag: ((UInt8, Int, Bool) -> Bool)?
+    /// The per-OUTPUT flag writes for direct mode — 0x40 = dim, 0x46 = sum,
+    /// wIndex = the monitor slot (0 speakers, 1 headphones). The DIM/∑
+    /// toggles have no glue path-ids without the tree's serial (the device
+    /// exposes no USB serial, so the offline table can't compute them) —
+    /// in direct mode these registers ARE the control, the same ones the
+    /// sweep reads for the state display.
+    var onDirectOutputFlag: ((UInt8, Int, Bool) -> Bool)?
     /// 11.6 offline: write an input's preamp gain straight to the device
     /// (bRequest 0x34, wIndex = the input, |dB| byte). Returns false on failure.
     var onDirectInputGain: ((Int, Double) -> Bool)?
@@ -2919,6 +2926,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     /// (slot 0/1, the level in dB). Lets the app keep its state truthful
     /// (the menu, the volume binding's driver-push classification).
     var onMonitorGain: ((Int, Double) -> Void)?
+    /// Fired when the sweep reads a monitor DIM/SUM register change —
+    /// (slot 0/1, bRequest 0x40/0x46, the new value). The app's own dim/sum
+    /// copies have no glue echo to ride offline, so the sweep is their truth.
+    var onMonitorFlag: ((Int, UInt8, Bool) -> Void)?
     /// The monitor outputs' live state (gain/mute/dim/sum ×2) — read by
     /// the quick panel; the bar's own knobs keep their state privately.
     func monitorStates() -> [MonitorState] { monitors }
@@ -2928,13 +2939,22 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         guard !isLearning else { return }
         let t = PathIds.active
         let id: [UInt8]?
+        // dim/sum's device registers — the direct-mode write when the glue
+        // path-id doesn't exist (offline, no serial to compute it from)
+        let reg: UInt8?
         switch which {
-        case .mute: id = o == 0 ? t.hwout0Mute : t.hwout1Mute
-        case .dim:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim
-        case .sum:  id = o == 0 ? t.hwout0Sum : t.hwout1Sum
+        case .mute: id = o == 0 ? t.hwout0Mute : t.hwout1Mute; reg = nil
+        case .dim:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim;   reg = 0x40
+        case .sum:  id = o == 0 ? t.hwout0Sum : t.hwout1Sum;   reg = 0x46
         }
-        guard let id, !id.isEmpty else { return }
-        onWriteBool?(id, on)
+        if let id, !id.isEmpty {
+            onWriteBool?(id, on)
+        } else if let reg, isDirectMode?() == true,
+                  onDirectOutputFlag?(reg, o, on) == true {
+            // register-backed dim/sum — no path-id exists offline
+        } else {
+            return
+        }
         if case .mute = which { monitors[o].mute = on }
         if case .dim = which { monitors[o].dim = on }
         if case .sum = which { monitors[o].sum = on }
@@ -3051,10 +3071,10 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                     if monitors[o].mute != m { monitors[o].mute = m; anyChanged = true }
                 case 0x40:
                     let d = (v != 0)
-                    if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true }
+                    if monitors[o].dim != d { monitors[o].dim = d; anyChanged = true; onMonitorFlag?(o, 0x40, d) }
                 case 0x46:
                     let s = (v != 0)
-                    if monitors[o].sum != s { monitors[o].sum = s; anyChanged = true }
+                    if monitors[o].sum != s { monitors[o].sum = s; anyChanged = true; onMonitorFlag?(o, 0x46, s) }
                 default: break
                 }
                 continue
@@ -3511,9 +3531,16 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
             // is stale, so it is not shown as if it were live
             monKnobs[o].valueKind = (connected && st.gain != nil) ? .live : .unknown
 
+            // DIM/∑ also work WITHOUT a path-id in direct mode — the
+            // registers (0x40 dim / 0x46 sum, wIndex = the output) carry
+            // them; the sweep reads the same registers, so the displayed
+            // state stays truthful. Gating on the nil ids alone kept these
+            // three greyed out whenever the glue tree (the serial's only
+            // source) never arrived.
+            let directOut = isDirectMode?() == true
             setToggle(muteToggles[o], st.mute, enabled: connected && !learning && !muteId.isEmpty)
-            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && dimId != nil)
-            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && sumId != nil)
+            setToggle(dimToggles[o], st.dim, enabled: connected && !learning && (dimId != nil || directOut))
+            setToggle(monoToggles[o], st.sum, enabled: connected && !learning && (sumId != nil || directOut))
 
             // Mute's clearest active state: the red M glyph itself — no
             // extra badge or dot. (Learn lives in the group-title menu.)
@@ -6337,14 +6364,31 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
         let o = tag % 100
         let t = PathIds.active
         let id: [UInt8]?
+        // dim/sum's device registers — the direct-mode write when the glue
+        // path-id doesn't exist (offline, no serial to compute it from)
+        let reg: UInt8?
         switch tag - o {
-        case 800: id = o == 0 ? t.hwout0Mute : t.hwout1Mute; monitors[o].mute = on
-        case 900: id = o == 0 ? t.hwout0Dim : t.hwout1Dim; monitors[o].dim = on
-        case 1000: id = o == 0 ? t.hwout0Sum : t.hwout1Sum; monitors[o].sum = on
-        default: id = nil
+        case 800:  id = o == 0 ? t.hwout0Mute : t.hwout1Mute; reg = nil
+        case 900:  id = o == 0 ? t.hwout0Dim : t.hwout1Dim;   reg = 0x40
+        case 1000: id = o == 0 ? t.hwout0Sum : t.hwout1Sum;   reg = 0x46
+        default:   id = nil;                                  reg = nil
         }
-        guard !suppressActions, !isLearning, let id, !id.isEmpty else { return refresh() }
-        onWriteBool?(id, on)
+        guard !suppressActions, !isLearning else { return refresh() }
+        if let id, !id.isEmpty {
+            // the optimistic update the glue/USB echo confirms or reverts
+            if tag - o == 800 { monitors[o].mute = on }
+            if tag - o == 900 { monitors[o].dim = on }
+            if tag - o == 1000 { monitors[o].sum = on }
+            onWriteBool?(id, on)
+        } else if let reg, isDirectMode?() == true,
+                  onDirectOutputFlag?(reg, o, on) == true {
+            // register-backed dim/sum — no path-id exists offline
+            if tag - o == 900 { monitors[o].dim = on }
+            if tag - o == 1000 { monitors[o].sum = on }
+        } else {
+            return refresh()   // nothing written — the toggle snaps back
+        }
+        refresh()
     }
 
     /// Talkback chip — a LATCH toggle: one click latches it on (stays lit

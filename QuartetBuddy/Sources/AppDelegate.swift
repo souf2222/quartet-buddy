@@ -1054,14 +1054,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .speakerMute: toggleMute(.mainOut)
         case .speakerDim:
             let on = !speakerDim
-            glue.setBool(id: PathIds.active.hwout0Dim, on)
-            speakerDim = on
+            if writeMonitorFlag(reg: 0x40, output: 0, on: on) { speakerDim = on }
         case .speakerSum:
-            if let id = PathIds.active.hwout0Sum {
-                let on = !speakerSum
-                glue.setBool(id: id, on)
-                speakerSum = on
-            }
+            let on = !speakerSum
+            if writeMonitorFlag(reg: 0x46, output: 0, on: on) { speakerSum = on }
         case .speakerVolumeUp: adjust(.mainOut, shortcuts.volumeStep)
         case .speakerVolumeDown: adjust(.mainOut, -shortcuts.volumeStep)
         case .speakerFineUp: adjust(.mainOut, shortcuts.fineStep)
@@ -1070,17 +1066,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Headphones (monitor 1)
         case .headphoneMute: toggleMute(.headphones)
         case .headphoneDim:
-            if let id = PathIds.active.hwout1Dim {
-                let on = !headphoneDim
-                glue.setBool(id: id, on)
-                headphoneDim = on
-            }
+            let on = !headphoneDim
+            if writeMonitorFlag(reg: 0x40, output: 1, on: on) { headphoneDim = on }
         case .headphoneSum:
-            if let id = PathIds.active.hwout1Sum {
-                let on = !headphoneSum
-                glue.setBool(id: id, on)
-                headphoneSum = on
-            }
+            let on = !headphoneSum
+            if writeMonitorFlag(reg: 0x46, output: 1, on: on) { headphoneSum = on }
         case .headphoneVolumeUp: adjust(.headphones, shortcuts.volumeStep)
         case .headphoneVolumeDown: adjust(.headphones, -shortcuts.volumeStep)
         case .headphoneFineUp: adjust(.headphones, shortcuts.fineStep)
@@ -1911,8 +1901,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleDim(_ sender: NSMenuItem) {
         let new = !speakerDim
         QBLog.log("dim: speakers \(new ? "on" : "off")")
-        glue.setBool(id: PathIds.active.hwout0Dim, new)
-        speakerDim = new
+        if writeMonitorFlag(reg: 0x40, output: 0, on: new) { speakerDim = new }
+        refreshMenu()
+    }
+
+    // MARK: - Monitor dim/sum transport (glue property or device register)
+
+    /// One DIM/SUM write for both transports: glue online → the property by
+    /// path-id; offline → the sweep-verified register (dim = 0x40, sum =
+    /// 0x46, wIndex = the output). The offline branch needs NO path-id —
+    /// the sum/HP-dim ids can't be computed without the tree's serial, and
+    /// the old glue-only writes are the "WRITE FAILED: Connection refused"
+    /// entries in the log. Returns success.
+    @discardableResult
+    private func writeMonitorFlag(reg: UInt8, output: Int, on: Bool) -> Bool {
+        if case .connected = glue.state {
+            let active = PathIds.active
+            let id: [UInt8]? = reg == 0x40
+                ? (output == 0 ? active.hwout0Dim : active.hwout1Dim)
+                : (output == 0 ? active.hwout0Sum : active.hwout1Sum)
+            guard let id else { return false }
+            glue.setBool(id: id, on)
+            return true
+        }
+        guard ensureDirectUSB() else { return false }
+        let ok = directUSB.setOutputFlag(reg, output: UInt16(output), on: on)
+        QBLog.log("transport: directUSB output flag 0x\(String(reg, radix: 16)) out\(output) \(on ? "on" : "off") \(ok ? "ok" : "FAILED")")
+        if ok {
+            noteMonitorFlag(reg: reg, output: output, on: on)
+            // force a sweep so the window/panel pick the device's truth now
+            // (the cold dim/sum registers ride every 8th sweep otherwise)
+            QuartetControlController.shared.triggerDeviceSweep()
+        }
+        return ok
+    }
+
+    /// Keep the app-side dim/sum copies (the menubar checkmark + the
+    /// shortcuts' toggle direction) in step with a direct-register write —
+    /// the glue property echo that normally syncs them doesn't exist offline.
+    private func noteMonitorFlag(reg: UInt8, output: Int, on: Bool) {
+        switch (reg, output) {
+        case (0x40, 0): speakerDim = on
+        case (0x40, 1): headphoneDim = on
+        case (0x46, 0): speakerSum = on
+        case (0x46, 1): headphoneSum = on
+        default: break
+        }
         refreshMenu()
     }
 
@@ -2150,10 +2184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if id == active.hwout1Mute { _ = self.writeMute(.headphones, value); return }
             if id == PathIds.dev("identify") { _ = self.tryDirectIdentify(on: value); return }
             // 11.7 sweep-verified: dim = 0x40, sum = 0x46 (wIndex = the output)
-            if id == active.hwout0Dim { _ = self.directUSB.setOutputFlag(0x40, output: 0, on: value); return }
-            if id == active.hwout1Dim { _ = self.directUSB.setOutputFlag(0x40, output: 1, on: value); return }
-            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.directUSB.setOutputFlag(0x46, output: 0, on: value); return }
-            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.directUSB.setOutputFlag(0x46, output: 1, on: value); return }
+            // — through writeMonitorFlag so the app copies + the window sweep
+            // stay in step (no glue echo exists offline)
+            if id == active.hwout0Dim { _ = self.writeMonitorFlag(reg: 0x40, output: 0, on: value); return }
+            if id == active.hwout1Dim { _ = self.writeMonitorFlag(reg: 0x40, output: 1, on: value); return }
+            if let sum0 = active.hwout0Sum, id == sum0 { _ = self.writeMonitorFlag(reg: 0x46, output: 0, on: value); return }
+            if let sum1 = active.hwout1Sum, id == sum1 { _ = self.writeMonitorFlag(reg: 0x46, output: 1, on: value); return }
             // the input-side bools — sweep-verified registers, no ids needed:
             for (input, ids) in active.hwinPhantom where ids == id {
                 _ = self.directUSB.setInputFlag(0x15, input: UInt16(input), on: value); return
@@ -2204,6 +2240,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         control.readStatusDirect = { [weak self] in self?.directUSB.readStatus() }
         control.readChangeBitmapDirect = { [weak self] in self?.directUSB.readChangeBitmap() }
+        // the sweep's dim/sum read-backs → the app's copies (no glue echo
+        // exists offline; the touchscreen's own toggles must reach the
+        // menubar checkmarks + the shortcuts' toggle direction)
+        control.onMonitorFlag = { [weak self] o, reg, on in
+            self?.noteMonitorFlag(reg: reg, output: o, on: on)
+        }
         // the HID push: the encoder/touchscreen events → the instant sweep
         // (control = this function's local — the shared singleton)
         directUSB.startHIDWatcher { [weak control] in
@@ -2228,6 +2270,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.onDirectInputFlag = { [weak self] reg, i, on in
             guard let self else { return false }
             return self.directUSB.setInputFlag(reg, input: UInt16(i), on: on)
+        }
+        // the DIM/∑ toggles offline: dim = 0x40, sum = 0x46 (wIndex = the
+        // output) — no path-id exists without the glue tree's serial
+        control.onDirectOutputFlag = { [weak self] reg, o, on in
+            guard let self, self.ensureDirectUSB() else { return false }
+            let ok = self.directUSB.setOutputFlag(reg, output: UInt16(o), on: on)
+            QBLog.log("transport: directUSB output flag 0x\(String(reg, radix: 16)) out\(o) \(on ? "on" : "off") \(ok ? "ok" : "FAILED")")
+            if ok {
+                self.noteMonitorFlag(reg: reg, output: o, on: on)
+                QuartetControlController.shared.triggerDeviceSweep()
+            }
+            return ok
         }
         control.onDirectInputGain = { [weak self] i, v in
             guard self != nil else { return false }
