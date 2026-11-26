@@ -2869,6 +2869,15 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     var onWriteString: (([UInt8], String) -> Void)?
     var onRequestTree: (() -> Void)?
     var isGlueConnected: (() -> Bool)?
+    /// Nov 26: the Quartet's USB presence INDEPENDENT of usability — the
+    /// footer distinguishes "not on the bus" (unavailable) from "on the bus
+    /// but the control plane is not answering yet" (starting up).
+    var isDevicePresent: (() -> Bool)?
+    /// Nov 26: TRUE when the app holds the card's REAL state (the mirror's
+    /// accepted read in direct mode, the tree in glue mode). While false the
+    /// device answers vendor reads with BOOT ZEROS — the sweep must not
+    /// adopt them into the UI (the "everything jumps to 0" mid-boot step).
+    var isStateKnown: (() -> Bool)?
     /// 11.6 offline state: a direct device read for an input —
     /// (input index, bRequest) → the 1-byte value (nil = the read failed).
     var readInputDirect: ((Int, UInt8) -> UInt8?)?
@@ -3003,6 +3012,13 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
 
     private func readInputsFromDevice(force: Bool = false) {
         guard readInputDirect != nil else { return }
+        // Nov 26 v5 THE ZERO-ADOPTION GUARD: during the power-on boot
+        // window the device answers every register with 0x00 — a sweep
+        // here would overwrite the UI's real values with zeros (the
+        // "greyed → right values → all zeros → greyed → correct" report).
+        // gainKnown (the mirror's accepted read / the glue tree) is the
+        // state-readiness signal; before it, sweeping is pointless anyway.
+        guard isStateKnown?() != false else { return }
         deviceReadQueue.async { [weak self] in
         // 11.7 SPLIT SWEEP: the HOT registers (the gains — the encoder's
         // usual target) on every sweep = 6 reads ≈ 60 ms; the COLD (the
@@ -3616,11 +3632,17 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
                 action = .dismiss
             }
         } else if !connected {
-            // The device is not there: say so plainly — the STATUS TEXT
-            // ITSELF opens the diagnostic popover (no Details button; the
-            // message carries that role).
+            // The device is not controllable: say so plainly — and Nov 26
+            // distinguishes ABSENT from PRESENT-BUT-NOT-ANSWERING (the
+            // power-on boot window / a wedged control plane; the sync
+            // chain keeps probing and this flips to Ready the moment the
+            // card answers).
             kind = .warning
-            message = "Device unavailable — waiting for Apogee Control 2."
+            if isDevicePresent?() == true {
+                message = "Quartet starting… — on USB, control not answering yet."
+            } else {
+                message = "Device unavailable — no Quartet on USB."
+            }
             showDeviceDiagnostics = true
         } else if !insertLive {
             kind = .idle
@@ -3687,14 +3709,24 @@ final class QuartetControlController: NSObject, NSWindowDelegate, NSTextFieldDel
     private var showDeviceDiagnostics = false
 
     private func deviceDiagnostics() -> String {
-        let glue = (isGlueConnected?() ?? false)
-            ? "connected" : "not connected"
+        // Nov 26: DIRECT USB leads (the glue daemon is gone from this
+        // setup) — the useful lines are whether the card is on the bus and
+        // whether its control plane answers.
+        let usb: String
+        if isDevicePresent?() != true {
+            usb = "not on the bus"
+        } else if isGlueConnected?() == true {
+            usb = "connected — control answering"
+        } else {
+            usb = "on the bus, control not answering (booting or wedged)"
+        }
         let live = InsertServer.deviceSampleRate()
         let device = live == nil ? "not found" : "found"
         let rate = live.map { Self.rateLabel($0) } ?? "—"
         let insert = InsertServer.shared.running ? "running" : "off"
         return """
-        Apogee Control 2 (Glue): \(glue)
+        Direct USB: \(usb)
+        Apogee Control 2 (Glue): not used
         Core Audio device: \(device)
         Sample rate: \(rate)
         Plug-in insert: \(insert)
