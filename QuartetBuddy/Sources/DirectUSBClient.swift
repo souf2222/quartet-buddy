@@ -35,6 +35,28 @@ final class DirectUSBClient {
     private let queue = DispatchQueue(label: "quartetbuddy.directusb")
     private(set) var opened = false
 
+    /// Nov 26 THE POWER-ON STALE HANDLE: a session opened while the Quartet
+    /// is still BOOTING (it enumerates seconds before its firmware is up)
+    /// dies the moment the device finishes — every later transfer fails with
+    /// "Unable to send device request." while the device NEVER leaves the
+    /// bus (no presence event → the close-on-arrival logic never runs; the
+    /// Nov 26 log: opened +0 s, dead +14 s, 19 failed writes until relaunch).
+    /// The client classifies that failure and fires this ONCE per session;
+    /// the AppDelegate closes + reopens on it (the reopen's mirror re-read
+    /// re-pins the macOS slider to the card's REAL level).
+    var onSessionDead: (() -> Void)?
+    /// True after a death-classified failure fired on THIS session (a fresh
+    /// open() resets it). The AppDelegate's sync chain checks it so the
+    /// mirror's retry steps never fight the recovery step for the schedule.
+    private(set) var dead = false
+    /// TRUTHFUL AVAILABILITY (Nov 26): a session that is merely OPEN says
+    /// nothing — during the power-on boot window the handle opens fine and
+    /// then every transfer fails. healthy flips true on the FIRST successful
+    /// transfer and false on a death-classified failure. The menubar icon,
+    /// the menu state line and the control window's connected state all gate
+    /// on this, so the app only claims "connected" when the card answers.
+    private(set) var healthy = false
+
     /// EVERY control transfer funnels through this serial queue. Concurrent
     /// __send calls on one IOUSBHostDevice race the device object
     /// (EXC_BAD_ACCESS — the Nov 7 sweep crash): the window's sweep reads
@@ -43,9 +65,40 @@ final class DirectUSBClient {
     /// when a transfer is already in flight (~10 ms each).
     private func sendSync(_ dev: IOUSBHostDevice, _ req: IOUSBDeviceRequest,
                           data: NSMutableData, timeout: Double) throws {
-        try queue.sync {
-            try dev.__send(req, data: data, bytesTransferred: nil, completionTimeout: timeout)
+        do {
+            try queue.sync {
+                try dev.__send(req, data: data, bytesTransferred: nil, completionTimeout: timeout)
+            }
+            healthy = true   // the card actually answered — it is usable
+        } catch {
+            noteDead(error as NSError)   // a dead handle announces itself here
+            throw error
         }
+    }
+
+    /// True when an error means THIS handle is dead (the device finished
+    /// booting under us / another client took the interfaces over) — as
+    /// opposed to a mere busy/timeout. The dead handle's text is stable:
+    /// "Unable to send device request." (Nov 26 log). A few detach-worded
+    /// variants ride along for the other stale-handle flavors.
+    private func classifiesDeadSession(_ error: NSError) -> Bool {
+        let s = error.localizedDescription.lowercased()
+        return s.contains("unable to send device request")
+            || s.contains("device detached")
+            || s.contains("not attached")
+            || s.contains("no connection")
+            || s.contains("exclusive access")
+    }
+
+    /// Fire onSessionDead once per session (reads swallow their errors and
+    /// return nil, writes log theirs — BOTH call this so the recovery sees
+    /// the death through whichever path touched the handle first).
+    private func noteDead(_ error: NSError) {
+        healthy = false
+        guard classifiesDeadSession(error), !dead else { return }
+        dead = true
+        QBLog.log("directUSB: session DEAD (\(error.localizedDescription)) — recovery requested")
+        DispatchQueue.main.async { [weak self] in self?.onSessionDead?() }
     }
 
     // MARK: - open / close
@@ -55,6 +108,8 @@ final class DirectUSBClient {
     @discardableResult
     func open() -> Bool {
         close()
+        dead = false        // a fresh session re-arms the death detector
+        healthy = false     // …and is UNPROVEN until its first transfer lands
         guard let dict = IOServiceMatching("IOUSBHostDevice") else { return false }
         var iterator: io_iterator_t = 0
         let kr = IOServiceGetMatchingServices(kIOMainPortDefault, dict, &iterator)
@@ -96,6 +151,30 @@ final class DirectUSBClient {
         device?.destroy()
         device = nil
         opened = false
+    }
+
+    /// Nov 26 THE WEDGE SELF-HEAL. The card's control plane can go
+    /// permanently unresponsive — "Unable to send device request." for
+    /// EVERY client (the 11:34 independent probe proved it with the app
+    /// fully quit; only a manual power cycle used to clear it). This asks
+    /// the system to reset + re-enumerate the USB device from software:
+    /// "Terminate the device and attempt to reenumerate it" — the current
+    /// object dies, a NEW IOUSBHostDevice appears, the presence monitor
+    /// sees the terminate/match pair and the app's sync chain reopens
+    /// fresh. Audio drops for the re-enum's few seconds, so the callers
+    /// fire it only in the boot-phase wedge (or explicitly from the menu).
+    @discardableResult
+    func resetDevice() -> Bool {
+        guard let dev = device else {
+            QBLog.log("directUSB: device RESET skipped — no session")
+            return false
+        }
+        QBLog.log("directUSB: device RESET requested — the card will re-enumerate (audio drops briefly)")
+        do { try dev.reset(); return true }
+        catch {
+            QBLog.log("directUSB: device RESET failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     var isAvailable: Bool { opened }
@@ -259,7 +338,10 @@ final class DirectUSBClient {
         do {
             try sendSync(dev, req, data: d, timeout: 0.3)
             return (d as Data).map { $0 }
-        } catch { return nil }
+        } catch {
+            noteDead(error as NSError)
+            return nil
+        }
     }
 
     /// The 60-byte CHANGE-BITMAP (bRequest 0x14) — the device's event
@@ -275,7 +357,10 @@ final class DirectUSBClient {
         do {
             try sendSync(dev, req, data: d, timeout: 0.3)
             return (d as Data).map { $0 }
-        } catch { return nil }
+        } catch {
+            noteDead(error as NSError)
+            return nil
+        }
     }
 
     /// A raw 1-byte register write with a non-zero wValue — the monitor
@@ -406,6 +491,7 @@ final class DirectUSBClient {
             try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).first
         } catch {
+            noteDead(error as NSError)
             lastError = "input read: \(error.localizedDescription)"
             return nil
         }
@@ -426,6 +512,7 @@ final class DirectUSBClient {
             try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).first
         } catch {
+            noteDead(error as NSError)
             lastError = "cell read: \(error.localizedDescription)"
             return nil
         }
@@ -446,6 +533,7 @@ final class DirectUSBClient {
             try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).map { $0 }
         } catch {
+            noteDead(error as NSError)
             lastError = "block read: \(error.localizedDescription)"
             return nil
         }
@@ -578,6 +666,7 @@ final class DirectUSBClient {
             try sendSync(dev, req, data: d, timeout: 0.5)
             return (d as Data).map { $0 }
         } catch {
+            noteDead(error as NSError)
             lastError = "poll: \(error.localizedDescription)"
             return nil
         }

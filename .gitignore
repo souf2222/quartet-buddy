@@ -3,3 +3,4 @@ build/
 *.log
 .build/
 QuartetBuddy/assets/AppIcon.iconset/
+.tmp-instruments/

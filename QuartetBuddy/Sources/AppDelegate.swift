@@ -321,8 +321,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ok {
             QBLog.log("transport: direct-USB session opened")
             armMirrorFromDevice()
+        } else {
+            // The power-on enumeration beats the device's readiness (the
+            // first IOUSBHostDevice creation fails with "Failed to create
+            // IOUSBHostObject") — the sync chain re-arms the open until it
+            // lands, instead of stranding the arrival.
+            scheduleSync { [weak self] in
+                guard let self, self.quartetPresence.isConnected else { return }
+                guard !self.directUSB.opened else { return }
+                _ = self.ensureDirectUSB()
+            }
         }
         return ok
+    }
+
+    /// THE SINGLE SYNC CHAIN (Nov 26 v3). Every slow-path step — the open
+    /// retry after an arrival, the mirror's fader re-reads, the confirmation
+    /// re-read, the dead-session recovery — funnels through ONE pending
+    /// work item. The v2 recovery spawned a fresh chain per death event and
+    /// the chains MULTIPLIED (56 fader read-pairs in a single second,
+    /// 11:26:38) — the request flood kept the device's control pipe jammed,
+    /// while the same device answered fine under light traffic (the
+    /// 11:21:51→57 chain read the REAL -32 dB six seconds after a flap).
+    private var syncWork: DispatchWorkItem?
+    /// Consecutive dead-recovery steps since the last healthy moment —
+    /// the boot-phase wedge trigger.
+    private var deadCycles = 0
+    /// Device RESETS spent on the current power-on cycle (cap 2 — beyond
+    /// that the wedge is deeper than software can clear; keep polling and
+    /// stay honest in the UI).
+    private var resetsSpent = 0
+    /// The last presence arrival — the boot phase = ~60 s after it. The
+    /// auto-reset only fires in that window (a mid-session wedge never
+    /// resets automatically: the audio drop must be the user's call — the
+    /// menu's "Reset Quartet (USB)" carries that role).
+    private var lastArrivalAt: Date?
+
+    /// Schedule the NEXT chain step. Cancels any pending step — one chain
+    /// only, no matter which component asked for it. The 2 s cadence is the
+    /// one the device demonstrably tolerates while it boots.
+    private func scheduleSync(after: TimeInterval = 2, _ block: @escaping () -> Void) {
+        syncWork?.cancel()
+        let work = DispatchWorkItem(block: block)
+        syncWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: work)
+    }
+
+    /// Nov 26 — THE POWER-ON FLAP CYCLE. The Quartet re-enumerates SEVERAL
+    /// times while coming up (bootloader → firmware), and each flap kills
+    /// the app's IOUSBHostDevice session AND restarts the boot window where
+    /// every transfer fails with "Unable to send device request." The old
+    /// code opened the session once per arrival and gave up on the first
+    /// failure; the v2 recovery re-opened every 1 s and flooded the pipe.
+    /// Now: the failure schedules ONE recovery step 2 s out — close the
+    /// corpse, reopen, and let the mirror chain read the card's real state
+    /// (which re-pins the macOS slider over any boot-window zeros).
+    private func sessionWentDead() {
+        guard quartetPresence.isConnected else { return }
+        deadCycles += 1
+        // THE BOOT-PHASE WEDGE SELF-HEAL (Nov 26): still dead after ~4
+        // recovery steps (~10 s) shortly after an arrival → the card's
+        // control plane is WEDGED (every client refused — verified with
+        // the independent probe while the app was quit). Reset +
+        // re-enumerate it from software; the terminate/match pair re-drives
+        // the whole chain. Max 2 resets per power-on cycle.
+        let inBootPhase = lastArrivalAt.map { Date().timeIntervalSince($0) < 60 } ?? false
+        if deadCycles >= 4, inBootPhase, resetsSpent < 2 {
+            deadCycles = 0
+            resetsSpent += 1
+            syncWork?.cancel()
+            directUSB.resetDevice()
+            refreshMenu()
+            return
+        }
+        QBLog.log("transport: direct-USB session went dead — recovery step in 2 s")
+        refreshMenu()
+        scheduleSync { [weak self] in
+            guard let self, self.quartetPresence.isConnected else { return }
+            // a fresh arrival may already have replaced the session with a
+            // proven-healthy one — never tear that down
+            guard !(self.directUSB.opened && self.directUSB.healthy) else { return }
+            self.directUSB.close()
+            _ = self.ensureDirectUSB()
+            // the open control window sweeps the fresh session at once
+            QuartetControlController.shared.triggerDeviceSweep()
+        }
+    }
+
+    /// The menu's manual reset — the mid-session wedge's cure (the audio
+    /// drop is the user's explicit call there). Also clears the counters.
+    @objc private func resetQuartetUSB(_ sender: NSMenuItem) {
+        QBLog.log("transport: manual Quartet USB reset requested")
+        syncWork?.cancel()
+        directUSB.close()
+        deadCycles = 0
+        resetsSpent = 0
+        // a throwaway session just for the reset call — the re-enum kills
+        // it, and the terminate/match pair re-drives the chain after
+        _ = directUSB.open()
+        directUSB.resetDevice()
+        // safety re-arm in case a presence notification is missed
+        scheduleSync(after: 3) { [weak self] in
+            guard let self, self.quartetPresence.isConnected else { return }
+            guard !self.directUSB.opened else { return }
+            _ = self.ensureDirectUSB()
+        }
+        refreshMenu()
     }
 
     /// 11.7 THE OFFLINE-BOOT KEY FIX: the mirror's property listener is
@@ -348,30 +452,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// pin happens ONLY on a complete read; failed reads keep retrying in
     /// the background (2 s apart, ~1 min) and the macOS slider simply
     /// stays wherever macOS left it until a real level lands.
-    private func armMirrorFromDevice(attempt: Int = 1) {
+    ///
+    /// Nov 26 — THE BOOT-WINDOW ZEROS. The reads above can also SUCCEED
+    /// with 0x00: right after a POWER-ON the vendor plane answers with
+    /// zeros while the firmware is still coming up (the card's real
+    /// settings land a few seconds later — the Nov 26 log read 0/0 at the
+    /// enumeration moment while CoreAudio didn't even see the device for
+    /// another ~2 s). Pinning those zeros is the "everything starts at
+    /// 0 dB" report: gainKnown = true with 0 dB → the macOS slider is
+    /// force-pinned to 0 and the whole UI seeds from the zeros. So an
+    /// ALL-ZERO read right after the open is NOT trusted either: keep
+    /// gainKnown false, re-read on the same 2 s cadence, and accept the
+    /// zeros as the real level only once they survived four consecutive
+    /// complete reads (~8 s — past the observed boot window) or the
+    /// moment any non-zero value shows up (a live register plane).
+    private func armMirrorFromDevice(attempt: Int = 1, zeroStreak: Int = 0) {
         var anyReadFailed = false
+        var bothZero = true
+        // Nov 26 v5: the reads land in LOCALS — nothing is committed into
+        // the app's state until this read batch is ACCEPTED. Committing the
+        // boot-window zeros into gain[] made the menubar show "Speakers
+        // 0.0 dB" while the chain was still waiting out the boot.
+        var readGain: [OutputTarget: Double] = [:]
         for (target, ch) in [(OutputTarget.mainOut, 0), (.headphones, 1)] {
             if let v = directUSB.readInput(input: UInt16(ch), bRequest: 0x33) {
-                gain[target] = -Double(v)
+                readGain[target] = -Double(v)
+                if v != 0 { bothZero = false }
                 QBLog.log(String(format: "mirror: %@ fader read %.0f dB (0x33)", target.rawValue, -Double(v)))
             } else {
                 anyReadFailed = true
                 QBLog.log("mirror: \(target.rawValue) fader read (0x33) FAILED — device briefly busy after the session open?")
             }
         }
-        if !anyReadFailed {
-            gainKnown = true
-            syncMacSlider(force: true)   // pin the macOS slider to the card's REAL level
+        if anyReadFailed {
+            gainKnown = false                // no real values yet — never enforce defaults
+            // a dead session hands the chain to the recovery step — the
+            // mirror must not re-schedule over it (and a dead handle's
+            // reads keep failing anyway)
+            guard !directUSB.dead else { return }
+            if attempt < 30 {
+                scheduleSync { [weak self] in
+                    guard let self, self.directUSB.opened else { return }
+                    self.armMirrorFromDevice(attempt: attempt + 1, zeroStreak: zeroStreak)
+                }
+            } else {
+                // the boot outlasted ~1 min of 2 s reads — keep polling,
+                // just politely (10 s) until the card answers or leaves
+                scheduleSync(after: 10) { [weak self] in
+                    guard let self, self.directUSB.opened else { return }
+                    self.armMirrorFromDevice(attempt: attempt + 1, zeroStreak: zeroStreak)
+                }
+            }
             return
         }
-        gainKnown = false                // no real values yet — never enforce defaults
-        if attempt < 30 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        if bothZero && zeroStreak < 4 {
+            gainKnown = false
+            QBLog.log("mirror: faders read 0/0 right after the open — the device is still booting, NOT pinning (read \(zeroStreak + 1))")
+            guard !directUSB.dead else { return }
+            scheduleSync { [weak self] in
                 guard let self, self.directUSB.opened else { return }
-                self.armMirrorFromDevice(attempt: attempt + 1)
+                self.armMirrorFromDevice(attempt: attempt + 1, zeroStreak: zeroStreak + 1)
             }
-        } else {
-            QBLog.log("mirror: fader reads still failing after \(attempt) attempts — macOS slider left UNPINNED (no guessed 0 dB)")
+            return
+        }
+        // ACCEPTED: only now does the read reach the app's state
+        for (target, v) in readGain { gain[target] = v }
+        gainKnown = true
+        syncMacSlider(force: true)   // pin the macOS slider to the card's REAL level
+        refreshMenu()                // the icon/state line follow the real health
+        deadCycles = 0               // the card answers again — wedge counters clear
+        resetsSpent = 0
+        // Nov 26: zeros that survived the distrust window still get ONE
+        // confirmation re-read ~12 s in (the boot window fully passed by
+        // then) — if the card was still early-boot at acceptance, the real
+        // levels land here and re-pin the macOS slider. A settled 0/0 card
+        // re-reads 0/0 (no-op). The re-check itself never re-chains.
+        if bothZero && zeroStreak >= 4 {
+            scheduleSync(after: 12) { [weak self] in
+                guard let self, self.directUSB.opened else { return }
+                self.armMirrorFromDevice(attempt: attempt + 1, zeroStreak: 4)
+            }
         }
     }
 
@@ -880,6 +1040,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         deviceMonitor.start()
+        // Nov 26: the stale-handle recovery — see sessionWentDead()
+        directUSB.onSessionDead = { [weak self] in self?.sessionWentDead() }
         quartetPresence.onChange = { [weak self] connected in
             QBLog.log("quartet presence: \(connected ? "connected" : "disconnected")")
             if connected {
@@ -893,19 +1055,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // control request fails ("Unable to send device request";
                 // the Nov 13 power-cycle left the whole offline UI dead
                 // because even the 0x33 fader reads failed). So CLOSE the
-                // old session and force a fresh one on every arrival —
-                // open() re-reads the faders and re-pins the macOS slider
-                // to the card's real level.
+                // old session and force a fresh one on every arrival.
+                //
+                // Nov 26: the arrival also lands INSIDE the power-on flap
+                // cycle — the open can fail and the fresh session can die
+                // with the next flap. Both failures now feed the ONE sync
+                // chain (see scheduleSync / sessionWentDead), which keeps
+                // retrying at the tolerated 2 s cadence until the card
+                // actually answers.
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
+                    self.syncWork?.cancel()
                     self.directUSB.close()
+                    // a fresh arrival = a fresh power-on cycle: the wedge
+                    // counters re-arm, and the boot-phase window opens
+                    self.deadCycles = 0
+                    self.resetsSpent = 0
+                    self.lastArrivalAt = Date()
                     _ = self.ensureDirectUSB()
                     self.refreshMenu()
                 }
             } else {
                 // release the dead claim right away — the handle is stale
                 // the moment the device leaves the bus
-                DispatchQueue.main.async { [weak self] in self?.directUSB.close() }
+                DispatchQueue.main.async { [weak self] in
+                    self?.syncWork?.cancel()
+                    self?.directUSB.close()
+                }
             }
             if !connected, self?.talkbackOn == true {
                 // the TalkbackHelper resets talkback when the device goes away
@@ -1690,9 +1866,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The device's real availability: the glue tree when the daemon runs,
     /// otherwise the direct-USB session (11.6).
+    ///
+    /// Nov 26 TRUTHFUL EDITION: an OPEN session is not proof of anything —
+    /// during the power-on boot window the handle opens and then every
+    /// transfer fails. `healthy` means the card actually ANSWERED a
+    /// transfer; the icon, the state line and the control window only
+    /// claim "connected" then. (The user's report: the app showed the
+    /// Quartet as connected and everything at 0 dB while the card was
+    /// still booting and refusing every request.)
     private func deviceUsable() -> Bool {
         if quartetPresence.isConnected && glue.state == .connected { return true }
+        // Nov 26 v5: plus gainKnown — "usable" = the card answers AND the
+        // app holds its real state; the boot-window zeros are not a state.
         return quartetPresence.isConnected && directUSB.opened
+            && directUSB.healthy && gainKnown
     }
 
     private func rebuildMenu() {
@@ -1717,9 +1904,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // header — name + live connection state
         menu.addItem(sectionHeader("Quartet Buddy"))
         let stateLine: String
-        if !quartetPresence.isConnected { stateLine = "Quartet Not Connected" }
-        else if glue.state != .connected { stateLine = "Quartet Connected (direct USB)" }
-        else { stateLine = "Quartet Connected" }
+        if !quartetPresence.isConnected {
+            stateLine = "Quartet Not Connected"
+        } else if !deviceUsable() {
+            // on the bus but not answering yet — the power-on boot window
+            // (the sync chain keeps probing; this flips to Connected the
+            // moment a transfer lands)
+            stateLine = "Quartet Starting…"
+        } else if glue.state != .connected {
+            stateLine = "Quartet Connected (direct USB)"
+        } else {
+            stateLine = "Quartet Connected"
+        }
         let stateItem = menu.addItem(withTitle: stateLine, action: nil, keyEquivalent: "")
         stateItem.isEnabled = false
 
@@ -1782,10 +1978,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",")
 
         // warnings (only when something needs attention)
-        if glue.state != .connected {
+        if !deviceUsable() {
             menu.addItem(.separator())
-            menu.addItem(withTitle: "Reconnect to ApogeeGlue",
-                          action: #selector(reconnect(_:)), keyEquivalent: "")
+            // Nov 26: the glue daemon is gone from this setup — the manual
+            // recovery is the USB reset (also the mid-session wedge cure)
+            menu.addItem(withTitle: "Reset Quartet (USB)",
+                          action: #selector(resetQuartetUSB(_:)), keyEquivalent: "")
         }
         if server.running && server.tapSilent {
             menu.addItem(.separator())
@@ -2374,9 +2572,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         control.isGlueConnected = { [weak self] in
             guard let self else { return false }
             if self.glue.state == .connected, self.quartetPresence.isConnected { return true }
-            // offline: the direct-USB session makes the device controllable
-            return self.quartetPresence.isConnected && self.ensureDirectUSB()
+            // Nov 26 TRUTHFUL (v5): "connected" = the session answers AND
+            // the app holds the card's REAL state (gainKnown — the mirror's
+            // accepted read). During the boot window both are false: the
+            // window stays in its starting/unavailable state instead of
+            // flashing zeros. (This closure must not OPEN sessions as a
+            // side effect — the sync chain owns the open timing.)
+            return self.quartetPresence.isConnected && self.directUSB.opened
+                && self.directUSB.healthy && self.gainKnown
         }
+        control.isDevicePresent = { [weak self] in self?.quartetPresence.isConnected ?? false }
+        control.isStateKnown = { [weak self] in self?.gainKnown ?? false }
         // Auto Gain: the engine writes the preamp through the control
         // window's plumbing and reports its status in the status line
         // (failures auto-clear, the success line lingers a while).
